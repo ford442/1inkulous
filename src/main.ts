@@ -13,7 +13,7 @@ async function main() {
   const hud = createHud()
   const game = createGame()
   const input = createInput(canvas)
-  const renderer = await createRenderer(canvas)
+  const renderer = await createRenderer(canvas, game)
 
   hud.setStatus(renderer.statusMessage)
 

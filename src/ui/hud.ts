@@ -16,7 +16,7 @@ export function createHud(): Hud {
     </div>
     <div>
       <p class="hint" id="hud-fps">— fps</p>
-      <p class="hint">WASD / arrows orbit · Q / E zoom · hold Space to stop the spin</p>
+      <p class="hint">Drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
     </div>
   `
 

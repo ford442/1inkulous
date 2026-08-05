@@ -4,9 +4,14 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "dev": "npm run build:wasm && vite",
+    "dev:web": "vite",
+    "build": "npm run build:wasm && tsc && vite build",
+    "build:web": "tsc && vite build",
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "clean:wasm": "rm -rf cpp/build-wasm src/wasm/core.js src/wasm/core.wasm",
+    "preview": "vite preview",
+    "test:core": "node scripts/test-core.mjs"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.71",

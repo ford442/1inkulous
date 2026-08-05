@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Generated WebAssembly core (build with `npm run build:wasm`).
+# src/wasm/core.d.ts is hand-written and tracked.
+cpp/build-wasm
+src/wasm/core.js
+src/wasm/core.wasm
+src/wasm/core.wasm.map

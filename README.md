@@ -1,6 +1,87 @@
 # 1inkulous
 A Populous 3: The Beginning clone.
 
+Rendering, input and UI are TypeScript on WebGPU. The simulation is C++ compiled
+to WebAssembly, so the heavy work — pathfinding, AI, sphere maths — stays out of
+the JS main thread.
+
+```
+src/engine/   WebGPU device, planet mesh, renderer, picking, math
+src/game/     planet + terrain heights, orbit camera, terrain brush
+src/input/    keyboard and pointer capture
+src/sim/      typed bridge across the WebAssembly boundary
+src/wasm/     build output (generated) + core.d.ts, the checked-in ABI contract
+cpp/          simulation core: fixed-step clock today, gameplay next
+```
+
+## Prerequisites
+
+- **Node** 20 or newer
+- **CMake** 3.20 or newer
+- **Emscripten SDK**, with `emcc` and `emcmake` on `PATH`
+
+The simulation core is not optional: the app fails to start without it, and every
+build script that needs `emcc` stops with install instructions rather than
+skipping the core silently.
+
+Install the SDK once:
+
+```sh
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk && ./emsdk install latest && ./emsdk activate latest
+```
+
+Then activate it in each shell — add it to your shell profile so `npm` scripts
+inherit it:
+
+```sh
+source /path/to/emsdk/emsdk_env.sh
+emcc -v   # confirm
+```
+
+## Build and run
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Builds the WASM core, then starts the Vite dev server |
+| `npm run dev:web` | Dev server only — fast path when `src/wasm/` is already current |
+| `npm run build` | WASM core, then `tsc`, then the production bundle |
+| `npm run build:web` | Skips the WASM step; fails if `src/wasm/core.js` is absent |
+| `npm run build:wasm` | Compiles `cpp/` into `src/wasm/core.js` + `core.wasm` |
+| `npm run test:core` | Headless checks of the core in Node (no browser needed) |
+| `npm run clean:wasm` | Removes the CMake build directory and generated artifacts |
+
+`src/wasm/core.js` and `core.wasm` are generated and git-ignored;
+`src/wasm/core.d.ts` is hand-written and tracked, so a change to the C ABI in
+`cpp/include/1inkulous/core_abi.h` must be mirrored there.
+
+The Emscripten glue targets `web,worker,node` — the Node environment is what lets
+`npm run test:core` run in CI. That is why a production build prints one
+informational notice about `node:module` being externalised for the browser; the
+branch that would use it never executes there.
+
+## The JS/WASM boundary
+
+TypeScript owns rendering; C++ owns simulation. They meet at one call:
+
+```ts
+const simulation = await createSimulation()   // src/sim/simulation.ts
+simulation.tick(deltaMs)                      // once per frame
+```
+
+`tick` hands the frame's elapsed time to the core, which consumes whole fixed
+steps (50ms, 20Hz) so simulation behaviour does not depend on frame rate, and
+returns how many ran. A long stall is capped rather than replayed in a burst.
+
+Only scalars cross the boundary per frame. As state grows, it should be read
+directly out of the module's linear memory (`simulation.module.HEAPF32` and
+friends, exported for exactly this) or written in as a compact command buffer —
+not marshalled through call arguments.
+
+## Design notes
+
+The brainstorming conversation that started the project:
+
 
 I have an idea for a new game - 1inkulous - we remake populous-3 in a web wasm webgpu context redoing all of the graphics/sounds/animations as like a clone :)
 

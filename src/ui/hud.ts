@@ -5,10 +5,18 @@ export type BrushReadout = {
   readonly brushStrength: number
 }
 
+/** The slice of the simulation core the HUD reports on. */
+export type SimulationReadout = {
+  readonly version: string
+  readonly stepCount: number
+  readonly elapsedMs: number
+}
+
 export type Hud = {
   setStatus: (message: string) => void
   setFps: (fps: number) => void
   setBrush: (brush: BrushReadout) => void
+  setSimulation: (simulation: SimulationReadout) => void
 }
 
 export function createHud(): Hud {
@@ -25,6 +33,7 @@ export function createHud(): Hud {
     <div>
       <p class="hint" id="hud-fps">— fps</p>
       <p class="hint" id="hud-brush">—</p>
+      <p class="hint" id="hud-sim">—</p>
       <p class="hint">Drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
       <p class="hint">Hold Shift to sculpt: left raises, right lowers · wheel sizes the brush · [ ] strength</p>
     </div>
@@ -33,6 +42,7 @@ export function createHud(): Hud {
   const statusEl = root.querySelector<HTMLParagraphElement>('#hud-status')
   const fpsEl = root.querySelector<HTMLParagraphElement>('#hud-fps')
   const brushEl = root.querySelector<HTMLParagraphElement>('#hud-brush')
+  const simEl = root.querySelector<HTMLParagraphElement>('#hud-sim')
 
   return {
     setStatus(message: string) {
@@ -53,6 +63,13 @@ export function createHud(): Hud {
       brushEl.textContent = brush.armed
         ? `brush ${degrees}° · strength ${brush.brushStrength.toFixed(3)}/s`
         : `brush ${degrees}° (hold Shift)`
+    },
+    setSimulation(simulation: SimulationReadout) {
+      if (simEl) {
+        simEl.textContent =
+          `core ${simulation.version} · ${simulation.stepCount} steps · ` +
+          `${(simulation.elapsedMs / 1000).toFixed(1)}s simulated`
+      }
     },
   }
 }

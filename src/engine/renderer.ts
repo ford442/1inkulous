@@ -2,16 +2,22 @@ import type { Game } from '../game/game'
 import type { PlanetMesh } from './mesh/cubeSphere'
 import { VERTEX_BYTES } from './mesh/cubeSphere'
 import {
-  mat4LookAt,
+  mat4Identity,
   mat4Multiply,
   mat4Perspective,
-  mat4RotationY,
   normalize,
   type Vec3,
 } from './math'
 import { initWebGpu } from './webgpu'
 
 const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus'
+
+/**
+ * Near plane is close enough for the tightest zoom, far plane loose enough for
+ * the widest, while keeping the depth range tight for precision.
+ */
+const NEAR_PLANE = 0.05
+const FAR_PLANE = 100
 
 /** viewProj(64) + model(64) + lightDir(16) + cameraPos(16) + params(16) */
 const UNIFORM_BYTES = 176
@@ -172,14 +178,39 @@ export async function createRenderer(
   canvas: HTMLCanvasElement,
   game: Game,
 ): Promise<Renderer> {
-  const resize = () => {
+  const resize = (deviceWidth?: number, deviceHeight?: number) => {
     const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr))
-    canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr))
+    const width = Math.max(1, Math.floor(deviceWidth ?? canvas.clientWidth * dpr))
+    const height = Math.max(1, Math.floor(deviceHeight ?? canvas.clientHeight * dpr))
+    // Assigning either dimension clears the canvas, so only touch it on a change.
+    if (canvas.width !== width) canvas.width = width
+    if (canvas.height !== height) canvas.height = height
   }
 
   resize()
-  window.addEventListener('resize', resize)
+  window.addEventListener('resize', () => resize())
+
+  // A devicePixelRatio change (moving windows between displays, browser zoom)
+  // leaves the CSS size alone, so the resize event above can miss it. Observing
+  // the device-pixel content box catches both, and gives exact integer sizes.
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const box = entry.devicePixelContentBoxSize?.[0]
+        if (box) {
+          resize(box.inlineSize, box.blockSize)
+        } else {
+          resize()
+        }
+      }
+    })
+
+    try {
+      observer.observe(canvas, { box: 'device-pixel-content-box' })
+    } catch {
+      observer.observe(canvas)
+    }
+  }
 
   const { device, context, format } = await initWebGpu(canvas)
 
@@ -257,9 +288,10 @@ export async function createRenderer(
 
   const uniformData = new Float32Array(UNIFORM_BYTES / 4)
   const viewProj = uniformData.subarray(0, 16)
-  const model = uniformData.subarray(16, 32)
   const projection = new Float32Array(16)
-  const view = new Float32Array(16)
+  // The planet does not turn on its own; the model matrix is the hook for
+  // spinning or tilting it later.
+  mat4Identity(uniformData.subarray(16, 32))
 
   const triangleCount = game.planet.mesh.triangleCount
 
@@ -274,18 +306,13 @@ export async function createRenderer(
         planetBuffers.uploadedRevision = mesh.revision
       }
 
+      // The projection is rebuilt every frame from the live drawing-buffer size,
+      // so window resizes and devicePixelRatio changes need no extra plumbing.
       const aspect = canvas.width / Math.max(1, canvas.height)
-      const cosPitch = Math.cos(camera.pitch)
-      const eye: Vec3 = [
-        camera.distance * cosPitch * Math.sin(camera.yaw),
-        camera.distance * Math.sin(camera.pitch),
-        camera.distance * cosPitch * Math.cos(camera.yaw),
-      ]
+      const eye = camera.eye
 
-      mat4Perspective(camera.fovY, aspect, 0.05, 100, projection)
-      mat4LookAt(eye, [0, 0, 0], [0, 1, 0], view)
-      mat4Multiply(projection, view, viewProj)
-      mat4RotationY(currentGame.spin, model)
+      mat4Perspective(camera.fovY, aspect, NEAR_PLANE, FAR_PLANE, projection)
+      mat4Multiply(projection, camera.viewMatrix, viewProj)
 
       const light = sunDirection(eye)
       uniformData[32] = light[0]

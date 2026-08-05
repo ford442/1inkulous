@@ -16,6 +16,12 @@ export type CameraOptions = {
   target?: Vec3
 }
 
+export type CameraUpdateOptions = {
+  /** Set false to let another tool (the terrain brush) own drag and the wheel. */
+  allowPointerOrbit?: boolean
+  allowPointerZoom?: boolean
+}
+
 export type Camera = {
   readonly eye: Vec3
   readonly target: Vec3
@@ -26,7 +32,11 @@ export type Camera = {
   readonly distance: number
   readonly minDistance: number
   readonly maxDistance: number
-  update: (deltaMs: number, input: InputSnapshot) => void
+  update: (
+    deltaMs: number,
+    input: InputSnapshot,
+    options?: CameraUpdateOptions,
+  ) => void
   /** Swing to one of the four cardinal headings, keeping the default tilt. */
   snapToCardinal: (quarterTurns: number) => void
   reset: () => void
@@ -110,10 +120,12 @@ export function createCamera(options: CameraOptions): Camera {
     minDistance,
     maxDistance,
 
-    update(deltaMs: number, input: InputSnapshot) {
+    update(deltaMs: number, input: InputSnapshot, options: CameraUpdateOptions = {}) {
       // Clamp the step so a backgrounded tab does not resume with a huge jump.
       const dt = clamp(deltaMs, 0, 100) / 1000
       const { pointer, keys, pressed } = input
+      const allowPointerOrbit = options.allowPointerOrbit ?? true
+      const allowPointerZoom = options.allowPointerZoom ?? true
 
       // Left-drag grabs the globe: the surface follows the cursor, as in Google
       // Earth. That means dragging right swings the eye the other way, hence the
@@ -121,7 +133,7 @@ export function createCamera(options: CameraOptions): Camera {
       // camera, so Right sends the eye right and the world slides left.)
       // Sensitivity shrinks as you zoom in, so a pixel of drag moves roughly the
       // same amount of surface at every distance.
-      if (pointer.dragging && pointer.buttons.left) {
+      if (allowPointerOrbit && pointer.dragging && pointer.buttons.left) {
         const scale =
           ORBIT_RADIANS_PER_PIXEL * clamp(distance / defaultDistance, 0.35, 1.25)
         desiredYaw -= pointer.delta.x * scale
@@ -134,7 +146,7 @@ export function createCamera(options: CameraOptions): Camera {
       }
       middleWasDown = pointer.buttons.middle
 
-      if (pointer.wheel !== 0) {
+      if (allowPointerZoom && pointer.wheel !== 0) {
         desiredDistance *= ZOOM_PER_NOTCH ** pointer.wheel
       }
 

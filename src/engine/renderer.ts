@@ -1,6 +1,6 @@
 import type { Game } from '../game/game'
 import type { PlanetMesh } from './mesh/cubeSphere'
-import { VERTEX_BYTES } from './mesh/cubeSphere'
+import { consumeDirtyRange, VERTEX_BYTES, VERTEX_FLOATS } from './mesh/cubeSphere'
 import {
   mat4Identity,
   mat4Multiply,
@@ -19,8 +19,8 @@ const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus'
 const NEAR_PLANE = 0.05
 const FAR_PLANE = 100
 
-/** viewProj(64) + model(64) + lightDir(16) + cameraPos(16) + params(16) */
-const UNIFORM_BYTES = 176
+/** viewProj(64) + model(64) + lightDir(16) + cameraPos(16) + params(16) + brush(16) */
+const UNIFORM_BYTES = 192
 
 /**
  * The sun follows the camera as a three-quarter key light (up and to the right of
@@ -54,6 +54,8 @@ struct Uniforms {
   cameraPos: vec4f,
   // x: planet radius, y: max land height
   params: vec4f,
+  // xyz: unit direction under the cursor, w: brush angular radius (0 = hidden)
+  brush: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -124,12 +126,29 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let specular =
     pow(max(dot(normal, halfway), 0.0), specularPower) * specularStrength * step(0.0, diffuse);
 
+  // Brush cursor: a filled disc with a bright rim, drawn in angular distance from
+  // the picked direction so it wraps over terrain instead of floating above it.
+  var brushTint = vec3f(0.0);
+  let brushRadius = uniforms.brush.w;
+  if (brushRadius > 0.0) {
+    let surface = normalize(input.worldPosition);
+    let angle = acos(clamp(dot(surface, uniforms.brush.xyz), -1.0, 1.0));
+    // params.z carries the mode: +1 raising, -1 lowering, 0 hovering.
+    let mode = uniforms.params.z;
+    let cursorColor =
+      select(select(vec3f(0.85, 0.90, 1.00), vec3f(0.30, 0.75, 1.00), mode < 0.0),
+             vec3f(1.00, 0.80, 0.35), mode > 0.0);
+    let fill = 1.0 - smoothstep(brushRadius * 0.75, brushRadius, angle);
+    let ring = 1.0 - smoothstep(0.0, brushRadius * 0.18, abs(angle - brushRadius * 0.88));
+    brushTint = cursorColor * (fill * 0.22 + ring * 0.55);
+  }
+
   // Rim term: makes the silhouette read as a sphere rather than a flat disc.
   let rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
   let atmosphere = vec3f(0.28, 0.45, 0.72) * rim * 0.6 * (0.25 + 0.75 * diffuse);
 
   var color = albedo * (ambient + vec3f(1.0, 0.97, 0.90) * diffuse);
-  color += vec3f(specular) + atmosphere;
+  color += vec3f(specular) + atmosphere + brushTint;
 
   // Exposure curve: lifts the shadowed limb without blowing out the lit side.
   color = vec3f(1.0) - exp(-1.35 * color);
@@ -147,8 +166,6 @@ type PlanetBuffers = {
   vertexBuffer: GPUBuffer
   indexBuffer: GPUBuffer
   indexCount: number
-  /** Mesh revision already uploaded, so height edits cost exactly one copy. */
-  uploadedRevision: number
 }
 
 function createPlanetBuffers(device: GPUDevice, mesh: PlanetMesh): PlanetBuffers {
@@ -170,7 +187,6 @@ function createPlanetBuffers(device: GPUDevice, mesh: PlanetMesh): PlanetBuffers
     vertexBuffer,
     indexBuffer,
     indexCount: mesh.indices.length,
-    uploadedRevision: -1,
   }
 }
 
@@ -301,9 +317,17 @@ export async function createRenderer(
       const { camera, planet } = currentGame
       const mesh = planet.mesh
 
-      if (mesh.revision !== planetBuffers.uploadedRevision) {
-        device.queue.writeBuffer(planetBuffers.vertexBuffer, 0, mesh.vertexData)
-        planetBuffers.uploadedRevision = mesh.revision
+      // Terrain edits touch a small patch, so upload only the vertex range that
+      // actually changed since the last frame.
+      const dirty = consumeDirtyRange(mesh)
+      if (dirty) {
+        device.queue.writeBuffer(
+          planetBuffers.vertexBuffer,
+          dirty.min * VERTEX_BYTES,
+          mesh.vertexData,
+          dirty.min * VERTEX_FLOATS,
+          (dirty.max - dirty.min + 1) * VERTEX_FLOATS,
+        )
       }
 
       // The projection is rebuilt every frame from the live drawing-buffer size,
@@ -323,10 +347,18 @@ export async function createRenderer(
       uniformData[37] = eye[1]
       uniformData[38] = eye[2]
       uniformData[39] = 0
+      const { sculptor } = currentGame
+      const hover = sculptor.armed ? sculptor.hoverDirection : null
+
       uniformData[40] = planet.radius
       uniformData[41] = planet.maxHeight
-      uniformData[42] = 0
+      uniformData[42] = sculptor.mode === 'raise' ? 1 : sculptor.mode === 'lower' ? -1 : 0
       uniformData[43] = 0
+      uniformData[44] = hover ? hover[0] : 0
+      uniformData[45] = hover ? hover[1] : 0
+      uniformData[46] = hover ? hover[2] : 0
+      // A zero radius switches the cursor off in the shader.
+      uniformData[47] = hover ? sculptor.brushRadius : 0
 
       device.queue.writeBuffer(uniformBuffer, 0, uniformData)
 

@@ -5,10 +5,12 @@ import { createHud } from './ui/hud'
 import { createInput } from './input/input'
 
 async function main() {
-  const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas')
-  if (!canvas) {
+  const found = document.querySelector<HTMLCanvasElement>('#game-canvas')
+  if (!found) {
     throw new Error('Game canvas not found')
   }
+  // Aliased so the hoisted frame() below sees a non-nullable type.
+  const canvas = found
 
   const hud = createHud()
   const game = createGame()
@@ -23,9 +25,11 @@ async function main() {
     const deltaMs = now - lastTime
     lastTime = now
 
-    game.update(deltaMs, input.snapshot())
+    const aspect = Math.max(1, canvas.clientWidth) / Math.max(1, canvas.clientHeight)
+    game.update(deltaMs, input.snapshot(), aspect)
     renderer.render(game)
     hud.setFps(1000 / deltaMs)
+    hud.setBrush(game.sculptor)
 
     input.endFrame()
     requestAnimationFrame(frame)

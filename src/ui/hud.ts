@@ -16,7 +16,7 @@ export function createHud(): Hud {
     </div>
     <div>
       <p class="hint" id="hud-fps">— fps</p>
-      <p class="hint">Hold Space to brighten the clear color</p>
+      <p class="hint">WASD / arrows orbit · Q / E zoom · hold Space to stop the spin</p>
     </div>
   `
 

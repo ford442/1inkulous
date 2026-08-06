@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 
 export default defineConfig({
+  // Relative asset URLs so the build works under test.1ink.us/1inkulous/
+  base: './',
   server: {
     port: 5173,
     open: false,

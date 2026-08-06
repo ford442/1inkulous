@@ -11,6 +11,7 @@
     "build:wasm": "bash scripts/build-wasm.sh",
     "clean:wasm": "rm -rf cpp/build-wasm src/wasm/core.js src/wasm/core.wasm",
     "preview": "vite preview",
+    "deploy": "python3 deploy.py",
     "test:core": "node scripts/test-core.mjs"
   },
   "devDependencies": {

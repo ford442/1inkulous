@@ -39,6 +39,11 @@ export type Camera = {
   ) => void
   /** Swing to one of the four cardinal headings, keeping the default tilt. */
   snapToCardinal: (quarterTurns: number) => void
+  /**
+   * Puts a point on the planet in the middle of the view. `immediate` cuts
+   * there rather than gliding — what the opening shot of a match wants.
+   */
+  focusOn: (direction: Vec3, immediate?: boolean) => void
   reset: () => void
 }
 
@@ -184,6 +189,25 @@ export function createCamera(options: CameraOptions): Camera {
     snapToCardinal(quarterTurns: number) {
       setDesiredYaw((Math.PI / 2) * quarterTurns)
       desiredPitch = DEFAULT_PITCH
+    },
+
+    focusOn(direction: Vec3, immediate = false) {
+      const length = Math.hypot(direction[0], direction[1], direction[2])
+      if (length === 0) {
+        return
+      }
+
+      // Invert the eye placement in refresh(): put the eye on the ray from the
+      // planet centre through the point, so it sits squarely under the camera.
+      const y = direction[1] / length
+      setDesiredYaw(Math.atan2(direction[0] / length, direction[2] / length))
+      desiredPitch = clamp(Math.asin(clamp(y, -1, 1)), -PITCH_LIMIT, PITCH_LIMIT)
+
+      if (immediate) {
+        yaw = desiredYaw
+        pitch = desiredPitch
+        refresh()
+      }
     },
 
     reset() {

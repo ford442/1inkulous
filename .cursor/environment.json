@@ -1,0 +1,4 @@
+{
+  "install": "npm ci && bash scripts/setup-emsdk.sh && source \"${EMSDK:-/opt/emsdk}/emsdk_env.sh\" && npm run build:wasm",
+  "start": "source \"${EMSDK:-/opt/emsdk}/emsdk_env.sh\" && npm run dev:web"
+}

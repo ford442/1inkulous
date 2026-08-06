@@ -12,11 +12,19 @@ export type SimulationReadout = {
   readonly elapsedMs: number
 }
 
+/** The slice of the follower set the HUD reports on. */
+export type FollowerReadout = {
+  readonly count: number
+  readonly selectedCount: number
+  readonly walkingCount: number
+}
+
 export type Hud = {
   setStatus: (message: string) => void
   setFps: (fps: number) => void
   setBrush: (brush: BrushReadout) => void
   setSimulation: (simulation: SimulationReadout) => void
+  setFollowers: (followers: FollowerReadout) => void
 }
 
 export function createHud(): Hud {
@@ -34,7 +42,9 @@ export function createHud(): Hud {
       <p class="hint" id="hud-fps">— fps</p>
       <p class="hint" id="hud-brush">—</p>
       <p class="hint" id="hud-sim">—</p>
+      <p class="hint" id="hud-followers">—</p>
       <p class="hint">Drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
+      <p class="hint">Click a follower to select · Ctrl-click adds · right-click sends them walking</p>
       <p class="hint">Hold Shift to sculpt: left raises, right lowers · wheel sizes the brush · [ ] strength</p>
     </div>
   `
@@ -43,6 +53,7 @@ export function createHud(): Hud {
   const fpsEl = root.querySelector<HTMLParagraphElement>('#hud-fps')
   const brushEl = root.querySelector<HTMLParagraphElement>('#hud-brush')
   const simEl = root.querySelector<HTMLParagraphElement>('#hud-sim')
+  const followersEl = root.querySelector<HTMLParagraphElement>('#hud-followers')
 
   return {
     setStatus(message: string) {
@@ -69,6 +80,13 @@ export function createHud(): Hud {
         simEl.textContent =
           `core ${simulation.version} · ${simulation.stepCount} steps · ` +
           `${(simulation.elapsedMs / 1000).toFixed(1)}s simulated`
+      }
+    },
+    setFollowers(followers: FollowerReadout) {
+      if (followersEl) {
+        followersEl.textContent =
+          `${followers.count} followers · ${followers.selectedCount} selected · ` +
+          `${followers.walkingCount} walking`
       }
     },
   }

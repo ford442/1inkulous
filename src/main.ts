@@ -14,15 +14,20 @@ async function main() {
   const canvas = found
 
   const hud = createHud()
-  const game = createGame()
   const input = createInput(canvas)
   // Report the core as soon as it is up, so a later renderer failure cannot
-  // hide whether the WASM boundary came alive.
+  // hide whether the WASM boundary came alive. The game is built on top of it:
+  // followers and the graph they walk live inside the core.
   const simulation = await createSimulation()
   console.info(
     `[core] simulation core ${simulation.version}, ${simulation.stepMs}ms fixed step`,
   )
-  hud.setStatus(`core ${simulation.version} loaded — starting renderer…`)
+  hud.setStatus(`core ${simulation.version} loaded — building the world…`)
+
+  const game = createGame(simulation)
+  hud.setStatus(
+    `core ${simulation.version} · ${game.followers.count} followers — starting renderer…`,
+  )
 
   const renderer = await createRenderer(canvas, game)
   hud.setStatus(`${renderer.statusMessage} · core ${simulation.version}`)
@@ -43,6 +48,7 @@ async function main() {
     hud.setFps(1000 / deltaMs)
     hud.setBrush(game.sculptor)
     hud.setSimulation(simulation)
+    hud.setFollowers(game.followers)
 
     input.endFrame()
     requestAnimationFrame(frame)

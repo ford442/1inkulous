@@ -6,12 +6,12 @@ to WebAssembly, so the heavy work — pathfinding, AI, sphere maths — stays ou
 the JS main thread.
 
 ```
-src/engine/   WebGPU device, planet mesh, renderer, picking, math
-src/game/     planet + terrain heights, orbit camera, terrain brush
+src/engine/   WebGPU device, planet + follower meshes, renderer, picking, math
+src/game/     planet + terrain heights, orbit camera, terrain brush, followers
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
 src/wasm/     build output (generated) + core.d.ts, the checked-in ABI contract
-cpp/          simulation core: fixed-step clock today, gameplay next
+cpp/          simulation core: fixed-step clock, navigation graph, followers
 ```
 
 ## Prerequisites
@@ -73,10 +73,85 @@ simulation.tick(deltaMs)                      // once per frame
 steps (50ms, 20Hz) so simulation behaviour does not depend on frame rate, and
 returns how many ran. A long stall is capped rather than replayed in a burst.
 
-Only scalars cross the boundary per frame. As state grows, it should be read
-directly out of the module's linear memory (`simulation.module.HEAPF32` and
-friends, exported for exactly this) or written in as a compact command buffer —
-not marshalled through call arguments.
+Only scalars cross the boundary per frame. Bulk state is read directly out of
+the module's linear memory (`simulation.module.HEAPF32` and friends, exported
+for exactly this) rather than marshalled through call arguments — that is how
+follower positions reach the renderer, and how the walkable graph and its
+heights get in.
+
+## Controls
+
+| Input | Does |
+| --- | --- |
+| Drag | Orbit the planet |
+| Wheel | Zoom |
+| `1`–`4` | Cardinal views |
+| `0`, `Home`, middle-click | Reset the view |
+| `WASD` / arrows, `Q`/`E` | Orbit and zoom from the keyboard |
+| Click a follower | Select it |
+| Ctrl-click a follower | Add to (or drop from) the selection |
+| Click bare ground | Clear the selection |
+| Right-click | Send the selected followers walking there |
+| Shift + left / right drag | Raise / lower terrain |
+| Shift + wheel, `[` `]` | Brush size, brush strength |
+
+Ctrl, not Shift, adds to a selection: Shift is the sculpt modifier, and the
+brush has first claim on the mouse while it is held.
+
+## Followers
+
+The first units on the planet. They live entirely inside the C++ core — their
+positions, their paths, and the A* search behind an order — and TypeScript only
+builds the graph they walk, turns clicks into orders, and draws them.
+
+**The walkable graph is the planet mesh's welded vertex grid.** One node per
+distinct surface position, linked 8 ways within each cube face. Choosing the
+*welded* vertices is what makes the sphere tractable: the six faces meet at
+seams where duplicate vertices already share a weld id, so linking through the
+weld table stitches the faces together and a path can walk off the edge of one
+face onto the next without any face-adjacency table. See `src/game/navGraph.ts`.
+
+**Terrain deformation is live.** The graph's topology is uploaded once; its
+heights are a buffer in core memory that the game overwrites whenever a sculpt
+stroke moves the ground. Raise a ridge across a walking follower's route and it
+gives up and stops, because the step it was about to take is now too steep.
+
+**A step is refused above a slope of 0.55** — height change over arc length, a
+shade under 30 degrees — and water is never walkable. Path cost is the true
+length over the ground, so a detour round a hill can beat climbing it, while the
+A* heuristic ignores climb and therefore stays admissible.
+
+**Rendering is one instanced draw**, however many followers there are. The core
+keeps a packed instance buffer (position, heading, tribe, flags); the renderer
+copies it out of linear memory once per frame and draws the whole tribe in a
+single call. The selection ring is part of the same mesh and collapses to a
+degenerate point in the vertex shader when the follower is not selected, which
+is cheaper than a second pipeline.
+
+### Cost
+
+Measured by `npm run test:core` on a graph the size of the real one (3600 nodes,
+~28000 links, against the default planet's 3458 and ~26000):
+
+- 60 followers each running a full-width A* on one order: **5.4 ms** total,
+  about 90 µs per search. That is the worst case — a mass order across the
+  diagonal of the world — and it happens on a click, not per frame.
+- Stepping 60 walking followers: **7 µs** per fixed step, 20 times a second.
+
+So the simulation is not the constraint at this scale; the render side is one
+extra draw call and a 2 KB buffer upload per frame. The next thing to bite will
+be A* on much larger graphs, which is why the search scratch is preallocated and
+stamped rather than cleared — and the obvious follow-up is a coarse graph to
+path over, with the fine grid used only for local steering.
+
+### Not done yet
+
+- No path smoothing: routes follow grid edges, so they show the 45-degree
+  staircase a grid A* always produces.
+- No avoidance between followers; they walk through each other.
+- Nearest-node lookup is a linear scan over the graph. Fine on a click at this
+  size, wrong for anything per-frame.
+- Followers are placeholder pawns in placeholder tribe colours.
 
 ## Design notes
 

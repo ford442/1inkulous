@@ -4,6 +4,32 @@ export type PointerButtons = {
   right: boolean
 }
 
+export type PointerButton = 'left' | 'middle' | 'right'
+
+/**
+ * A press and release at the same spot — the gesture that selects a unit or
+ * gives an order, as distinct from a drag, which swings the camera.
+ *
+ * These are recorded from the events themselves rather than by watching
+ * `buttons` across frames: a real click can begin and end inside a single
+ * frame, and polling would miss it entirely.
+ */
+export type PointerClick = {
+  button: PointerButton
+  /** Where the release happened, in CSS pixels relative to the canvas. */
+  position: { x: number; y: number }
+  /** The same point in normalised device coordinates (-1..1, y up). */
+  ndc: { x: number; y: number }
+  /**
+   * Modifiers as they were at the moment of the click, not as they are when the
+   * frame gets round to reading it. Releasing a modifier right after clicking is
+   * ordinary behaviour, and it can easily happen before the next frame runs — so
+   * a consumer that polled the live keyboard state would see the wrong thing.
+   */
+  ctrlKey: boolean
+  shiftKey: boolean
+}
+
 export type PointerSnapshot = {
   /**
    * Pointer position in CSS pixels relative to the canvas, or null before the
@@ -23,6 +49,8 @@ export type PointerSnapshot = {
   wheel: number
   /** True while a drag started on the canvas is in progress. */
   dragging: boolean
+  /** Clicks completed during this frame only. Cleared by endFrame(). */
+  clicks: readonly PointerClick[]
 }
 
 export type InputSnapshot = {
@@ -36,6 +64,18 @@ export type InputSnapshot = {
 export type Input = {
   snapshot: () => InputSnapshot
   endFrame: () => void
+}
+
+/**
+ * A press that travels further than this before release was a drag, not a
+ * click. Generous enough to forgive a shaky hand on a trackpad.
+ */
+const CLICK_SLOP_PIXELS = 6
+
+const BUTTON_NAMES: Record<number, PointerButton> = {
+  0: 'left',
+  1: 'middle',
+  2: 'right',
 }
 
 /** Converts a wheel event of any deltaMode into notches. */
@@ -60,6 +100,10 @@ export function createInput(canvas: HTMLCanvasElement): Input {
   const buttons: PointerButtons = { left: false, middle: false, right: false }
   let wheel = 0
   const activePointers = new Set<number>()
+  // How far each held button has travelled since it went down, so a release can
+  // be classified as a click or the end of a drag.
+  const travelWhileDown = new Map<PointerButton, number>()
+  let clicks: PointerClick[] = []
 
   const setButton = (button: number, down: boolean) => {
     if (button === 0) buttons.left = down
@@ -86,8 +130,36 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     setButton(event.button, true)
     activePointers.add(event.pointerId)
     trackPosition(event)
+    const name = BUTTON_NAMES[event.button]
+    if (name) {
+      travelWhileDown.set(name, 0)
+    }
     // Capture so a drag keeps reporting once the pointer leaves the canvas.
     canvas.setPointerCapture(event.pointerId)
+  }
+
+  /**
+   * Adds a hop to every held button's running total.
+   *
+   * Measured from the canvas positions rather than from `movementX/Y`: the
+   * click threshold is in CSS pixels, and movement deltas are not reliably in
+   * the same units across browsers and zoom levels. `delta` below keeps using
+   * the raw movement, which is what the camera wants for orbiting.
+   */
+  const accumulateTravel = (
+    from: { x: number; y: number } | null,
+    to: { x: number; y: number } | null,
+  ) => {
+    if (!from || !to || travelWhileDown.size === 0) {
+      return
+    }
+    const travelled = Math.hypot(to.x - from.x, to.y - from.y)
+    if (travelled === 0) {
+      return
+    }
+    for (const [button, total] of travelWhileDown) {
+      travelWhileDown.set(button, total + travelled)
+    }
   }
 
   const onPointerMove = (event: PointerEvent) => {
@@ -95,16 +167,40 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     trackPosition(event)
     if (activePointers.size > 0) {
       // movementX/Y is unset for touch input, so fall back to differencing.
-      const dx = event.movementX ?? (previous ? position!.x - previous.x : 0)
-      const dy = event.movementY ?? (previous ? position!.y - previous.y : 0)
-      delta.x += dx
-      delta.y += dy
+      delta.x += event.movementX ?? (previous ? position!.x - previous.x : 0)
+      delta.y += event.movementY ?? (previous ? position!.y - previous.y : 0)
+      accumulateTravel(previous, position)
     }
   }
 
   const onPointerUp = (event: PointerEvent) => {
+    // The release can carry the last of the movement, so take its position and
+    // count that hop before judging whether the press was a click.
+    const previous = position
+    trackPosition(event)
+    accumulateTravel(previous, position)
+
     setButton(event.button, false)
     activePointers.delete(event.pointerId)
+
+    const name = BUTTON_NAMES[event.button]
+    const travelled = name ? travelWhileDown.get(name) : undefined
+    if (name) {
+      travelWhileDown.delete(name)
+    }
+    // A press the canvas never saw begin (the pointer came in from outside
+    // already held) has no travel recorded and is not a click.
+    if (name && travelled !== undefined && travelled <= CLICK_SLOP_PIXELS) {
+      if (position && ndc) {
+        clicks.push({
+          button: name,
+          position: { x: position.x, y: position.y },
+          ndc: { x: ndc.x, y: ndc.y },
+          ctrlKey: event.ctrlKey,
+          shiftKey: event.shiftKey,
+        })
+      }
+    }
     if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId)
     }
@@ -136,6 +232,7 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     // Losing focus mid-drag would otherwise leave buttons stuck down.
     keys.clear()
     activePointers.clear()
+    travelWhileDown.clear()
     buttons.left = false
     buttons.middle = false
     buttons.right = false
@@ -168,6 +265,7 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     buttons,
     wheel,
     dragging: false,
+    clicks,
   }
 
   return {
@@ -176,6 +274,7 @@ export function createInput(canvas: HTMLCanvasElement): Input {
       pointer.ndc = ndc
       pointer.wheel = wheel
       pointer.dragging = activePointers.size > 0
+      pointer.clicks = clicks
       return { keys, pressed, pointer }
     },
     endFrame() {
@@ -183,6 +282,9 @@ export function createInput(canvas: HTMLCanvasElement): Input {
       delta.x = 0
       delta.y = 0
       wheel = 0
+      // A fresh array rather than a truncation: the snapshot handed out this
+      // frame may still be held by a caller.
+      clicks = []
     },
   }
 }

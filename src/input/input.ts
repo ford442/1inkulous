@@ -1,3 +1,5 @@
+import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../viewport'
+
 export type PointerButtons = {
   left: boolean
   middle: boolean
@@ -117,8 +119,8 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     const y = event.offsetY
     position = { x, y }
 
-    const width = canvas.clientWidth
-    const height = canvas.clientHeight
+    const width = CANVAS_WIDTH
+    const height = CANVAS_HEIGHT
     ndc =
       width > 0 && height > 0
         ? { x: (x / width) * 2 - 1, y: 1 - (y / height) * 2 }

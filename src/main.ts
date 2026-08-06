@@ -4,6 +4,7 @@ import { createGame } from './game/game'
 import { createHud } from './ui/hud'
 import { createInput } from './input/input'
 import { createSimulation } from './sim/simulation'
+import { CANVAS_ASPECT } from './viewport'
 
 async function main() {
   const found = document.querySelector<HTMLCanvasElement>('#game-canvas')
@@ -42,8 +43,7 @@ async function main() {
     // then draws whatever state they left behind.
     simulation.tick(deltaMs)
 
-    const aspect = Math.max(1, canvas.clientWidth) / Math.max(1, canvas.clientHeight)
-    game.update(deltaMs, input.snapshot(), aspect)
+    game.update(deltaMs, input.snapshot(), CANVAS_ASPECT)
     renderer.render(game)
     hud.setFps(1000 / deltaMs)
     hud.setBrush(game.sculptor)

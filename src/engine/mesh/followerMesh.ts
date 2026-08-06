@@ -61,10 +61,15 @@ const RING_OUTER = 1.95
  * buried on any slope past about 1.5 degrees, which is almost all terrain.
  *
  * 0.25 keeps it clear up to roughly 14 degrees while floating only a fifth of a
- * follower's height. Steeper ground than that still clips the uphill edge: a
- * flat annulus cannot clear the full 29-degree walkable limit without floating
- * conspicuously. Making the marker follow the terrain is the real fix, once
- * followers get a ground-projected decal.
+ * follower's height. That covers the generated world outright: measured over
+ * the default planet's walkable land, the steepest local slope anywhere is 9.8
+ * degrees and the median is 3.7. Navigation permits up to 29 degrees, but only
+ * the terrain brush can build ground that steep.
+ *
+ * Clearing the full 29 degrees would mean floating the ring at nearly half a
+ * follower's height everywhere, all the time, to fix ground the player has to
+ * sculpt deliberately — a worse trade than clipping on it. A flat annulus
+ * cannot have both; a ground-projected decal is the real fix, later.
  */
 const RING_LIFT = 0.25
 

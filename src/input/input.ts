@@ -138,24 +138,48 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     canvas.setPointerCapture(event.pointerId)
   }
 
+  /**
+   * Adds a hop to every held button's running total.
+   *
+   * Measured from the canvas positions rather than from `movementX/Y`: the
+   * click threshold is in CSS pixels, and movement deltas are not reliably in
+   * the same units across browsers and zoom levels. `delta` below keeps using
+   * the raw movement, which is what the camera wants for orbiting.
+   */
+  const accumulateTravel = (
+    from: { x: number; y: number } | null,
+    to: { x: number; y: number } | null,
+  ) => {
+    if (!from || !to || travelWhileDown.size === 0) {
+      return
+    }
+    const travelled = Math.hypot(to.x - from.x, to.y - from.y)
+    if (travelled === 0) {
+      return
+    }
+    for (const [button, total] of travelWhileDown) {
+      travelWhileDown.set(button, total + travelled)
+    }
+  }
+
   const onPointerMove = (event: PointerEvent) => {
     const previous = position
     trackPosition(event)
     if (activePointers.size > 0) {
       // movementX/Y is unset for touch input, so fall back to differencing.
-      const dx = event.movementX ?? (previous ? position!.x - previous.x : 0)
-      const dy = event.movementY ?? (previous ? position!.y - previous.y : 0)
-      delta.x += dx
-      delta.y += dy
-
-      const travelled = Math.hypot(dx, dy)
-      for (const [button, total] of travelWhileDown) {
-        travelWhileDown.set(button, total + travelled)
-      }
+      delta.x += event.movementX ?? (previous ? position!.x - previous.x : 0)
+      delta.y += event.movementY ?? (previous ? position!.y - previous.y : 0)
+      accumulateTravel(previous, position)
     }
   }
 
   const onPointerUp = (event: PointerEvent) => {
+    // The release can carry the last of the movement, so take its position and
+    // count that hop before judging whether the press was a click.
+    const previous = position
+    trackPosition(event)
+    accumulateTravel(previous, position)
+
     setButton(event.button, false)
     activePointers.delete(event.pointerId)
 
@@ -167,7 +191,6 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     // A press the canvas never saw begin (the pointer came in from outside
     // already held) has no travel recorded and is not a click.
     if (name && travelled !== undefined && travelled <= CLICK_SLOP_PIXELS) {
-      trackPosition(event)
       if (position && ndc) {
         clicks.push({
           button: name,

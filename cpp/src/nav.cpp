@@ -48,10 +48,29 @@ bool NavGrid::allocate(std::int32_t node_count, std::int32_t link_count) {
   return true;
 }
 
+bool NavGrid::offsets_valid() const {
+  if (neighbor_offsets_.size() != static_cast<std::size_t>(node_count_) + 1) {
+    return false;
+  }
+  // Must start at zero, never go backwards, and end exactly at the length of
+  // the neighbour list. Anything else and find_path would walk off the end.
+  if (neighbor_offsets_.front() != 0 || neighbor_offsets_.back() != link_count_) {
+    return false;
+  }
+  for (std::size_t i = 1; i < neighbor_offsets_.size(); ++i) {
+    if (neighbor_offsets_[i] < neighbor_offsets_[i - 1]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void NavGrid::commit(double planet_radius, double max_slope) {
   planet_radius_ = planet_radius > 0.0 ? planet_radius : 1.0;
   max_slope_ = max_slope > 0.0 ? max_slope : kDefaultMaxSlope;
-  committed_ = node_count_ > 0;
+  // One O(nodes) pass, once per world. Cheap next to an out-of-bounds read in
+  // linear memory, which would corrupt something unrelated and far away.
+  committed_ = node_count_ > 0 && offsets_valid();
 }
 
 double NavGrid::arc_length(std::int32_t from, std::int32_t to) const {

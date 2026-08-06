@@ -187,6 +187,28 @@ uploadGrid(grid.heights)
 ok('nav graph accepted', m._core_nav_ready() === 1 && m._core_nav_node_count() === grid.nodeCount,
    `${m._core_nav_node_count()} nodes, ${grid.neighbors.length} links`)
 
+// The CSR topology arrives as raw memory, and find_path indexes the neighbour
+// list with the range between two offsets. A malformed table has to be caught at
+// commit time, not read past the end of the buffer.
+m._core_nav_alloc(grid.nodeCount, grid.neighbors.length)
+m.HEAPF32.set(grid.directions, m._core_nav_directions() >> 2)
+m.HEAP32.set(grid.neighbors, m._core_nav_neighbors() >> 2)
+const brokenOffsets = Int32Array.from(grid.offsets)
+brokenOffsets[brokenOffsets.length - 1] = grid.neighbors.length * 4
+m.HEAP32.set(brokenOffsets, m._core_nav_neighbor_offsets() >> 2)
+m._core_nav_commit(RADIUS, 0.55)
+ok('an offset table running past the neighbour list is refused', m._core_nav_ready() === 0)
+
+const backwardsOffsets = Int32Array.from(grid.offsets)
+backwardsOffsets[5] = backwardsOffsets[4] - 1
+m.HEAP32.set(backwardsOffsets, m._core_nav_neighbor_offsets() >> 2)
+m._core_nav_commit(RADIUS, 0.55)
+ok('an offset table that goes backwards is refused', m._core_nav_ready() === 0)
+
+// Back to the real thing.
+uploadGrid(grid.heights)
+ok('a well-formed graph is accepted again', m._core_nav_ready() === 1)
+
 const centre = gridDirection((GRID - 1) / 2, (GRID - 1) / 2)
 ok('nearest walkable node found', m._core_nav_nearest_walkable(...centre) === nodeAt(8, 8),
    String(m._core_nav_nearest_walkable(...centre)))
@@ -196,7 +218,10 @@ const corner = gridDirection(1, 1)
 const far = gridDirection(GRID - 2, GRID - 2)
 const id = m._core_follower_spawn(...corner, 0)
 ok('follower spawned', id === 0 && m._core_follower_count() === 1, `id ${id}`)
-ok('spawns on its node', angleTo(followerPosition(id), corner) < 1e-5)
+// Read back before any fixed step has run: the instance buffer has to be sized
+// at spawn time, or this reads past the end of it.
+ok('spawns on its node, readable before the first step',
+   angleTo(followerPosition(id), corner) < 1e-5)
 ok('instance stride is 8 floats', m._core_follower_instance_floats() === 8)
 
 ok('nothing selected yet', m._core_follower_selected_count() === 0)
@@ -283,8 +308,11 @@ const started = Date.now()
 simulate(30)
 const elapsed = Date.now() - started
 ok('30s of 64 followers simulates in well under real time', elapsed < 3000, `${elapsed}ms`)
-ok('the crowd all arrived', instances().data.filter((_, i) => i % 8 === 7)
-     .every((flags) => (flags & 2) === 0))
+// Not just "stopped walking": a follower that gave up halfway would also have a
+// clear flag, so check where each of them actually ended up.
+ok('the crowd all arrived',
+   Array.from({ length: 64 }, (_, f) =>
+     !isWalking(f) && angleTo(followerPosition(f), far) < 0.02).every(Boolean))
 
 const packed = instances()
 ok('instance buffer is packed and sized', packed.data.length === 64 * 8)

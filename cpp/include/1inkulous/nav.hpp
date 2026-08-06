@@ -34,6 +34,7 @@ class NavGrid {
   bool allocate(std::int32_t node_count, std::int32_t link_count);
 
   // Called once the buffers are filled. `max_slope` <= 0 uses the default.
+  // The grid only reports `ready` if the CSR topology checks out.
   void commit(double planet_radius, double max_slope);
 
   std::int32_t node_count() const { return node_count_; }
@@ -71,6 +72,11 @@ class NavGrid {
   bool find_path(std::int32_t from, std::int32_t to, std::vector<std::int32_t>& out);
 
  private:
+  // Whether the offsets TypeScript wrote describe a well-formed CSR. The
+  // neighbour loop in find_path trusts them to index inside `neighbors_`, and
+  // that buffer arrives across the WASM boundary as raw memory.
+  bool offsets_valid() const;
+
   std::int32_t node_count_ = 0;
   std::int32_t link_count_ = 0;
   bool committed_ = false;

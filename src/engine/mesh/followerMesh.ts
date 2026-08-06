@@ -52,8 +52,21 @@ const PROFILE: ReadonlyArray<readonly [number, number]> = [
 const RING_SEGMENTS = 20
 const RING_INNER = 1.5
 const RING_OUTER = 1.95
-/** Just clear of the ground, so the ring does not fight the terrain for depth. */
-const RING_LIFT = 0.02
+/**
+ * Ground clearance, as a fraction of the ring's own outer radius.
+ *
+ * The ring is flat and the ground is not, so the lift has to beat the terrain
+ * rise across the ring's width — which scales with the ring, not with the
+ * follower's height. Tying it to the model height instead left the uphill half
+ * buried on any slope past about 1.5 degrees, which is almost all terrain.
+ *
+ * 0.25 keeps it clear up to roughly 14 degrees while floating only a fifth of a
+ * follower's height. Steeper ground than that still clips the uphill edge: a
+ * flat annulus cannot clear the full 29-degree walkable limit without floating
+ * conspicuously. Making the marker follow the terrain is the real fix, once
+ * followers get a ground-projected decal.
+ */
+const RING_LIFT = 0.25
 
 type Builder = {
   push: (
@@ -141,7 +154,7 @@ export function createFollowerMesh(options: FollowerMeshOptions): FollowerMesh {
   }
 
   // Selection ring: a flat annulus lying on the ground, facing up.
-  const ringY = height * RING_LIFT
+  const ringY = RING_OUTER * radius * RING_LIFT
   for (let segment = 0; segment < RING_SEGMENTS; segment += 1) {
     const a0 = (segment / RING_SEGMENTS) * Math.PI * 2
     const a1 = ((segment + 1) / RING_SEGMENTS) * Math.PI * 2

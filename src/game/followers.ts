@@ -55,8 +55,6 @@ export type FollowerViewContext = {
   camera: RayCamera
   /** Viewport width / height. */
   aspect: number
-  /** True while the terrain brush owns the pointer, so clicks are left alone. */
-  sculpting: boolean
 }
 
 export type Followers = {
@@ -217,20 +215,22 @@ export function createFollowers(
       // is searched over it.
       syncHeights()
 
-      // While the brush is armed the same buttons are shaping the ground.
-      if (view.sculpting) {
-        return
-      }
-
-      const { keys } = input
-      // Ctrl adds to the selection. Shift is the RTS convention, but it is
-      // already the sculpt modifier here — see the note in the README.
-      const additive = keys.has('ControlLeft') || keys.has('ControlRight')
-
       for (const click of input.pointer.clicks) {
         if (click.button === 'middle') {
           continue
         }
+
+        // Shift means the terrain brush owned that press, so it was shaping the
+        // ground, not picking anything up.
+        if (click.shiftKey) {
+          continue
+        }
+
+        // Ctrl adds to the selection. Shift is the RTS convention, but it is
+        // already the sculpt modifier here — see the note in the README.
+        // Taken from the click itself: the player may well have let go of Ctrl
+        // before this frame ran.
+        const additive = click.ctrlKey
 
         const ray = screenRay(view.camera, click.ndc.x, click.ndc.y, view.aspect)
 
@@ -312,9 +312,17 @@ function findSpawnNodes(
 
   let start = -1
   let bestSlope = Infinity
+  // Every node on a chain of islands is a shoreline node, and `steepestAround`
+  // scores all of those Infinity. Without a fallback the whole scan would come
+  // up empty and the tribe would never be placed.
+  let shoreline = -1
+
   for (let node = 0; node < nodeCount; node += 1) {
     if (heights[node] <= 0) {
       continue
+    }
+    if (shoreline < 0) {
+      shoreline = node
     }
     const slope = steepestAround(node)
     if (slope < bestSlope) {
@@ -327,6 +335,13 @@ function findSpawnNodes(
   }
 
   if (start < 0) {
+    start = shoreline
+  }
+
+  if (start < 0) {
+    // No land anywhere — an all-ocean world, which `generateTerrain('flat')`
+    // produces. Say so rather than starting an empty match in silence.
+    console.warn('[followers] no walkable land on the planet; nobody was spawned')
     return []
   }
 

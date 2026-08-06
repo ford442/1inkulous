@@ -95,6 +95,10 @@ std::int32_t FollowerSet::spawn(double x, double y, double z, std::int32_t tribe
   }
 
   followers_.push_back(std::move(follower));
+  // Sized here rather than only in the per-frame rebuild, so `count()` and the
+  // instance buffer can never disagree — a reader between a spawn and the next
+  // fixed step would otherwise run off the end of the buffer.
+  refresh_instances();
   return static_cast<std::int32_t>(followers_.size()) - 1;
 }
 
@@ -248,9 +252,13 @@ void FollowerSet::step_follower(Follower& follower, double dt_seconds) {
     // Height rides the straight line between the segment's endpoints, so the
     // follower's feet stay on the terrain it is crossing.
     const double travelled = follower.segment_angle - (angle - step_angle);
-    const double t = follower.segment_angle > 1e-12
-                         ? clamp_unit(travelled / follower.segment_angle)
-                         : 1.0;
+    // A fraction along the segment, so the domain is [0, 1] — clamping to
+    // [-1, 1] would let a stale segment angle extrapolate the height below the
+    // ground the follower set off from.
+    const double progress = follower.segment_angle > 1e-12
+                                ? travelled / follower.segment_angle
+                                : 1.0;
+    const double t = progress < 0.0 ? 0.0 : (progress > 1.0 ? 1.0 : progress);
     follower.height = follower.segment_start_height +
                       (grid_->height(node) - follower.segment_start_height) * t;
     remaining = 0.0;

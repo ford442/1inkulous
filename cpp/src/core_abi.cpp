@@ -85,11 +85,7 @@ INKULOUS_EXPORT int core_nav_nearest_walkable(double x, double y, double z) {
 // --- followers ------------------------------------------------------------
 
 INKULOUS_EXPORT int core_follower_spawn(double x, double y, double z, int tribe) {
-  const int id = simulation().followers().spawn(x, y, z, tribe);
-  if (id >= 0) {
-    simulation().followers().refresh_instances();
-  }
-  return id;
+  return simulation().followers().spawn(x, y, z, tribe);
 }
 
 INKULOUS_EXPORT int core_follower_count(void) { return simulation().followers().count(); }

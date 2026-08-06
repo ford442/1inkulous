@@ -131,6 +131,20 @@ export async function createSimulation(
     },
 
     uploadNavGraph(graph: NavGraphUpload, commit: NavCommitOptions) {
+      // `TypedArray.set` bounds-checks against the whole heap view, not against
+      // the region the core allocated, so an oversized array here would scribble
+      // over unrelated core memory without raising anything.
+      if (
+        graph.directions.length !== graph.nodeCount * 3 ||
+        graph.neighborOffsets.length !== graph.nodeCount + 1 ||
+        graph.neighbors.length !== graph.linkCount
+      ) {
+        throw new Error(
+          `Navigation graph arrays do not match ${graph.nodeCount} nodes and ` +
+            `${graph.linkCount} links.`,
+        )
+      }
+
       if (module._core_nav_alloc(graph.nodeCount, graph.linkCount) !== 1) {
         throw new Error(
           `Simulation core rejected a navigation graph of ${graph.nodeCount} nodes ` +
@@ -146,6 +160,14 @@ export async function createSimulation(
       module.HEAP32.set(graph.neighbors, module._core_nav_neighbors() >> 2)
 
       module._core_nav_commit(commit.planetRadius, commit.maxSlope ?? 0)
+      // The core validates the CSR topology on commit and simply stays unready
+      // if it does not hold. Fail here rather than leaving a world whose units
+      // silently refuse every order.
+      if (module._core_nav_ready() !== 1) {
+        throw new Error(
+          'Simulation core rejected the navigation graph topology on commit.',
+        )
+      }
       navNodeCount = graph.nodeCount
     },
 

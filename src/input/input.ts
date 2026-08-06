@@ -20,6 +20,14 @@ export type PointerClick = {
   position: { x: number; y: number }
   /** The same point in normalised device coordinates (-1..1, y up). */
   ndc: { x: number; y: number }
+  /**
+   * Modifiers as they were at the moment of the click, not as they are when the
+   * frame gets round to reading it. Releasing a modifier right after clicking is
+   * ordinary behaviour, and it can easily happen before the next frame runs — so
+   * a consumer that polled the live keyboard state would see the wrong thing.
+   */
+  ctrlKey: boolean
+  shiftKey: boolean
 }
 
 export type PointerSnapshot = {
@@ -165,6 +173,8 @@ export function createInput(canvas: HTMLCanvasElement): Input {
           button: name,
           position: { x: position.x, y: position.y },
           ndc: { x: ndc.x, y: ndc.y },
+          ctrlKey: event.ctrlKey,
+          shiftKey: event.shiftKey,
         })
       }
     }

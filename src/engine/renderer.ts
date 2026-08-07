@@ -14,6 +14,7 @@ import {
   type Vec3,
 } from './math'
 import { initWebGpu } from './webgpu'
+import { CANVAS_ASPECT, CANVAS_HEIGHT, CANVAS_WIDTH } from '../viewport'
 
 const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus'
 
@@ -330,39 +331,8 @@ export async function createRenderer(
   canvas: HTMLCanvasElement,
   game: Game,
 ): Promise<Renderer> {
-  const resize = (deviceWidth?: number, deviceHeight?: number) => {
-    const dpr = window.devicePixelRatio || 1
-    const width = Math.max(1, Math.floor(deviceWidth ?? canvas.clientWidth * dpr))
-    const height = Math.max(1, Math.floor(deviceHeight ?? canvas.clientHeight * dpr))
-    // Assigning either dimension clears the canvas, so only touch it on a change.
-    if (canvas.width !== width) canvas.width = width
-    if (canvas.height !== height) canvas.height = height
-  }
-
-  resize()
-  window.addEventListener('resize', () => resize())
-
-  // A devicePixelRatio change (moving windows between displays, browser zoom)
-  // leaves the CSS size alone, so the resize event above can miss it. Observing
-  // the device-pixel content box catches both, and gives exact integer sizes.
-  if (typeof ResizeObserver !== 'undefined') {
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const box = entry.devicePixelContentBoxSize?.[0]
-        if (box) {
-          resize(box.inlineSize, box.blockSize)
-        } else {
-          resize()
-        }
-      }
-    })
-
-    try {
-      observer.observe(canvas, { box: 'device-pixel-content-box' })
-    } catch {
-      observer.observe(canvas)
-    }
-  }
+  canvas.width = CANVAS_WIDTH
+  canvas.height = CANVAS_HEIGHT
 
   const { device, context, format } = await initWebGpu(canvas)
 
@@ -546,9 +516,8 @@ export async function createRenderer(
         )
       }
 
-      // The projection is rebuilt every frame from the live drawing-buffer size,
-      // so window resizes and devicePixelRatio changes need no extra plumbing.
-      const aspect = canvas.width / Math.max(1, canvas.height)
+      // Projection uses the fixed viewport aspect ratio.
+      const aspect = CANVAS_ASPECT
       const eye = camera.eye
 
       mat4Perspective(camera.fovY, aspect, NEAR_PLANE, FAR_PLANE, projection)

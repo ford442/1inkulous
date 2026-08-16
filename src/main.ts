@@ -34,6 +34,14 @@ async function main() {
   hud.setStatus(`${renderer.statusMessage} · core ${simulation.version}`)
 
   let lastTime = performance.now()
+  // Average over half a second so the HUD is readable rather than twitching
+  // with every vsync hiccup.
+  const PERF_WINDOW_MS = 500
+  let perfWindowStart = lastTime
+  let perfFrames = 0
+  let perfSimMs = 0
+  let perfGameMs = 0
+  let perfDrawMs = 0
 
   function frame(now: number) {
     const deltaMs = now - lastTime
@@ -41,11 +49,37 @@ async function main() {
 
     // Simulation first: the C++ core consumes whole fixed steps, and rendering
     // then draws whatever state they left behind.
+    let mark = performance.now()
     simulation.tick(deltaMs)
+    const simMs = performance.now() - mark
 
+    mark = performance.now()
     game.update(deltaMs, input.snapshot(), CANVAS_ASPECT)
+    const gameMs = performance.now() - mark
+
+    mark = performance.now()
     renderer.render(game)
-    hud.setFps(1000 / deltaMs)
+    const drawMs = performance.now() - mark
+
+    perfFrames += 1
+    perfSimMs += simMs
+    perfGameMs += gameMs
+    perfDrawMs += drawMs
+    const windowMs = now - perfWindowStart
+    if (windowMs >= PERF_WINDOW_MS && perfFrames > 0) {
+      hud.setPerf({
+        fps: (perfFrames * 1000) / windowMs,
+        simMs: perfSimMs / perfFrames,
+        gameMs: perfGameMs / perfFrames,
+        drawMs: perfDrawMs / perfFrames,
+      })
+      perfWindowStart = now
+      perfFrames = 0
+      perfSimMs = 0
+      perfGameMs = 0
+      perfDrawMs = 0
+    }
+
     hud.setBrush(game.sculptor)
     hud.setSimulation(simulation)
     hud.setFollowers(game.followers)

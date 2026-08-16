@@ -64,9 +64,9 @@ export function createGame(simulation: Simulation): Game {
       // After the camera, so picking uses the view that is about to be drawn.
       sculptor.update(deltaMs, input, { camera, aspect })
       // After the brush, so terrain edited this frame reaches the core's height
-      // buffer before anything paths over it. Followers read the modifiers off
-      // each click rather than off this frame's keyboard, so a sculpt stroke is
-      // filtered out at the click, not by the `sculpting` flag above.
+      // buffer before anything paths over it. Followers ignore clicks that had
+      // C held, so a sculpt stroke is filtered out at the click, not only by
+      // the `sculpting` flag above.
       followers.update(deltaMs, input, { camera, aspect })
     },
   }

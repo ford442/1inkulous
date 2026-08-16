@@ -89,14 +89,14 @@ heights get in.
 | `0`, `Home`, middle-click | Reset the view |
 | `WASD` / arrows, `Q`/`E` | Orbit and zoom from the keyboard |
 | Click a follower | Select it |
-| Ctrl-click a follower | Add to (or drop from) the selection |
+| Shift-click a follower | Add to (or drop from) the selection |
 | Click bare ground | Clear the selection |
 | Right-click | Send the selected followers walking there |
-| Shift + left / right drag | Raise / lower terrain |
-| Shift + wheel, `[` `]` | Brush size, brush strength |
+| Hold `C` + left / right drag | Raise / lower terrain |
+| Hold `C` + wheel, `[` `]` | Brush size, brush strength |
 
-Ctrl, not Shift, adds to a selection: Shift is the sculpt modifier, and the
-brush has first claim on the mouse while it is held.
+Shift-click adds to a selection. Hold `C` to sculpt: the brush has first claim
+on the mouse while it is held, so a sculpt stroke never also picks a follower.
 
 ## Followers
 
@@ -139,10 +139,15 @@ Measured by `npm run test:core` on a graph the size of the real one (3600 nodes,
 - Stepping 60 walking followers: **7 µs** per fixed step, 20 times a second.
 
 So the simulation is not the constraint at this scale; the render side is one
-extra draw call and a 2 KB buffer upload per frame. The next thing to bite will
-be A* on much larger graphs, which is why the search scratch is preallocated and
-stamped rather than cleared — and the obvious follow-up is a coarse graph to
-path over, with the fine grid used only for local steering.
+extra draw call and a 2 KB buffer upload per frame. The HUD's fps line averages
+those three slices over half a second (`sim` is `tick`, `game` is input/sculpt/
+orders, `draw` is the CPU side of the WebGPU encode). On a typical load, `sim`
+stays well under 0.1 ms and the visible cost is JS plus that instance upload.
+
+The next thing to bite will be A* on much larger graphs, which is why the search
+scratch is preallocated and stamped rather than cleared — and the obvious
+follow-up is a coarse graph to path over, with the fine grid used only for
+local steering.
 
 ### Not done yet
 
@@ -151,7 +156,8 @@ path over, with the fine grid used only for local steering.
 - No avoidance between followers; they walk through each other.
 - Nearest-node lookup is a linear scan over the graph. Fine on a click at this
   size, wrong for anything per-frame.
-- Followers are placeholder pawns in placeholder tribe colours.
+- Followers are placeholder pawns. The opening village cycles the four
+  placeholder tribe colours (blue, red, yellow, green); unique art comes later.
 
 ## Design notes
 

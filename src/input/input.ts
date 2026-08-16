@@ -30,6 +30,13 @@ export type PointerClick = {
    */
   ctrlKey: boolean
   shiftKey: boolean
+  /**
+   * KeyboardEvent.code values held at the moment of release. Needed for keys
+   * that are not mouse modifiers (the sculpt key is C) so a consumer can see
+   * what was down when the click happened, not what is down when the frame
+   * later reads it.
+   */
+  held: ReadonlySet<string>
 }
 
 export type PointerSnapshot = {
@@ -200,6 +207,7 @@ export function createInput(canvas: HTMLCanvasElement): Input {
           ndc: { x: ndc.x, y: ndc.y },
           ctrlKey: event.ctrlKey,
           shiftKey: event.shiftKey,
+          held: new Set(keys),
         })
       }
     }

@@ -4,6 +4,7 @@ import type { InputSnapshot } from '../input/input'
 import type { Simulation } from '../sim/simulation'
 import { buildNavGraph, type NavGraph } from './navGraph'
 import type { Planet } from './planet'
+import { isSculptModifierIn } from './sculpt'
 
 /**
  * Followers — the first units on the planet.
@@ -48,6 +49,10 @@ const PICK_SCREEN_FRACTION = 0.025
 export type FollowersOptions = {
   /** How many to place at game start. Clamped to the core's ceiling. */
   spawnCount?: number
+  /**
+   * When set, every spawn is this tribe. Omit to cycle the four placeholder
+   * colours (blue, red, yellow, green) so they all show at game start.
+   */
   tribe?: number
 }
 
@@ -102,12 +107,13 @@ export function createFollowers(
 
   syncHeights()
 
-  const tribe = options.tribe ?? 0
   const wanted = Math.min(options.spawnCount ?? DEFAULT_SPAWN_COUNT, MAX_FOLLOWERS)
   const spawnNodes = findSpawnNodes(graph, heights, planet.radius, wanted)
 
   let homeDirection: Vec3 | null = null
-  for (const node of spawnNodes) {
+  for (let i = 0; i < spawnNodes.length; i += 1) {
+    const node = spawnNodes[i]
+    const tribe = options.tribe ?? i % 4
     simulation.spawnFollower(
       [
         graph.directions[node * 3],
@@ -220,17 +226,14 @@ export function createFollowers(
           continue
         }
 
-        // Shift means the terrain brush owned that press, so it was shaping the
-        // ground, not picking anything up.
-        if (click.shiftKey) {
+        // C arms the brush, so that press was shaping the ground, not picking.
+        if (isSculptModifierIn(click.held)) {
           continue
         }
 
-        // Ctrl adds to the selection. Shift is the RTS convention, but it is
-        // already the sculpt modifier here — see the note in the README.
-        // Taken from the click itself: the player may well have let go of Ctrl
-        // before this frame ran.
-        const additive = click.ctrlKey
+        // Shift adds to the selection, the usual RTS binding. Taken from the
+        // click itself: the player may well have let go before this frame ran.
+        const additive = click.shiftKey
 
         const ray = screenRay(view.camera, click.ndc.x, click.ndc.y, view.aspect)
 

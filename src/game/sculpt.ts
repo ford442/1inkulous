@@ -43,14 +43,19 @@ const MIN_STRENGTH_FRACTION = 0.15
 const MAX_STRENGTH_FRACTION = 3
 const STRENGTH_STEP = 1.25
 
-const SCULPT_KEYS = ['ShiftLeft', 'ShiftRight']
+const SCULPT_KEYS = ['KeyC']
 
 /**
  * Whether the brush is armed this frame. Exported so the camera can be told to
  * release drag and the wheel before either is read.
  */
 export function isSculptModifierHeld(input: InputSnapshot): boolean {
-  return SCULPT_KEYS.some((code) => input.keys.has(code))
+  return isSculptModifierIn(input.keys)
+}
+
+/** Same test against a click's held-key snapshot, which can differ from now. */
+export function isSculptModifierIn(codes: ReadonlySet<string>): boolean {
+  return SCULPT_KEYS.some((code) => codes.has(code))
 }
 
 export function createSculptor(planet: Planet): Sculptor {

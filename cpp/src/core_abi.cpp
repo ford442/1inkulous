@@ -5,6 +5,8 @@
 
 #include "1inkulous/core.hpp"
 
+#include <vector>
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #define INKULOUS_EXPORT EMSCRIPTEN_KEEPALIVE
@@ -20,6 +22,24 @@ namespace {
 inkulous::Simulation& simulation() {
   static inkulous::Simulation instance{inkulous::kDefaultStepMs};
   return instance;
+}
+
+// Shared output of the two route calls. Debug traffic only: nothing reads it
+// per frame.
+std::vector<float>& route_points() {
+  static std::vector<float> points;
+  return points;
+}
+
+int write_route(const std::vector<inkulous::NavPoint>& route) {
+  std::vector<float>& points = route_points();
+  points.resize(route.size() * 3);
+  for (std::size_t i = 0; i < route.size(); ++i) {
+    points[i * 3] = static_cast<float>(route[i].dir[0]);
+    points[i * 3 + 1] = static_cast<float>(route[i].dir[1]);
+    points[i * 3 + 2] = static_cast<float>(route[i].dir[2]);
+  }
+  return static_cast<int>(route.size());
 }
 
 }  // namespace
@@ -82,6 +102,53 @@ INKULOUS_EXPORT int core_nav_nearest_walkable(double x, double y, double z) {
   return simulation().nav().nearest_walkable_node(x, y, z);
 }
 
+INKULOUS_EXPORT int core_nav_route(double x0,
+                                    double y0,
+                                    double z0,
+                                    double x1,
+                                    double y1,
+                                    double z1,
+                                    int smooth) {
+  inkulous::NavGrid& nav = simulation().nav();
+  if (!nav.ready()) {
+    return -1;
+  }
+  const int from = nav.nearest_walkable_node(x0, y0, z0);
+  const int to = nav.nearest_walkable_node(x1, y1, z1);
+  std::vector<int> nodes;
+  if (from < 0 || to < 0 || !nav.find_path(from, to, nodes)) {
+    return -1;
+  }
+
+  std::vector<inkulous::NavPoint> route;
+  if (smooth == 0) {
+    for (const int node : nodes) {
+      inkulous::NavPoint point;
+      const float* d = nav.direction(node);
+      point.dir[0] = d[0];
+      point.dir[1] = d[1];
+      point.dir[2] = d[2];
+      point.node = node;
+      route.push_back(point);
+    }
+    return write_route(route);
+  }
+
+  inkulous::NavPoint start;
+  start.dir[0] = x0;
+  start.dir[1] = y0;
+  start.dir[2] = z0;
+  start.node = from;
+  inkulous::NavPoint goal;
+  const float* d = nav.direction(to);
+  goal.dir[0] = d[0];
+  goal.dir[1] = d[1];
+  goal.dir[2] = d[2];
+  goal.node = to;
+  nav.smooth_path(start, nodes, goal, route);
+  return write_route(route);
+}
+
 // --- followers ------------------------------------------------------------
 
 INKULOUS_EXPORT int core_follower_spawn(double x, double y, double z, int tribe) {
@@ -120,6 +187,16 @@ INKULOUS_EXPORT int core_follower_order_move(double x, double y, double z) {
   simulation().followers().refresh_instances();
   return routed;
 }
+
+INKULOUS_EXPORT int core_follower_route(int id) {
+  std::vector<inkulous::NavPoint> route;
+  if (!simulation().followers().route(id, route)) {
+    return -1;
+  }
+  return write_route(route);
+}
+
+INKULOUS_EXPORT float* core_route_points(void) { return route_points().data(); }
 
 INKULOUS_EXPORT double core_follower_speed(void) {
   return simulation().followers().speed();

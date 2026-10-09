@@ -81,6 +81,13 @@ int core_nav_ready(void);
 // for placing things without duplicating the search in TypeScript.
 int core_nav_nearest_walkable(double x, double y, double z);
 
+// The route a walker standing at (x0, y0, z0) would take to (x1, y1, z1): the
+// A* node sequence, string-pulled into straight legs unless `smooth` is 0.
+// Writes the waypoints' unit directions into the route buffer and returns how
+// many, or -1 if there is no way. For tests and debug drawing; orders do their
+// own routing.
+int core_nav_route(double x0, double y0, double z0, double x1, double y1, double z1, int smooth);
+
 // --- followers ------------------------------------------------------------
 //
 // Ids are dense indices into the instance buffer, so TypeScript can pick a
@@ -105,6 +112,15 @@ int core_follower_selected_count(void);
 // Paths every selected follower to the terrain point under the direction.
 // Returns how many found a route.
 int core_follower_order_move(double x, double y, double z);
+
+// Copies the waypoints follower `id` has still to reach into the route buffer
+// and returns how many: 0 when it is idle, -1 for a bad id. Read-only debug
+// view; the route itself stays in the core.
+int core_follower_route(int id);
+
+// The route buffer both route calls write into: 3 floats per waypoint, valid
+// until the next route call.
+float* core_route_points(void);
 
 // Walking speed in world units per second along the surface.
 double core_follower_speed(void);

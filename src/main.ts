@@ -83,6 +83,7 @@ async function main() {
     hud.setBrush(game.sculptor)
     hud.setSimulation(simulation)
     hud.setFollowers(game.followers)
+    hud.setSelectionBand(game.followers.selectionBand)
 
     input.endFrame()
     requestAnimationFrame(frame)

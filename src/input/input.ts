@@ -10,7 +10,8 @@ export type PointerButton = 'left' | 'middle' | 'right'
 
 /**
  * A press and release at the same spot — the gesture that selects a unit or
- * gives an order, as distinct from a drag, which swings the camera.
+ * gives an order, as distinct from a drag. A left drag is a selection box; a
+ * right drag swings the camera.
  *
  * These are recorded from the events themselves rather than by watching
  * `buttons` across frames: a real click can begin and end inside a single
@@ -39,6 +40,30 @@ export type PointerClick = {
   held: ReadonlySet<string>
 }
 
+/**
+ * A left-button drag past the click slop. Screen space, in the same NDC the
+ * rest of picking uses. Present while the button is down (`dragRect`) and, for
+ * the frame of the release, in `drags`.
+ */
+export type DragRect = {
+  /** Where the button went down. */
+  startNdc: { x: number; y: number }
+  /** Latest pointer position — the moving corner while held, the release point after. */
+  currentNdc: { x: number; y: number }
+  button: PointerButton
+  /**
+   * Shift as of the latest pointer event. A drag that ends with Shift down adds
+   * to the selection, even if Shift was not held at the press.
+   */
+  shiftKey: boolean
+  /**
+   * Keys that were down at any moment of the gesture. The sculpt key is read
+   * from here so a box that overlapped C is never a selection, even when C is
+   * up again before the frame runs.
+   */
+  held: ReadonlySet<string>
+}
+
 export type PointerSnapshot = {
   /**
    * Pointer position in CSS pixels relative to the canvas, or null before the
@@ -58,6 +83,16 @@ export type PointerSnapshot = {
   wheel: number
   /** True while a drag started on the canvas is in progress. */
   dragging: boolean
+  /**
+   * Left-button drag past the click slop, while that button is still down.
+   * Null during a click, a right-drag, or when the press has not travelled.
+   */
+  dragRect: DragRect | null
+  /**
+   * Left-button drags that ended during this frame. Same lifetime as `clicks`:
+   * a press is one or the other, never both. Cleared by endFrame().
+   */
+  drags: readonly DragRect[]
   /** Clicks completed during this frame only. Cleared by endFrame(). */
   clicks: readonly PointerClick[]
 }
@@ -113,6 +148,13 @@ export function createInput(canvas: HTMLCanvasElement): Input {
   // be classified as a click or the end of a drag.
   const travelWhileDown = new Map<PointerButton, number>()
   let clicks: PointerClick[] = []
+  // Left-button gesture in progress. `gestureKeys` accumulates every key that
+  // was down at any point, so a sculpt modifier tapped mid-drag is still
+  // visible on the release.
+  let dragStartNdc: { x: number; y: number } | null = null
+  let gestureKeys: Set<string> | null = null
+  let liveRect: DragRect | null = null
+  let drags: DragRect[] = []
 
   const setButton = (button: number, down: boolean) => {
     if (button === 0) buttons.left = down
@@ -143,6 +185,12 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     if (name) {
       travelWhileDown.set(name, 0)
     }
+    // Only the left button boxes units. Right-drag stays an orbit.
+    if (name === 'left' && ndc) {
+      dragStartNdc = { x: ndc.x, y: ndc.y }
+      gestureKeys = new Set(keys)
+      liveRect = null
+    }
     // Capture so a drag keeps reporting once the pointer leaves the canvas.
     canvas.setPointerCapture(event.pointerId)
   }
@@ -171,6 +219,27 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     }
   }
 
+  const refreshLiveRect = (shiftKey: boolean) => {
+    const travelled = travelWhileDown.get('left')
+    if (
+      !dragStartNdc ||
+      !gestureKeys ||
+      !ndc ||
+      !buttons.left ||
+      travelled === undefined ||
+      travelled <= CLICK_SLOP_PIXELS
+    ) {
+      return
+    }
+    liveRect = {
+      startNdc: dragStartNdc,
+      currentNdc: { x: ndc.x, y: ndc.y },
+      button: 'left',
+      shiftKey,
+      held: gestureKeys,
+    }
+  }
+
   const onPointerMove = (event: PointerEvent) => {
     const previous = position
     trackPosition(event)
@@ -179,6 +248,7 @@ export function createInput(canvas: HTMLCanvasElement): Input {
       delta.x += event.movementX ?? (previous ? position!.x - previous.x : 0)
       delta.y += event.movementY ?? (previous ? position!.y - previous.y : 0)
       accumulateTravel(previous, position)
+      refreshLiveRect(event.shiftKey)
     }
   }
 
@@ -199,6 +269,20 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     }
     // A press the canvas never saw begin (the pointer came in from outside
     // already held) has no travel recorded and is not a click.
+    if (name === 'left' && dragStartNdc && gestureKeys && ndc && travelled !== undefined) {
+      if (travelled > CLICK_SLOP_PIXELS) {
+        drags.push({
+          startNdc: dragStartNdc,
+          currentNdc: { x: ndc.x, y: ndc.y },
+          button: 'left',
+          shiftKey: event.shiftKey,
+          held: gestureKeys,
+        })
+      }
+      dragStartNdc = null
+      gestureKeys = null
+      liveRect = null
+    }
     if (name && travelled !== undefined && travelled <= CLICK_SLOP_PIXELS) {
       if (position && ndc) {
         clicks.push({
@@ -232,6 +316,8 @@ export function createInput(canvas: HTMLCanvasElement): Input {
   const onKeyDown = (event: KeyboardEvent) => {
     keys.add(event.code)
     pressed.add(event.code)
+    // Remember it for the open drag even if the key is up again before release.
+    gestureKeys?.add(event.code)
   }
 
   const onKeyUp = (event: KeyboardEvent) => {
@@ -246,6 +332,11 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     buttons.left = false
     buttons.middle = false
     buttons.right = false
+    // A gesture abandoned by losing focus must not select whatever the box
+    // happened to cover.
+    dragStartNdc = null
+    gestureKeys = null
+    liveRect = null
   }
 
   const onContextMenu = (event: MouseEvent) => {
@@ -275,6 +366,8 @@ export function createInput(canvas: HTMLCanvasElement): Input {
     buttons,
     wheel,
     dragging: false,
+    dragRect: null,
+    drags,
     clicks,
   }
 
@@ -284,6 +377,8 @@ export function createInput(canvas: HTMLCanvasElement): Input {
       pointer.ndc = ndc
       pointer.wheel = wheel
       pointer.dragging = activePointers.size > 0
+      pointer.dragRect = liveRect
+      pointer.drags = drags
       pointer.clicks = clicks
       return { keys, pressed, pointer }
     },
@@ -295,6 +390,7 @@ export function createInput(canvas: HTMLCanvasElement): Input {
       // A fresh array rather than a truncation: the snapshot handed out this
       // frame may still be held by a caller.
       clicks = []
+      drags = []
     },
   }
 }

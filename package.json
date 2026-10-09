@@ -12,7 +12,8 @@
     "clean:wasm": "rm -rf cpp/build-wasm src/wasm/core.js src/wasm/core.wasm",
     "preview": "vite preview",
     "deploy": "python3 deploy.py",
-    "test:core": "node scripts/test-core.mjs"
+    "test:core": "node scripts/test-core.mjs",
+    "test:select": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-rubber-band.ts"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.71",

@@ -154,8 +154,9 @@ local steering.
 - No path smoothing: routes follow grid edges, so they show the 45-degree
   staircase a grid A* always produces.
 - No avoidance between followers; they walk through each other.
-- Nearest-node lookup is a linear scan over the graph. Fine on a click at this
-  size, wrong for anything per-frame.
+- Nearest-node lookup is a direction hash built when the graph is committed,
+  so per-frame queries do not scan every vertex. A sample the hash cannot prove
+  falls back to a scan. Heights stay in the original buffer.
 - Followers are placeholder pawns. The opening village cycles the four
   placeholder tribe colours (blue, red, yellow, green); unique art comes later.
 

@@ -213,6 +213,100 @@ const centre = gridDirection((GRID - 1) / 2, (GRID - 1) / 2)
 ok('nearest walkable node found', m._core_nav_nearest_walkable(...centre) === nodeAt(8, 8),
    String(m._core_nav_nearest_walkable(...centre)))
 
+// The core keeps a direction hash so this is not a scan, but the answer has to
+// be the scan's answer. The oracle below is that scan, over the directions this
+// test already built — nothing is read back out of the module.
+const WATER = 1e-6
+
+function naiveNearestWalkable(directions, heights, x, y, z) {
+  const len = Math.hypot(x, y, z)
+  if (!(len > 0)) return -1
+  const nx = x / len
+  const ny = y / len
+  const nz = z / len
+  let best = -1
+  let bestDot = -2
+  for (let node = 0; node < heights.length; node += 1) {
+    if (!(heights[node] > WATER)) continue
+    const dot = directions[node * 3] * nx + directions[node * 3 + 1] * ny + directions[node * 3 + 2] * nz
+    if (dot > bestDot) {
+      bestDot = dot
+      best = node
+    }
+  }
+  return best
+}
+
+function checkNearest(name, directions, heights, samples) {
+  let mismatches = 0
+  let detail = `${samples.length} directions`
+  for (const [x, y, z] of samples) {
+    const got = m._core_nav_nearest_walkable(x, y, z)
+    const expect = naiveNearestWalkable(directions, heights, x, y, z)
+    if (got !== expect) {
+      mismatches += 1
+      if (mismatches === 1) detail = `got ${got}, scan ${expect}`
+    }
+  }
+  ok(name, mismatches === 0, mismatches ? `${mismatches} mismatches — ${detail}` : detail)
+}
+
+let ownsDirection = true
+let ownDetail = ''
+for (let node = 0; node < grid.nodeCount; node += 1) {
+  const x = grid.directions[node * 3]
+  const y = grid.directions[node * 3 + 1]
+  const z = grid.directions[node * 3 + 2]
+  const got = m._core_nav_nearest_walkable(x, y, z)
+  if (got !== node) {
+    ownsDirection = false
+    ownDetail = `node ${node} -> ${got}`
+    break
+  }
+}
+ok("nearest walkable of a node's own direction is that node", ownsDirection, ownDetail)
+
+const patchSamples = []
+for (let node = 0; node < grid.nodeCount; node += 4) {
+  patchSamples.push([
+    grid.directions[node * 3],
+    grid.directions[node * 3 + 1],
+    grid.directions[node * 3 + 2],
+  ])
+}
+for (let j = 0; j < GRID; j += 2) {
+  for (let i = 0; i < GRID - 1; i += 2) {
+    const a = gridDirection(i, j)
+    const b = gridDirection(i + 1, j)
+    patchSamples.push([(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5])
+  }
+}
+// Off the patch entirely, so the ring is empty and the scan fallback has to agree.
+patchSamples.push([0, 1, 0], [0, 0, 1], [-1, 0.2, 0.3], [0.3, -0.9, 0.1])
+checkNearest('nearest walkable matches a linear scan', grid.directions, grid.heights, patchSamples)
+
+const floodedCentre = Float32Array.from(grid.heights)
+floodedCentre[nodeAt(8, 8)] = 0
+writeHeights(floodedCentre)
+const waterDir = gridDirection(8, 8)
+const waterHit = m._core_nav_nearest_walkable(...waterDir)
+const waterOracle = naiveNearestWalkable(grid.directions, floodedCentre, ...waterDir)
+const waterNeighbours = []
+for (let dj = -1; dj <= 1; dj += 1) {
+  for (let di = -1; di <= 1; di += 1) {
+    if (di === 0 && dj === 0) continue
+    waterNeighbours.push(nodeAt(8 + di, 8 + dj))
+  }
+}
+ok('a water sample matches the linear scan', waterHit === waterOracle, `${waterHit} vs ${waterOracle}`)
+ok('a water sample returns a neighbouring land node',
+   waterNeighbours.includes(waterHit) && floodedCentre[waterHit] > WATER,
+   String(waterHit))
+
+writeHeights(new Float32Array(grid.nodeCount))
+ok('open water has no walkable node', m._core_nav_nearest_walkable(...centre) === -1)
+writeHeights(grid.heights)
+
 // spawn, select, order
 const corner = gridDirection(1, 1)
 const far = gridDirection(GRID - 2, GRID - 2)
@@ -360,6 +454,42 @@ m.HEAP32.set(bigOffsets, m._core_nav_neighbor_offsets() >> 2)
 m.HEAP32.set(Int32Array.from(bigLinks), m._core_nav_neighbors() >> 2)
 m.HEAPF32.set(bigHeights, m._core_nav_heights() >> 2)
 m._core_nav_commit(RADIUS, 0.55)
+
+const bigSamples = []
+for (let node = 0; node < bigNodes; node += 17) {
+  bigSamples.push([
+    bigDirections[node * 3],
+    bigDirections[node * 3 + 1],
+    bigDirections[node * 3 + 2],
+  ])
+}
+for (let j = 0; j < BIG; j += 7) {
+  for (let i = 0; i < BIG - 1; i += 7) {
+    const node = j * BIG + i
+    const next = node + 1
+    bigSamples.push([
+      (bigDirections[node * 3] + bigDirections[next * 3]) * 0.5,
+      (bigDirections[node * 3 + 1] + bigDirections[next * 3 + 1]) * 0.5,
+      (bigDirections[node * 3 + 2] + bigDirections[next * 3 + 2]) * 0.5,
+    ])
+  }
+}
+bigSamples.push([0, 1, 0], [-0.2, -0.9, 0.4])
+checkNearest('nearest walkable on a 3600-node graph matches a linear scan',
+  bigDirections, bigHeights, bigSamples)
+
+let bigOwns = true
+let bigOwnDetail = ''
+for (let node = 0; node < bigNodes; node += 17) {
+  const got = m._core_nav_nearest_walkable(
+    bigDirections[node * 3], bigDirections[node * 3 + 1], bigDirections[node * 3 + 2])
+  if (got !== node) {
+    bigOwns = false
+    bigOwnDetail = `node ${node} -> ${got}`
+    break
+  }
+}
+ok("a large-graph node's own direction resolves to itself", bigOwns, bigOwnDetail)
 
 const corner3 = [bigDirections[0], bigDirections[1], bigDirections[2]]
 const opposite = [

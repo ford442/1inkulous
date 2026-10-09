@@ -1,10 +1,10 @@
 import type { Vec3 } from '../engine/math'
-import { screenRay, type Ray, type RayCamera } from '../engine/picking'
-import type { InputSnapshot } from '../input/input'
+import { screenRay, worldToNdc, type Ray, type RayCamera } from '../engine/picking'
+import type { DragRect, InputSnapshot } from '../input/input'
 import type { Simulation } from '../sim/simulation'
 import { buildNavGraph, type NavGraph } from './navGraph'
 import type { Planet } from './planet'
-import { isSculptModifierIn } from './sculpt'
+import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
 
 /**
  * Followers — the first units on the planet.
@@ -75,6 +75,11 @@ export type Followers = {
   readonly instanceFloats: number
   /** How many followers are walking a path right now. */
   readonly walkingCount: number
+  /**
+   * The selection box currently on screen, or null when the player is not
+   * dragging one — including while the sculpt modifier owns the gesture.
+   */
+  readonly selectionBand: DragRect | null
   update: (deltaMs: number, input: InputSnapshot, view: FollowerViewContext) => void
 }
 
@@ -192,6 +197,29 @@ export function createFollowers(
     return best
   }
 
+  let selectionBand: DragRect | null = null
+
+  const applyDragSelection = (drag: DragRect, view: FollowerViewContext) => {
+    // Sample positions before any selection write: the core refreshes the
+    // instance buffer on each select, and the ids are all this pass needs.
+    const ids = followerIdsInDragRect(
+      simulation.followerInstances(),
+      simulation.followerInstanceFloats,
+      view.camera,
+      view.aspect,
+      drag.startNdc,
+      drag.currentNdc,
+    )
+
+    // A plain box replaces. Shift adds the units inside and leaves the rest.
+    if (!drag.shiftKey) {
+      simulation.clearFollowerSelection()
+    }
+    for (const id of ids) {
+      simulation.setFollowerSelected(id, true)
+    }
+  }
+
   return {
     homeDirection,
     get count() {
@@ -204,6 +232,9 @@ export function createFollowers(
       return simulation.followerInstances()
     },
     instanceFloats: simulation.followerInstanceFloats,
+    get selectionBand() {
+      return selectionBand
+    },
     get walkingCount() {
       const data = simulation.followerInstances()
       const stride = simulation.followerInstanceFloats
@@ -220,6 +251,29 @@ export function createFollowers(
       // Terrain the player just reshaped has to reach the core before any path
       // is searched over it.
       syncHeights()
+
+      const live = input.pointer.dragRect
+      const sculpting = isSculptModifierHeld(input)
+      // Hide the band for the whole gesture once C has been involved, not only
+      // on the frames where it is still down. `held` accumulates those keys.
+      selectionBand =
+        live && live.button === 'left' && !sculpting && !isSculptModifierIn(live.held)
+          ? live
+          : null
+
+      for (const drag of input.pointer.drags) {
+        if (drag.button !== 'left') {
+          continue
+        }
+        // Hold-C sculpts. A box that started under C, or picked C up on the
+        // way, must not also select — including when C is released before the
+        // button, which is why the gesture's own key set is checked as well
+        // as the keys that are down right now.
+        if (sculpting || isSculptModifierIn(drag.held)) {
+          continue
+        }
+        applyDragSelection(drag, view)
+      }
 
       for (const click of input.pointer.clicks) {
         if (click.button === 'middle') {
@@ -374,4 +428,61 @@ function findSpawnNodes(
   }
 
   return chosen
+}
+
+/**
+ * Followers whose projected position lies inside a screen-space drag rectangle.
+ *
+ * A follower counts only when it is in front of the camera, on the near side of
+ * the planet (the same horizon test as a click), and inside the viewport. The
+ * far side of the sphere still projects onto the screen — the planet would be
+ * transparent otherwise — so the horizon test is what keeps a box on the
+ * village from selecting pawns the player cannot see.
+ */
+export function followerIdsInDragRect(
+  instances: Float32Array,
+  stride: number,
+  camera: RayCamera,
+  aspect: number,
+  startNdc: { x: number; y: number },
+  currentNdc: { x: number; y: number },
+): number[] {
+  const minX = Math.min(startNdc.x, currentNdc.x)
+  const maxX = Math.max(startNdc.x, currentNdc.x)
+  const minY = Math.min(startNdc.y, currentNdc.y)
+  const maxY = Math.max(startNdc.y, currentNdc.y)
+
+  const eye = camera.eye
+  const count = stride > 0 ? Math.floor(instances.length / stride) : 0
+  const ids: number[] = []
+
+  for (let id = 0; id < count; id += 1) {
+    const base = id * stride + OFFSET_POSITION
+    const px = instances[base]
+    const py = instances[base + 1]
+    const pz = instances[base + 2]
+
+    const ex = eye[0] - px
+    const ey = eye[1] - py
+    const ez = eye[2] - pz
+    if (px * ex + py * ey + pz * ez <= 0) {
+      continue
+    }
+
+    const ndc = worldToNdc(camera, [px, py, pz], aspect)
+    if (!ndc) {
+      continue
+    }
+    // On screen. A drag can run outside the canvas (pointer capture), but a
+    // follower that is not drawn is not selected.
+    if (ndc.x < -1 || ndc.x > 1 || ndc.y < -1 || ndc.y > 1) {
+      continue
+    }
+    if (ndc.x < minX || ndc.x > maxX || ndc.y < minY || ndc.y > maxY) {
+      continue
+    }
+    ids.push(id)
+  }
+
+  return ids
 }

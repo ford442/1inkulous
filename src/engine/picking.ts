@@ -46,6 +46,42 @@ export function screenRay(
 }
 
 /**
+ * Projects a world point to normalised device coordinates (-1..1, y up).
+ * Null when the point is behind the camera. Inverse of `screenRay` for the
+ * same view: a follower's instance position can be tested against a drag
+ * rectangle without a second pick buffer.
+ */
+export function worldToNdc(
+  camera: RayCamera,
+  point: Vec3,
+  aspect: number,
+): { x: number; y: number } | null {
+  if (!(aspect > 0)) {
+    return null
+  }
+
+  const m = camera.viewMatrix
+  const px = point[0]
+  const py = point[1]
+  const pz = point[2]
+  const cx = m[0] * px + m[4] * py + m[8] * pz + m[12]
+  const cy = m[1] * px + m[5] * py + m[9] * pz + m[13]
+  const cz = m[2] * px + m[6] * py + m[10] * pz + m[14]
+
+  // The view looks down camera -Z, so a point in front has negative cz.
+  if (cz >= 0) {
+    return null
+  }
+
+  const tanHalf = Math.tan(camera.fovY / 2)
+  const depth = -cz
+  return {
+    x: cx / (depth * tanHalf * aspect),
+    y: cy / (depth * tanHalf),
+  }
+}
+
+/**
  * Distance along `ray` to the nearest intersection with a sphere centred on
  * `centre`, or null if it misses. Only hits in front of the origin count.
  */

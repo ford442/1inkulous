@@ -83,11 +83,13 @@ heights get in.
 
 | Input | Does |
 | --- | --- |
-| Drag | Orbit the planet |
+| Right-drag | Orbit the planet |
 | Wheel | Zoom |
 | `1`–`4` | Cardinal views |
 | `0`, `Home`, middle-click | Reset the view |
 | `WASD` / arrows, `Q`/`E` | Orbit and zoom from the keyboard |
+| Drag a box | Select every on-screen follower inside it |
+| Shift-drag a box | Add those followers to the selection |
 | Click a follower | Select it |
 | Shift-click a follower | Add to (or drop from) the selection |
 | Click bare ground | Clear the selection |
@@ -95,8 +97,11 @@ heights get in.
 | Hold `C` + left / right drag | Raise / lower terrain |
 | Hold `C` + wheel, `[` `]` | Brush size, brush strength |
 
-Shift-click adds to a selection. Hold `C` to sculpt: the brush has first claim
-on the mouse while it is held, so a sculpt stroke never also picks a follower.
+Shift-click toggles one follower; Shift-drag adds everyone in the box. A plain
+drag replaces the selection, and a click that does not move stays a single
+pick. Hold `C` to sculpt: the brush has first claim on the mouse while it is
+held, so a sculpt stroke never also picks a follower or starts a selection box.
+Right-drag orbits; a right-click that stays put still sends the selection.
 
 ## Followers
 

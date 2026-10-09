@@ -27,8 +27,18 @@ body {
   height: 768px;
 }
 
+#select-band {
+  position: fixed;
+  margin: 0;
+  border: 1px solid rgba(232, 228, 220, 0.95);
+  background: rgba(180, 200, 230, 0.22);
+  pointer-events: none;
+  z-index: 1;
+}
+
 #hud {
   position: fixed;
+  z-index: 2;
   top: 0;
   left: 0;
   right: 0;

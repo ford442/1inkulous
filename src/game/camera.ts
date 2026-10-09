@@ -4,7 +4,8 @@ import type { InputSnapshot } from '../input/input'
 /**
  * Orbit camera for the planet: the eye sits on a sphere around a target (the
  * planet centre for now, a tribe or spell site later) and the player swings it
- * around by dragging. Every control writes to a *desired* yaw/pitch/distance,
+ * around by dragging with the right button. Every control writes to a *desired*
+ * yaw/pitch/distance,
  * and the live values chase those exponentially, so drags feel direct but stop
  * without a jolt.
  */
@@ -132,13 +133,17 @@ export function createCamera(options: CameraOptions): Camera {
       const allowPointerOrbit = options.allowPointerOrbit ?? true
       const allowPointerZoom = options.allowPointerZoom ?? true
 
-      // Left-drag grabs the globe: the surface follows the cursor, as in Google
-      // Earth. That means dragging right swings the eye the other way, hence the
-      // negated yaw. (The keys below are the other convention — they move the
-      // camera, so Right sends the eye right and the world slides left.)
+      // A right-button drag grabs the globe: the surface follows the cursor, as
+      // in Google Earth. Dragging toward the right of the screen swings the eye
+      // the other way, hence the negated yaw. (The keys below are the other
+      // convention — they move the camera, so Right sends the eye right and the
+      // world slides left.)
+      // The left button draws the selection box, so the planet stays still while
+      // that rectangle is on screen. A right press inside the click slop is
+      // still a move order.
       // Sensitivity shrinks as you zoom in, so a pixel of drag moves roughly the
       // same amount of surface at every distance.
-      if (allowPointerOrbit && pointer.dragging && pointer.buttons.left) {
+      if (allowPointerOrbit && pointer.dragging && pointer.buttons.right) {
         const scale =
           ORBIT_RADIANS_PER_PIXEL * clamp(distance / defaultDistance, 0.35, 1.25)
         desiredYaw -= pointer.delta.x * scale

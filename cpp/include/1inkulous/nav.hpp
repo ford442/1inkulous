@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -13,7 +14,8 @@
 //
 // Heights are the one part that keeps changing: terrain deformation rewrites
 // them, and the same buffer is simply overwritten in place, so a raised
-// mountain blocks a path on the very next search.
+// mountain blocks a path on the very next search. The nearest-node index is
+// built from directions only, so those in-place height writes do not rebuild it.
 
 namespace inkulous {
 
@@ -62,9 +64,12 @@ class NavGrid {
   // Arc length along the surface between two nodes, in world units.
   double arc_length(std::int32_t from, std::int32_t to) const;
 
-  // Closest node to a direction, which need not be normalised. -1 if empty.
+  // Closest node to a direction, which need not be normalised. Answered from a
+  // grid hash of the directions built in commit(); a sample the hash cannot
+  // prove falls back to a scan. -1 if the graph is empty or the direction is.
   std::int32_t nearest_node(double x, double y, double z) const;
-  // As above, but skips water and anywhere a follower could not stand.
+  // As above, but skips water. Standing room is the height test; slope is
+  // decided per step by passable(), not here.
   std::int32_t nearest_walkable_node(double x, double y, double z) const;
 
   // A* from `from` to `to`. On success `out` holds the node sequence to walk,
@@ -77,6 +82,22 @@ class NavGrid {
   // that buffer arrives across the WASM boundary as raw memory.
   bool offsets_valid() const;
 
+  void build_spatial_index();
+  void clear_spatial_index();
+  // `walkable_only` skips water. Both queries share the index.
+  std::int32_t nearest_impl(double x, double y, double z, bool walkable_only) const;
+  std::int32_t nearest_linear(double nx, double ny, double nz, bool walkable_only) const;
+  // Slot whose key matches, or the empty slot where it would be inserted.
+  std::size_t spatial_probe(std::uint32_t key) const;
+
+  // One cell of the direction hash. `count == 0` is an empty probe slot;
+  // occupied slots point at a run of node ids in `spatial_nodes_`.
+  struct SpatialSlot {
+    std::uint32_t key = 0;
+    std::int32_t start = 0;
+    std::int32_t count = 0;
+  };
+
   std::int32_t node_count_ = 0;
   std::int32_t link_count_ = 0;
   bool committed_ = false;
@@ -87,6 +108,12 @@ class NavGrid {
   std::vector<float> heights_;
   std::vector<std::int32_t> neighbor_offsets_;
   std::vector<std::int32_t> neighbors_;
+
+  // Direction hash. Invalidated by allocate(); rebuilt only when commit()
+  // accepts the topology. Heights are not stored here.
+  std::vector<SpatialSlot> spatial_slots_;
+  std::vector<std::int32_t> spatial_nodes_;
+  bool spatial_ready_ = false;
 
   // Search scratch, kept allocated between calls. `visit_stamp_` records which
   // search last touched a node, so a new search costs no clearing pass.

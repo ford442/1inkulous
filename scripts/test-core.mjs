@@ -22,8 +22,8 @@ const ok = (name, pass, detail = '') => out.push(`${pass ? 'PASS' : 'FAIL'}  ${n
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
-ok('version string', version === '0.2.0', version)
-ok('encoded version matches', m._core_version() === 200, String(m._core_version()))
+ok('version string', version === '0.3.0', version)
+ok('encoded version matches', m._core_version() === 300, String(m._core_version()))
 
 // default step
 m._core_init(0)
@@ -157,6 +157,25 @@ const isWalking = (id) => {
   return (data[id * stride + 7] & 2) !== 0
 }
 
+/** Mirrors kFollowerSpacing in cpp/include/1inkulous/followers.hpp. */
+const SPACING = 0.024
+
+/** Smallest distance between any two of `ids`, along the ground. */
+function closestPair(ids) {
+  const at = ids.map((f) => {
+    const p = followerPosition(f)
+    const r = Math.hypot(...p)
+    return [p[0] / r, p[1] / r, p[2] / r]
+  })
+  let best = Infinity
+  for (let a = 0; a < at.length; a += 1) {
+    for (let b = a + 1; b < at.length; b += 1) {
+      best = Math.min(best, angleTo(at[a], at[b]) * RADIUS)
+    }
+  }
+  return best
+}
+
 const angleTo = (a, b) => {
   const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
   const la = Math.hypot(...a)
@@ -204,6 +223,14 @@ backwardsOffsets[5] = backwardsOffsets[4] - 1
 m.HEAP32.set(backwardsOffsets, m._core_nav_neighbor_offsets() >> 2)
 m._core_nav_commit(RADIUS, 0.55)
 ok('an offset table that goes backwards is refused', m._core_nav_ready() === 0)
+
+// The neighbour ids index the per-node buffers just as directly.
+m.HEAP32.set(grid.offsets, m._core_nav_neighbor_offsets() >> 2)
+const strayNeighbors = Int32Array.from(grid.neighbors)
+strayNeighbors[7] = grid.nodeCount + 3
+m.HEAP32.set(strayNeighbors, m._core_nav_neighbors() >> 2)
+m._core_nav_commit(RADIUS, 0.55)
+ok('a neighbour id past the last node is refused', m._core_nav_ready() === 0)
 
 // Back to the real thing.
 uploadGrid(grid.heights)
@@ -403,20 +430,280 @@ simulate(30)
 const elapsed = Date.now() - started
 ok('30s of 64 followers simulates in well under real time', elapsed < 3000, `${elapsed}ms`)
 // Not just "stopped walking": a follower that gave up halfway would also have a
-// clear flag, so check where each of them actually ended up.
-ok('the crowd all arrived',
-   Array.from({ length: 64 }, (_, f) =>
-     !isWalking(f) && angleTo(followerPosition(f), far) < 0.02).every(Boolean))
+// clear flag, so check where each of them actually ended up. The group gathers
+// round the point rather than on it, a spot each.
+const crowd = Array.from({ length: 64 }, (_, f) => f)
+const crowdWalking = crowd.filter(isWalking).length
+const crowdFurthest = Math.max(...crowd.map((f) => angleTo(followerPosition(f), far)))
+ok('the crowd all arrived', crowdWalking === 0 && crowdFurthest < 0.3,
+   `${crowdWalking} still walking, furthest ${crowdFurthest.toFixed(3)} rad out`)
+ok('someone holds the point itself',
+   crowd.some((f) => angleTo(followerPosition(f), far) < 0.01))
+const crowdGap = closestPair(crowd)
+ok('nobody in the crowd stands on anybody else', crowdGap > SPACING * 0.8,
+   `closest pair ${crowdGap.toFixed(4)} apart, spacing ${SPACING}`)
 
 const packed = instances()
 ok('instance buffer is packed and sized', packed.data.length === 64 * 8)
 ok('tribe survives the round trip', packed.data[6] === 0 && packed.data[8 + 6] === 1)
 
 // ---------------------------------------------------------------------------
+// Smoothing. A grid A* walks the links, so anything that is not a row, a column
+// or a 45-degree diagonal comes out as a staircase. The core string-pulls the
+// node route into straight legs; core_nav_route shows both.
+
+/** Reads the route buffer the last route call filled. */
+function readRoute(count) {
+  const start = m._core_route_points() >> 2
+  const points = []
+  for (let k = 0; k < count; k += 1) {
+    points.push(Array.from(m.HEAPF32.subarray(start + k * 3, start + k * 3 + 3)))
+  }
+  return points
+}
+
+/** Length along the ground of a polyline of directions, from `from`. */
+function routeLength(from, points) {
+  let total = 0
+  let previous = from
+  for (const point of points) {
+    total += angleTo(previous, point) * RADIUS
+    previous = point
+  }
+  return total
+}
+
+/** Unit direction `t` of the way along the great circle from a to b. */
+function slerp(a, b, t) {
+  const angle = angleTo(a, b)
+  if (angle < 1e-12) return a
+  const s = Math.sin(angle)
+  const wa = Math.sin((1 - t) * angle) / s
+  const wb = Math.sin(t * angle) / s
+  return [a[0] * wa + b[0] * wb, a[1] * wa + b[1] * wb, a[2] * wa + b[2] * wb]
+}
+
+/** Nearest node of any kind, by scan: the cell a direction falls in. */
+function naiveNearest(x, y, z) {
+  let best = -1
+  let bestDot = -2
+  for (let node = 0; node < grid.nodeCount; node += 1) {
+    const dot = grid.directions[node * 3] * x + grid.directions[node * 3 + 1] * y +
+      grid.directions[node * 3 + 2] * z
+    if (dot > bestDot) {
+      bestDot = dot
+      best = node
+    }
+  }
+  return best
+}
+
+/** Whether every leg of a route keeps out of cells whose node is in `wet`. */
+function routeStaysDry(from, points, wet) {
+  let previous = from
+  for (const point of points) {
+    for (let k = 0; k <= 64; k += 1) {
+      if (wet(naiveNearest(...slerp(previous, point, k / 64)))) return false
+    }
+    previous = point
+  }
+  return true
+}
+
+writeHeights(grid.heights)
+const kinkFrom = gridDirection(1, 1)
+const kinkTo = gridDirection(15, 5)
+const rawCount = m._core_nav_route(...kinkFrom, ...kinkTo, 0)
+const rawRoute = readRoute(rawCount)
+const smoothCount = m._core_nav_route(...kinkFrom, ...kinkTo, 1)
+const smoothRoute = readRoute(smoothCount)
+const straight = angleTo(kinkFrom, kinkTo) * RADIUS
+ok('a grid route off the diagonal is a staircase of nodes', rawCount === 14,
+   `${rawCount} nodes, ${(routeLength(kinkFrom, rawRoute) / straight * 100 - 100).toFixed(1)}% longer than straight`)
+ok('string-pulled across open ground it is one straight leg', smoothCount === 1,
+   `${smoothCount} waypoints`)
+ok('and that leg is the great circle',
+   Math.abs(routeLength(kinkFrom, smoothRoute) - straight) < 1e-4,
+   `${routeLength(kinkFrom, smoothRoute).toFixed(4)} vs ${straight.toFixed(4)}`)
+
+// Round the end of the water channel the follower took earlier: still fewer,
+// longer legs than the node route, and none of them cut through the water.
+writeHeights(gapped)
+const dryFrom = gridDirection(2, 3)
+const dryTo = gridDirection(14, 3)
+const dryRaw = m._core_nav_route(...dryFrom, ...dryTo, 0)
+const dryRawRoute = readRoute(dryRaw)
+const drySmooth = m._core_nav_route(...dryFrom, ...dryTo, 1)
+const drySmoothRoute = readRoute(drySmooth)
+ok('a route round water smooths to a few legs', drySmooth > 0 && drySmooth <= 5 && drySmooth < dryRaw / 3,
+   `${dryRaw} nodes -> ${drySmooth} waypoints`)
+ok('the smoothed route is shorter than the node route',
+   routeLength(dryFrom, drySmoothRoute) < routeLength(dryFrom, dryRawRoute) - 0.01,
+   `${routeLength(dryFrom, drySmoothRoute).toFixed(3)} vs ${routeLength(dryFrom, dryRawRoute).toFixed(3)}`)
+ok('no smoothed leg crosses a water cell',
+   routeStaysDry(dryFrom, drySmoothRoute, (node) => gapped[node] <= WATER))
+
+// Walking it: the follower keeps to the great circle instead of zig-zagging
+// down the grid.
+writeHeights(grid.heights)
+m._core_followers_clear()
+const walker = m._core_follower_spawn(...kinkFrom, 0)
+m._core_follower_set_selected(walker, 1)
+m._core_follower_order_move(...kinkTo)
+const plane = (() => {
+  const c = [
+    kinkFrom[1] * kinkTo[2] - kinkFrom[2] * kinkTo[1],
+    kinkFrom[2] * kinkTo[0] - kinkFrom[0] * kinkTo[2],
+    kinkFrom[0] * kinkTo[1] - kinkFrom[1] * kinkTo[0],
+  ]
+  const l = Math.hypot(...c)
+  return c.map((v) => v / l)
+})()
+let offLine = 0
+for (let frame = 0; frame < 200 && isWalking(walker); frame += 1) {
+  m._core_tick(200)
+  const p = followerPosition(walker)
+  const r = Math.hypot(...p)
+  offLine = Math.max(offLine, Math.abs(p[0] * plane[0] + p[1] * plane[1] + p[2] * plane[2]) / r)
+}
+ok('a walker on a smoothed route keeps to the straight line', offLine < 1e-3,
+   `strays ${offLine.toFixed(5)} rad at most`)
+ok('and arrives on the point', !isWalking(walker) && angleTo(followerPosition(walker), kinkTo) < 1e-4)
+
+// ---------------------------------------------------------------------------
+// Separation. Followers have room of their own: put a dozen on one node and
+// they shuffle apart, and two walking straight at each other step round.
+
+/** Spawns one follower per [i, j] grid cell given, all tribe 0. */
+const spawnAll = (cells) => cells.map(([i, j]) => m._core_follower_spawn(...gridDirection(i, j), 0))
+
+function selectOnly(ids) {
+  m._core_follower_clear_selection()
+  for (const id of ids) m._core_follower_set_selected(id, 1)
+}
+
+m._core_followers_clear()
+const stack = spawnAll(Array.from({ length: 12 }, () => [8, 8]))
+ok('a dozen spawned on one node start on top of each other', closestPair(stack) < 1e-6)
+simulate(5)
+const stackGap = closestPair(stack)
+ok('and spread out to their spacing', stackGap > SPACING * 0.9,
+   `closest pair ${stackGap.toFixed(4)} apart`)
+ok('without anyone setting off anywhere', stack.every((f) => !isWalking(f)))
+ok('and stay a village, not a scatter',
+   Math.max(...stack.map((f) => angleTo(followerPosition(f), gridDirection(8, 8)))) < SPACING * 4)
+
+m._core_followers_clear()
+const [westward, eastward] = spawnAll([[2, 8], [14, 8]])
+selectOnly([westward])
+m._core_follower_order_move(...gridDirection(14, 8))
+selectOnly([eastward])
+m._core_follower_order_move(...gridDirection(2, 8))
+let headOnGap = Infinity
+for (let frame = 0; frame < 150; frame += 1) {
+  m._core_tick(200)
+  headOnGap = Math.min(headOnGap, closestPair([westward, eastward]))
+}
+ok('two walkers meeting head-on step round each other', headOnGap > SPACING * 0.75,
+   `closest ${headOnGap.toFixed(4)}, spacing ${SPACING}`)
+ok('and both still get where they were going',
+   !isWalking(westward) && !isWalking(eastward) &&
+   angleTo(followerPosition(westward), gridDirection(14, 8)) < 0.02 &&
+   angleTo(followerPosition(eastward), gridDirection(2, 8)) < 0.02,
+   `${angleTo(followerPosition(westward), gridDirection(14, 8)).toFixed(4)}, ` +
+   `${angleTo(followerPosition(eastward), gridDirection(2, 8)).toFixed(4)} rad short`)
+
+// ---------------------------------------------------------------------------
+// Ground that changes under a walker. A wall right across its way and it gives
+// up where it stands; a wall with a way round and it takes the way round.
+
+m._core_followers_clear()
+writeHeights(grid.heights)
+const [blockedWalker] = spawnAll([[2, 8]])
+selectOnly([blockedWalker])
+m._core_follower_order_move(...gridDirection(14, 8))
+simulate(2)
+const sealed = Float32Array.from(grid.heights)
+for (let j = 0; j < GRID; j += 1) sealed[nodeAt(10, j)] = 0.4
+writeHeights(sealed)
+simulate(10)
+const blockedAt = followerPosition(blockedWalker)
+ok('a cliff raised across the whole way stops a walker', !isWalking(blockedWalker))
+ok('on its own side of the cliff',
+   angleTo(blockedAt, gridDirection(2, 8)) < angleTo(gridDirection(2, 8), gridDirection(10, 8)),
+   `${angleTo(blockedAt, gridDirection(2, 8)).toFixed(3)} rad along, cliff at ` +
+   `${angleTo(gridDirection(2, 8), gridDirection(10, 8)).toFixed(3)}`)
+
+const [detourWalker] = (m._core_followers_clear(), spawnAll([[2, 8]]))
+writeHeights(grid.heights)
+selectOnly([detourWalker])
+m._core_follower_order_move(...gridDirection(14, 8))
+simulate(2)
+const breached = Float32Array.from(grid.heights)
+for (let j = 2; j < GRID; j += 1) breached[nodeAt(10, j)] = 0.4
+writeHeights(breached)
+simulate(40)
+ok('a cliff with a way round it re-routes the walker instead',
+   !isWalking(detourWalker) && angleTo(followerPosition(detourWalker), gridDirection(14, 8)) < 0.02,
+   `${angleTo(followerPosition(detourWalker), gridDirection(14, 8)).toFixed(4)} rad short`)
+
+// ---------------------------------------------------------------------------
+// The milestone in one go: a group, picked as a group, sent round a hill. The
+// hill is a cliff-sided block in the middle of the patch; going over it is not
+// an option, so they go round, on a smooth path, and finish standing apart.
+
+const hill = Float32Array.from(grid.heights)
+const onHill = (i, j) => i >= 6 && i <= 10 && j >= 5 && j <= 11
+for (let j = 0; j < GRID; j += 1) {
+  for (let i = 0; i < GRID; i += 1) {
+    if (onHill(i, j)) hill[nodeAt(i, j)] = 0.4
+  }
+}
+writeHeights(hill)
+m._core_followers_clear()
+const band = spawnAll([
+  [1, 7], [2, 7], [3, 7], [1, 8], [2, 8], [3, 8], [1, 9], [2, 9], [3, 9], [2, 10], [3, 10], [2, 6],
+])
+selectOnly(band)
+const hillGoal = gridDirection(14, 8)
+ok('the whole group takes the order', m._core_follower_order_move(...hillGoal) === band.length)
+const hillLegs = band.map((f) => m._core_follower_route(f))
+ok('each takes a handful of straight legs, not a node per cell',
+   hillLegs.every((legs) => legs >= 1 && legs <= 4), hillLegs.join(' '))
+let onTop = 0
+let highest = 0
+let hillCrowd = Infinity
+for (let frame = 0; frame < 300 && band.some(isWalking); frame += 1) {
+  m._core_tick(200)
+  for (const f of band) {
+    const p = followerPosition(f)
+    const cell = naiveNearest(...p)
+    if (onHill(cell % GRID, Math.floor(cell / GRID))) onTop += 1
+    highest = Math.max(highest, Math.hypot(...p))
+  }
+  if (frame > 10) hillCrowd = Math.min(hillCrowd, closestPair(band))
+}
+ok('nobody sets foot on the hill', onTop === 0, `${onTop} follower-frames in a hill cell`)
+// Brushing past its foot, a follower may stand a little way up the bottom of
+// the slope the mesh draws there — never most of the way up the face.
+ok('nobody climbs its face either', highest < RADIUS + LAND + (0.4 - LAND) * 0.25,
+   `highest ${(highest - RADIUS - LAND).toFixed(4)} above the plain, cliff ${0.4 - LAND}`)
+ok('nobody walks through anybody on the way', hillCrowd > SPACING * 0.5,
+   `closest ${hillCrowd.toFixed(4)}, spacing ${SPACING}`)
+const hillFurthest = Math.max(...band.map((f) => angleTo(followerPosition(f), hillGoal)))
+ok('the group arrives round the far side', band.every((f) => !isWalking(f)) && hillFurthest < 0.12,
+   `furthest ${hillFurthest.toFixed(3)} rad from the point`)
+const hillGap = closestPair(band)
+ok('and stands apart, not stacked on the goal vertex', hillGap > SPACING * 0.9,
+   `closest pair ${hillGap.toFixed(4)} apart`)
+writeHeights(grid.heights)
+
+// ---------------------------------------------------------------------------
 // Cost at the size the game actually runs at. The default planet is a 24-quad
 // cube-sphere: 3458 welded nodes and a little over 26000 links. A 60x60 patch
-// is the same order, and a mass order across its diagonal is the worst case —
-// every follower runs its own full-width A*.
+// is the same order, and a mass order across its diagonal is the worst case:
+// one search out from the goal that has to cover the whole patch, then a
+// string-pull and a line test the length of the world for every follower.
 
 const BIG = 60
 const bigNodes = BIG * BIG
@@ -507,13 +794,15 @@ const orderStarted = process.hrtime.bigint()
 const routed = m._core_follower_order_move(...opposite)
 const orderMs = Number(process.hrtime.bigint() - orderStarted) / 1e6
 ok('60 followers path across a 3600-node graph', routed === 60, `${orderMs.toFixed(1)}ms`)
-ok('a mass order fits inside one frame', orderMs < 16, `${orderMs.toFixed(1)}ms for 60 searches`)
+ok('a mass order fits inside one frame', orderMs < 16, `${orderMs.toFixed(1)}ms for 60 followers`)
 
 const stepStarted = process.hrtime.bigint()
 for (let i = 0; i < 200; i += 1) m._core_tick(50)
 const stepMs = Number(process.hrtime.bigint() - stepStarted) / 1e6
-ok('200 steps of 60 walking followers are effectively free',
-   stepMs < 20, `${stepMs.toFixed(1)}ms total, ${(stepMs / 200 * 1000).toFixed(0)}us per step`)
+// Steering, avoidance and separation run every step for everyone; a fifth of a
+// millisecond per step for a crowd this size is half a percent of the step.
+ok('200 steps of 60 walking followers stay cheap',
+   stepMs < 50, `${stepMs.toFixed(1)}ms total, ${(stepMs / 200 * 1000).toFixed(0)}us per step`)
 
 console.log(out.join('\n'))
 const failed = out.filter((r) => r.startsWith('FAIL'))

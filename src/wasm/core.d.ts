@@ -31,6 +31,19 @@ export type CoreModule = {
   _core_nav_node_count: () => number
   _core_nav_ready: () => number
   _core_nav_nearest_walkable: (x: number, y: number, z: number) => number
+  /**
+   * Route between two directions into the route buffer: string-pulled legs, or
+   * the raw A* nodes when `smooth` is 0. Returns the waypoint count, -1 if none.
+   */
+  _core_nav_route: (
+    x0: number,
+    y0: number,
+    z0: number,
+    x1: number,
+    y1: number,
+    z1: number,
+    smooth: number,
+  ) => number
 
   _core_follower_spawn: (x: number, y: number, z: number, tribe: number) => number
   _core_follower_count: () => number
@@ -42,6 +55,10 @@ export type CoreModule = {
   _core_follower_clear_selection: () => void
   _core_follower_selected_count: () => number
   _core_follower_order_move: (x: number, y: number, z: number) => number
+  /** Copies a follower's remaining waypoints into the route buffer; returns how many. */
+  _core_follower_route: (id: number) => number
+  /** Pointer to the route buffer: 3 floats (a unit direction) per waypoint. */
+  _core_route_points: () => number
   _core_follower_speed: () => number
   _core_follower_set_speed: (speed: number) => void
 

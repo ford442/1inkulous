@@ -106,8 +106,9 @@ Right-drag orbits; a right-click that stays put still sends the selection.
 ## Followers
 
 The first units on the planet. They live entirely inside the C++ core — their
-positions, their paths, and the A* search behind an order — and TypeScript only
-builds the graph they walk, turns clicks into orders, and draws them.
+positions, their paths, the A* search behind an order, and the steering that
+keeps a group from piling up — and TypeScript only builds the graph they walk,
+turns clicks and box drags into orders, and draws them.
 
 **The walkable graph is the planet mesh's welded vertex grid.** One node per
 distinct surface position, linked 8 ways within each cube face. Choosing the
@@ -118,13 +119,62 @@ face onto the next without any face-adjacency table. See `src/game/navGraph.ts`.
 
 **Terrain deformation is live.** The graph's topology is uploaded once; its
 heights are a buffer in core memory that the game overwrites whenever a sculpt
-stroke moves the ground. Raise a ridge across a walking follower's route and it
-gives up and stops, because the step it was about to take is now too steep.
+stroke moves the ground. Raise a ridge across a walking follower's way and it
+looks for another; if there is none, it gives up and stops where it stands.
 
 **A step is refused above a slope of 0.55** — height change over arc length, a
 shade under 30 degrees — and water is never walkable. Path cost is the true
 length over the ground, so a detour round a hill can beat climbing it, while the
-A* heuristic ignores climb and therefore stays admissible.
+A* heuristic ignores climb and therefore stays admissible. A diagonal link is
+only taken when its whole quad is good ground, so a route never cuts the corner
+of a pond or the foot of a cliff.
+
+**Routes are string-pulled.** A* over the grid gives a staircase of nodes; the
+core then pulls it tight, jumping from each waypoint to the furthest later one
+it can see along the great circle, so open ground is crossed in one straight
+leg and a detour hugs the corners it has to. "Can see" means every point of the
+leg stands on good ground: the core reads the terrain under a point as the
+triangle of the nearest node's fan that holds it, and a corner carrying more
+than a sliver of weight has to be land and within a step's slope of the
+others. Routes are held to that strictly (2% of the weight); each step a
+walker takes is held to it loosely (15%), which covers anything the line test
+could miss between its samples, so a leg it was given is always one it can
+walk. See `NavGrid::smooth_path` and `NavGrid::clear_line` in `cpp/src/nav.cpp`.
+
+**Positions are free, not snapped to nodes.** A follower is a direction on the
+sphere plus its height, read off that same triangle, so its feet follow the
+ground between nodes. Each fixed step has three passes (`FollowerSet::step` in
+`cpp/src/followers.cpp`):
+
+1. *Steer.* A walker heads for its next waypoint. Someone ahead of it and
+   close to its line, standing or coming the other way, gets stepped round —
+   always to the side they are not on, so a head-on pair passes. Someone
+   walking the same way is followed at a spacing instead. Within a couple of
+   spacings of a corner it looks past it every quarter second, so a crowd
+   rounds a corner instead of queueing for the exact point.
+2. *Separate.* Anyone closer than the spacing (0.024 on the unit planet, a
+   gap's worth wider than a pawn) is pushed apart, half each — except that a
+   walker never yields to someone standing still. The bystander shuffles
+   aside if the ground lets it; if it is pinned, the walker squeezes past.
+3. *Settle.* Everyone's feet go back on the ground, which may have been
+   sculpted under them.
+
+Both neighbour queries share one hash of follower positions, rebuilt by a sort
+every step.
+
+**A group order gives everyone a spot.** The click's point becomes the middle
+of a hex packing a shade wider than the spacing, laid out over ground the goal
+connects to. The group's routes come from one Dijkstra out from the goal rather
+than one A* each; each follower's route is that, then out along the flood to
+its own spot. Spots fill from the far side back — far along the way the routes
+actually arrive, not along the straight line from home — so nobody pushes
+through the ones who got there first.
+
+**Stuck is handled in layers.** A walker blocked by the ground slides along it
+before re-routing, and re-routes at most three times without reaching a
+waypoint, eight stalls per order in all, before it gives up. One held up in a
+crowd waits up to 20 seconds per stall before that counts, and one stopped at
+the edge of its own formation has arrived.
 
 **Rendering is one instanced draw**, however many followers there are. The core
 keeps a packed instance buffer (position, heading, tribe, flags); the renderer
@@ -133,35 +183,42 @@ single call. The selection ring is part of the same mesh and collapses to a
 degenerate point in the vertex shader when the follower is not selected, which
 is cheaper than a second pipeline.
 
+`core_nav_route` and `core_follower_route` copy a route — raw or smoothed, or
+what a follower has left to walk — into a scratch buffer, for tests and for a
+debug overlay later. They are a view: TypeScript never keeps a copy of a path.
+
 ### Cost
 
 Measured by `npm run test:core` on a graph the size of the real one (3600 nodes,
 ~28000 links, against the default planet's 3458 and ~26000):
 
-- 60 followers each running a full-width A* on one order: **5.4 ms** total,
-  about 90 µs per search. That is the worst case — a mass order across the
-  diagonal of the world — and it happens on a click, not per frame.
-- Stepping 60 walking followers: **7 µs** per fixed step, 20 times a second.
+- A 60-follower order across the diagonal of the world: **5–7 ms** — one
+  search covering the whole patch, a formation, and a string-pull with a line
+  test the length of the world for every follower. It happens on a click, not
+  per frame; on the real planet a typical order is 1–6 ms.
+- Stepping 60 walking followers out of one stack: **~0.1 ms** per fixed step,
+  20 times a second. On the real planet the HUD's `sim` slice stays at
+  0.1–0.2 ms per frame with the whole village on the move.
 
 So the simulation is not the constraint at this scale; the render side is one
 extra draw call and a 2 KB buffer upload per frame. The HUD's fps line averages
 those three slices over half a second (`sim` is `tick`, `game` is input/sculpt/
-orders, `draw` is the CPU side of the WebGPU encode). On a typical load, `sim`
-stays well under 0.1 ms and the visible cost is JS plus that instance upload.
+orders, `draw` is the CPU side of the WebGPU encode).
 
-The next thing to bite will be A* on much larger graphs, which is why the search
-scratch is preallocated and stamped rather than cleared — and the obvious
-follow-up is a coarse graph to path over, with the fine grid used only for
-local steering.
+Most of an order is the line tests. Most of a step is the neighbour queries
+and reading the ground under each follower, both linear in the population.
 
 ### Not done yet
 
-- No path smoothing: routes follow grid edges, so they show the 45-degree
-  staircase a grid A* always produces.
-- No avoidance between followers; they walk through each other.
-- Nearest-node lookup is a direction hash built when the graph is committed,
-  so per-frame queries do not scan every vertex. A sample the hash cannot prove
-  falls back to a scan. Heights stay in the original buffer.
+- A narrow pass takes a crowd a while: they queue through it a few abreast.
+  Across 90 random 60-follower orders on the default planet, about 99% stand
+  in formation at the end and none are left walking, but the slowest order
+  took nearly two minutes.
+- String-pulled corners sit exactly on the obstacle's corner node, so a crowd
+  converges on one point there; offsetting corners by the spacing would widen
+  the stream.
+- Avoidance is reactive (look ahead, step aside), not velocity-obstacle
+  planning, so two crowds crossing still jostle where they meet.
 - Followers are placeholder pawns. The opening village cycles the four
   placeholder tribe colours (blue, red, yellow, green); unique art comes later.
 

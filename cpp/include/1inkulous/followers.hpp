@@ -14,10 +14,12 @@
 // except that one pointer.
 //
 // A step has three passes. Walkers steer towards their next waypoint, bending
-// round anyone in their way; then everyone standing too close to someone else
-// is pushed apart; then everyone's feet are put back on the ground. Positions
-// are free on the surface, not snapped to nodes, so a group spreads out instead
-// of queueing on one vertex.
+// round anyone in their way and refusing a step that would land on a body
+// already there; then everyone standing too close to someone else is pushed
+// apart; then everyone's feet are put back on the ground. Positions are free
+// on the surface, not snapped to nodes, so a group spreads around a waypoint
+// instead of queueing on one vertex. A body that cannot take that step for
+// several fixed steps repaths once from the node it is anchored to.
 
 namespace inkulous {
 
@@ -118,6 +120,15 @@ class FollowerSet {
     // Re-routes since it last reached a waypoint, and stalls since the order.
     std::int32_t repaths = 0;
     std::int32_t stalls = 0;
+    // Node the current leg set out from. Occupancy repaths from here, once.
+    std::int32_t anchor_node = -1;
+    // Fixed steps in a row that could not be taken because a body owns them.
+    std::int32_t blocked_steps = 0;
+    // The single occupancy repath this order is allowed has been spent.
+    bool occupancy_repathed = false;
+    // Lateral place in the group, in spacings left of the file. Zero alone.
+    // Intermediate legs steer aside by this so a file spreads round a vertex.
+    double lane = 0.0;
 
     // Separation push gathered this step, world units in the tangent plane.
     double push[3] = {0.0, 0.0, 0.0};
@@ -167,8 +178,16 @@ class FollowerSet {
   // loose kStepSupport for walking a leg the route already checked, the strict
   // kRouteSupport for anything that leaves it — a swerve, a slide, a shove.
   bool try_move(Follower& follower, const double target[3], double support);
+  // True when some other body already sits on the segment from `id` to
+  // `target`. A walker going the same way does not count: that is a queue,
+  // and the pace limit handles it. A stack sharing `id`'s own end of the
+  // segment does not count either; separation peels that apart.
+  bool segment_taken(std::int32_t id, const double target[3]) const;
   void steer(std::int32_t id, double dt_seconds);
   void blocked(Follower& follower);
+  // The step was refused because a body owns it. After several such steps,
+  // repath once from `anchor_node`, then stop if that is still shut.
+  void held(Follower& follower);
   void watch_progress(Follower& follower, double dt_seconds);
   void separate();
   void settle(Follower& follower);
@@ -176,6 +195,10 @@ class FollowerSet {
   // Lays out up to `wanted` standing spots round `centre`, reachable from
   // `goal_node`, centre first. Fills `slots_`.
   void plan_slots(const double centre[3], std::int32_t goal_node, std::int32_t wanted);
+  // Slides any slot that would share a weld id onto a free flooded neighbour,
+  // when that neighbour is still local and keeps the formation spacing. The
+  // slot on the clicked point itself is left there.
+  void claim_distinct_nodes(const double centre[3]);
   // Reorders `slots_` far side first, as seen from the way `members_` will
   // arrive. Needs the order's search_toward still current.
   void order_slots_by_approach(const double centre[3], std::int32_t goal);
@@ -205,6 +228,9 @@ class FollowerSet {
   std::vector<std::int32_t> flood_parent_;
   std::vector<std::int32_t> slot_chain_;
   std::vector<std::int32_t> start_scratch_;
+  // claim_distinct_nodes: which slot owns a node, or -1. Sized to the graph.
+  std::vector<std::int32_t> node_claim_;
+  std::vector<std::int32_t> claim_order_;
   std::uint32_t flood_generation_ = 0;
   std::vector<Cell> cells_;
   std::vector<Run> runs_;

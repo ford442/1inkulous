@@ -785,6 +785,29 @@ const opposite = [
   bigDirections[(bigNodes - 1) * 3 + 2],
 ]
 
+/** Unit direction of node (i, j) on the 60×60 patch. */
+function bigDirection(i, j) {
+  const node = j * BIG + i
+  return [bigDirections[node * 3], bigDirections[node * 3 + 1], bigDirections[node * 3 + 2]]
+}
+
+// A grid A* keeps every link it walks, so a diagonal is a staircase of face
+// corners. String-pulling drops the ones a great circle can see across.
+const acrossRaw = m._core_nav_route(...corner3, ...opposite, 0)
+const acrossSmooth = m._core_nav_route(...corner3, ...opposite, 1)
+ok('raw A* across the 3600-node flat diagonal is a staircase of nodes',
+   acrossRaw >= 50, `${acrossRaw} nodes`)
+ok('that diagonal string-pulls to one leg', acrossSmooth === 1,
+   `${acrossRaw} nodes -> ${acrossSmooth} waypoints`)
+
+const stairFrom = bigDirection(1, 1)
+const stairTo = bigDirection(58, 15)
+const stairRaw = m._core_nav_route(...stairFrom, ...stairTo, 0)
+const stairSmooth = m._core_nav_route(...stairFrom, ...stairTo, 1)
+ok('an off-axis run string-pulls far below its raw staircase',
+   stairRaw >= 50 && stairSmooth > 0 && stairSmooth * 10 <= stairRaw,
+   `${stairRaw} nodes -> ${stairSmooth} waypoints`)
+
 for (let f = 0; f < 60; f += 1) {
   m._core_follower_spawn(...corner3, 0)
   m._core_follower_set_selected(f, 1)
@@ -795,6 +818,12 @@ const routed = m._core_follower_order_move(...opposite)
 const orderMs = Number(process.hrtime.bigint() - orderStarted) / 1e6
 ok('60 followers path across a 3600-node graph', routed === 60, `${orderMs.toFixed(1)}ms`)
 ok('a mass order fits inside one frame', orderMs < 16, `${orderMs.toFixed(1)}ms for 60 followers`)
+
+const orderedLegs = Array.from({ length: 60 }, (_, f) => m._core_follower_route(f))
+const mostLegs = Math.max(...orderedLegs)
+ok('those orders keep the shortened waypoint list, not the grid staircase',
+   orderedLegs.every((legs) => legs >= 1 && legs * 10 <= acrossRaw),
+   `most ${mostLegs} waypoints, raw diagonal ${acrossRaw} nodes`)
 
 const stepStarted = process.hrtime.bigint()
 for (let i = 0; i < 200; i += 1) m._core_tick(50)

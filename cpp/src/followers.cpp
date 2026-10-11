@@ -27,6 +27,10 @@ constexpr int kSlideTurns = 4;
 // Largest separation push applied in one step, in world units. A stack of
 // followers comes apart over a second or so rather than in one jump.
 constexpr double kMaxPush = kFollowerSpacing * 0.5;
+// How far an arrival may be nudged off the spot it was given, in world units.
+// Inside this it still reads as standing on that point; past it the weld
+// belongs to whoever the order actually sent there.
+constexpr double kGoalHold = 0.009;
 // Share of an overlap a walker takes when it meets someone standing still:
 // none. The bystander shuffles aside if the ground lets it, and if it is
 // pinned — on a spit of land, say — the walker squeezes past rather than be
@@ -36,6 +40,21 @@ constexpr double kWalkerShare = 0.0;
 constexpr double kStallSeconds = 1.5;
 // How far back along the group's routes to look for the way they arrive.
 constexpr std::size_t kApproachNodes = 4;
+// Fixed steps a walker may be refused a step by another body before it
+// repaths once from its anchor node. Eight steps is under half a second.
+constexpr std::int32_t kOccupancyBlocks = 8;
+// Closer than this, two followers are still a stack: separation peels them,
+// and the segment test does not treat the shared start as occupied.
+constexpr double kStackDistance = 1e-3;
+// A body this close to the step ahead owns that ground. Wider than a stack,
+// narrower than a passing gap, so two walkers can still step round each other.
+constexpr double kOccupancyRadius = kFollowerSpacing * 0.45;
+// How hard a file spreads sideways as it nears a waypoint, per lane, scaled
+// by how close that waypoint is. Clamped with the rest of the swerve.
+constexpr double kLaneGain = 0.85;
+// A duplicate slot may slide onto a free node this far from where it was
+// packed. Further than that, the formation stays dense and shares the cell.
+constexpr double kClaimReach = kFollowerSpacing * 4.0;
 // Re-routes in a row, with no waypoint reached in between, before a stuck
 // walker gives up; the least time between two of them; and how many times
 // in all one order may stall before it is abandoned, so a walker cannot circle
@@ -262,6 +281,8 @@ void FollowerSet::follow(Follower& follower,
   follower.path_index = 0;
   follower.corner_wait = 0.0;
   follower.goal = goal;
+  follower.anchor_node = start;
+  follower.blocked_steps = 0;
   follower.best_waypoint_angle = follower.path.empty()
                                  ? 0.0
                                  : angle_between(follower.dir, follower.path.front().dir);
@@ -282,7 +303,26 @@ bool FollowerSet::repath(Follower& follower) {
   follower.repaths += 1;
   follower.repath_cooldown = kRepathCooldown;
   const NavPoint goal = follower.goal;
-  return route_to(follower, goal);
+  // Leave from the anchor — the node this leg set out from — while the
+  // follower is still on it. Once it has walked on, the node under it is the
+  // one that can actually start a route.
+  std::int32_t from = follower.anchor_node;
+  if (from < 0 || !grid_->walkable(from)) {
+    from = start_node(follower);
+  }
+  const std::int32_t standing = start_node(follower);
+  if (standing >= 0 && standing != from && from >= 0) {
+    const float* d = grid_->direction(from);
+    const double at[3] = {d[0], d[1], d[2]};
+    if (angle_between(follower.dir, at) > grid_->max_link_angle() * 2.0) {
+      from = standing;
+    }
+  }
+  if (from < 0 || goal.node < 0 || !grid_->find_path(from, goal.node, path_scratch_)) {
+    return false;
+  }
+  follow(follower, from, path_scratch_, goal);
+  return true;
 }
 
 void FollowerSet::plan_slots(const double centre[3],
@@ -398,6 +438,80 @@ void FollowerSet::plan_slots(const double centre[3],
   }
 }
 
+void FollowerSet::claim_distinct_nodes(const double centre[3]) {
+  const std::int32_t node_count = grid_->node_count();
+  if (node_count <= 0 || slots_.empty() || flood_queue_.empty()) {
+    return;
+  }
+  node_claim_.assign(static_cast<std::size_t>(node_count), -1);
+
+  // The slot on the clicked point keeps that weld. Everyone else who landed
+  // in a cell already claimed slides onto a free neighbour when one is close
+  // enough that the group does not scatter.
+  claim_order_.resize(slots_.size());
+  std::int32_t pinned = -1;
+  for (std::size_t i = 0; i < slots_.size(); ++i) {
+    claim_order_[i] = static_cast<std::int32_t>(i);
+    if (pinned < 0 && angle_between(slots_[i].dir, centre) < 1e-6) {
+      pinned = static_cast<std::int32_t>(i);
+    }
+  }
+  if (pinned > 0) {
+    std::swap(claim_order_[0], claim_order_[static_cast<std::size_t>(pinned)]);
+  }
+
+  const double radius = grid_->planet_radius();
+  const double reach = std::max(kClaimReach, grid_->max_link_angle() * radius * 2.0);
+
+  for (const std::int32_t index : claim_order_) {
+    NavPoint& slot = slots_[static_cast<std::size_t>(index)];
+    if (slot.node >= 0 && slot.node < node_count &&
+        node_claim_[static_cast<std::size_t>(slot.node)] < 0) {
+      node_claim_[static_cast<std::size_t>(slot.node)] = index;
+      continue;
+    }
+
+    std::int32_t best = -1;
+    double best_distance = reach;
+    for (const std::int32_t node : flood_queue_) {
+      if (node < 0 || node >= node_count || node_claim_[static_cast<std::size_t>(node)] >= 0) {
+        continue;
+      }
+      const float* d = grid_->direction(node);
+      const double dir[3] = {d[0], d[1], d[2]};
+      const double distance = angle_between(dir, slot.dir) * radius;
+      if (distance >= best_distance) {
+        continue;
+      }
+      bool clear = true;
+      for (std::size_t other = 0; other < slots_.size(); ++other) {
+        if (static_cast<std::int32_t>(other) == index) {
+          continue;
+        }
+        if (angle_between(dir, slots_[other].dir) * radius < kSlotSpacing) {
+          clear = false;
+          break;
+        }
+      }
+      if (!clear) {
+        continue;
+      }
+      best = node;
+      best_distance = distance;
+    }
+    if (best < 0) {
+      // Nowhere local is free. Keep the packed point; separation holds the gap.
+      continue;
+    }
+    const float* d = grid_->direction(best);
+    slot.dir[0] = d[0];
+    slot.dir[1] = d[1];
+    slot.dir[2] = d[2];
+    slot.node = best;
+    node_claim_[static_cast<std::size_t>(best)] = index;
+  }
+}
+
 std::int32_t FollowerSet::order_move_selected(double x, double y, double z) {
   if (grid_ == nullptr || !grid_->ready()) {
     return 0;
@@ -450,6 +564,7 @@ std::int32_t FollowerSet::order_move_selected(double x, double y, double z) {
   const std::int32_t group = static_cast<std::int32_t>(members_.size());
   plan_slots(centre, goal, group);
   order_slots_by_approach(centre, goal);
+  claim_distinct_nodes(centre);
   if (slots_.empty()) {
     // Nowhere in reach was standable even at the goal itself, which a
     // shoreline node beside a cliff can manage. Send them to its centre.
@@ -481,6 +596,9 @@ std::int32_t FollowerSet::order_move_selected(double x, double y, double z) {
     follower.repaths = 0;
     follower.stalls = 0;
     follower.repath_cooldown = 0.0;
+    follower.occupancy_repathed = false;
+    follower.blocked_steps = 0;
+    follower.lane = static_cast<double>(k) - static_cast<double>(group - 1) * 0.5;
     follower.settle_radius = settle_radius;
     if (member.start < 0 || !grid_->path_toward(member.start, path_scratch_)) {
       // No route — an island the follower cannot reach, or ground walled off by
@@ -621,6 +739,87 @@ bool FollowerSet::try_move(Follower& follower, const double target[3], double su
   return true;
 }
 
+bool FollowerSet::segment_taken(std::int32_t id, const double target[3]) const {
+  const Follower& self = followers_[static_cast<std::size_t>(id)];
+  const double radius = grid_->planet_radius();
+  double along[3] = {target[0] - self.dir[0], target[1] - self.dir[1], target[2] - self.dir[2]};
+  flatten(along, self.dir);
+  along[0] *= radius;
+  along[1] *= radius;
+  along[2] *= radius;
+  const double span = dot3(along, along);
+  double travel[3] = {along[0], along[1], along[2]};
+  const bool aimed = normalize3(travel);
+
+  bool taken = false;
+  const auto occupy = [&](std::int32_t other, const double offset[3], double distance) {
+    if (taken) {
+      return;
+    }
+    // Still stacked on us: separation owns that, and refusing the step would
+    // freeze a group that has not had a tick to spread.
+    if (distance < kStackDistance) {
+      return;
+    }
+    double t = 0.0;
+    if (span > 1e-12) {
+      t = dot3(offset, along) / span;
+      if (t < 0.0) {
+        t = 0.0;
+      } else if (t > 1.0) {
+        t = 1.0;
+      }
+    }
+    const double rel[3] = {
+        offset[0] - along[0] * t,
+        offset[1] - along[1] * t,
+        offset[2] - along[2] * t,
+    };
+    if (dot3(rel, rel) >= kOccupancyRadius * kOccupancyRadius) {
+      return;
+    }
+    // Sharing our end of the segment, not sitting on the ground ahead.
+    if (t < 0.35 && distance < kAvoidReach) {
+      return;
+    }
+    const Follower& them = followers_[static_cast<std::size_t>(other)];
+    // Same direction is a queue. The pace limit holds the gap; a repath
+    // would only send the file round in circles.
+    if (aimed && walking(them) && dot3(travel, them.heading) > kQueueAlike) {
+      return;
+    }
+    taken = true;
+  };
+  for_each_near(id, kAvoidReach, occupy);
+  return taken;
+}
+
+void FollowerSet::held(Follower& follower) {
+  // Recently re-routed: wait the cooldown out instead of searching again.
+  if (follower.repath_cooldown > 0.0) {
+    return;
+  }
+  follower.blocked_steps += 1;
+  if (follower.blocked_steps < kOccupancyBlocks) {
+    return;
+  }
+  follower.blocked_steps = 0;
+
+  const double to_goal =
+      angle_between(follower.dir, follower.goal.dir) * grid_->planet_radius();
+  if (to_goal <= follower.settle_radius) {
+    stop(follower);
+    return;
+  }
+  // One search from the anchor, then give up if the way is still shut.
+  // Either way the rest of the set keeps stepping.
+  if (follower.occupancy_repathed || follower.repaths >= kMaxRepaths || !repath(follower)) {
+    stop(follower);
+    return;
+  }
+  follower.occupancy_repathed = true;
+}
+
 void FollowerSet::blocked(Follower& follower) {
   // The ground ahead changed — or a shove put the follower somewhere its leg
   // no longer runs clear from. Look for another way, at most once a second;
@@ -647,22 +846,30 @@ void FollowerSet::steer(std::int32_t id, double dt_seconds) {
     const double angle = angle_between(follower.dir, waypoint.dir);
 
     if (angle <= budget) {
+      if (!last_leg) {
+        // Close enough to round this vertex. Stepping onto it would stack
+        // the file; the offset the spread has already earned stays put.
+        follower.anchor_node = waypoint.node;
+        follower.path_index += 1;
+        follower.corner_wait = 0.0;
+        follower.repaths = 0;
+        follower.blocked_steps = 0;
+        follower.best_waypoint_angle =
+            angle_between(follower.dir, follower.path[follower.path_index].dir);
+        follower.stall_seconds = 0.0;
+        continue;
+      }
+      if (segment_taken(id, waypoint.dir)) {
+        held(follower);
+        break;
+      }
       if (!try_move(follower, waypoint.dir, kStepSupport)) {
         blocked(follower);
         break;
       }
-      budget -= angle;
-      if (last_leg) {
-        stop(follower);
-        break;
-      }
-      follower.path_index += 1;
-      follower.corner_wait = 0.0;
-      follower.repaths = 0;
-      follower.best_waypoint_angle =
-          angle_between(follower.dir, follower.path[follower.path_index].dir);
-      follower.stall_seconds = 0.0;
-      continue;
+      follower.anchor_node = follower.node;
+      stop(follower);
+      break;
     }
 
     if (!last_leg && follower.corner_wait <= 0.0 && angle * radius <= kCornerReach) {
@@ -731,13 +938,36 @@ void FollowerSet::steer(std::int32_t id, double dt_seconds) {
       swerve += away * weight * kAvoidGain;
     };
     for_each_near(id, kAvoidReach, avoid);
+    // Spread the file around this waypoint. The bias grows as the vertex
+    // gets close, so open ground stays a straight leg and a corner does not
+    // collect everyone on the node.
+    if (!last_leg && follower.lane != 0.0) {
+      const double proximity = kFollowerSpacing / std::max(to_waypoint, kFollowerSpacing);
+      const double lanes = std::max(-3.0, std::min(3.0, follower.lane));
+      swerve += lanes * proximity * kLaneGain;
+    }
     swerve = std::max(-kMaxSwerve, std::min(kMaxSwerve, swerve));
     budget *= pace;
     if (!(budget > 1e-12)) {
       break;
     }
 
-    double target[3];
+    // 1 moved, 0 the ground is free but a body owns it, -1 the ground refused.
+    int ground = -1;
+    const auto attempt = [&](const double heading[3], double support, double scale) {
+      double target[3];
+      rotate_along(follower.dir, heading, budget * scale, target);
+      if (segment_taken(id, target)) {
+        ground = std::max(ground, 0);
+        return false;
+      }
+      if (!try_move(follower, target, support)) {
+        return false;
+      }
+      ground = 1;
+      return true;
+    };
+
     bool moved = false;
     if (swerve != 0.0) {
       double heading[3] = {
@@ -746,12 +976,16 @@ void FollowerSet::steer(std::int32_t id, double dt_seconds) {
           desired[2] + side[2] * swerve,
       };
       normalize3(heading);
-      rotate_along(follower.dir, heading, budget, target);
-      moved = try_move(follower, target, kRouteSupport);
+      moved = attempt(heading, kRouteSupport, 1.0);
+      if (!moved && ground == 0) {
+        moved = attempt(heading, kRouteSupport, 0.5) || attempt(heading, kRouteSupport, 0.25);
+      }
     }
     if (!moved) {
-      rotate_along(follower.dir, desired, budget, target);
-      moved = try_move(follower, target, kStepSupport);
+      moved = attempt(desired, kStepSupport, 1.0);
+      if (!moved && ground == 0) {
+        moved = attempt(desired, kStepSupport, 0.5) || attempt(desired, kStepSupport, 0.25);
+      }
     }
     // Shoved against a shore or the foot of a slope, the straight way on can
     // clip bad ground the leg itself steered clear of. Slide along it, nearest
@@ -764,13 +998,18 @@ void FollowerSet::steer(std::int32_t id, double dt_seconds) {
           desired[2] * std::cos(angle_off) + side[2] * std::sin(angle_off),
       };
       normalize3(slide);
-      rotate_along(follower.dir, slide, budget, target);
-      moved = try_move(follower, target, kRouteSupport);
+      moved = attempt(slide, kRouteSupport, 1.0);
     }
     if (!moved) {
-      blocked(follower);
+      if (ground == 0) {
+        held(follower);
+      } else {
+        blocked(follower);
+      }
       break;
     }
+    follower.blocked_steps = 0;
+    follower.anchor_node = follower.node;
     budget = 0.0;
   }
 
@@ -883,7 +1122,22 @@ void FollowerSet::separate() {
     if (!(length > 1e-12)) {
       continue;
     }
-    const double scale = (length > kMaxPush ? kMaxPush / length : 1.0) / radius;
+    double step = length > kMaxPush ? kMaxPush : length;
+    // An arrival may yield to the crowd, but only within the point it was
+    // given: past this it would read as having left the weld. The partner
+    // keeps the rest of the overlap, which is what opens the gap when this
+    // one is the body standing on the clicked cell.
+    if (!walking(follower) && follower.goal.node >= 0) {
+      const double from_goal =
+          angle_between(follower.dir, follower.goal.dir) * radius;
+      if (from_goal < kGoalHold) {
+        const double slack = kGoalHold - from_goal;
+        if (step > slack) {
+          step = slack;
+        }
+      }
+    }
+    const double scale = (step / length) / radius;
     const double target[3] = {
         follower.dir[0] + follower.push[0] * scale,
         follower.dir[1] + follower.push[1] * scale,

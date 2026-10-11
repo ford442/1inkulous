@@ -699,6 +699,104 @@ ok('and stands apart, not stacked on the goal vertex', hillGap > SPACING * 0.9,
 writeHeights(grid.heights)
 
 // ---------------------------------------------------------------------------
+// Two followers, one node, one hop. They must leave the shared point within a
+// few fixed steps and finish in different cells — a mass order is a formation,
+// not a stack of rings on the clicked weld.
+
+m._core_followers_clear()
+const [hopA, hopB] = spawnAll([[8, 8], [8, 8]])
+selectOnly([hopA, hopB])
+ok('two followers accept an order one hop away',
+   m._core_follower_order_move(...gridDirection(9, 8)) === 2)
+for (let s = 0; s < 6; s += 1) m._core_tick(50)
+const hopGap = closestPair([hopA, hopB])
+ok('they do not share a position after a few steps', hopGap > 1e-3,
+   `gap ${hopGap.toFixed(5)}`)
+for (let s = 0; s < 400 && (isWalking(hopA) || isWalking(hopB)); s += 1) m._core_tick(50)
+const hopCellA = m._core_nav_nearest_walkable(...followerPosition(hopA))
+const hopCellB = m._core_nav_nearest_walkable(...followerPosition(hopB))
+ok('two followers ordered to the same nearby node finish on different walkable cells',
+   !isWalking(hopA) && !isWalking(hopB) && hopCellA !== hopCellB && hopCellA >= 0 && hopCellB >= 0,
+   `cells ${hopCellA} and ${hopCellB}, walking ${isWalking(hopA)}/${isWalking(hopB)}`)
+
+// A corridor wide enough to walk abreast. The file has to spread across it
+// instead of riding one vertex the whole way.
+const corridor = Float32Array.from(grid.heights)
+for (let j = 0; j < GRID; j += 1) {
+  for (let i = 0; i < GRID; i += 1) {
+    const inside = j >= 6 && j <= 10 && i >= 1 && i <= 15
+    if (!inside) corridor[nodeAt(i, j)] = 0.4
+  }
+}
+writeHeights(corridor)
+m._core_followers_clear()
+const squad = spawnAll([[2, 8], [2, 8], [2, 8], [2, 8], [2, 8], [2, 8]])
+selectOnly(squad)
+ok('a file takes a corridor order', m._core_follower_order_move(...gridDirection(14, 8)) === squad.length)
+let corridorSpread = 0
+let corridorGap = Infinity
+let corridorNodes = 1
+for (let frame = 0; frame < 500 && squad.some(isWalking); frame += 1) {
+  m._core_tick(50)
+  const lats = squad.map((id) => {
+    const p = followerPosition(id)
+    const r = Math.hypot(...p)
+    return Math.asin(Math.max(-1, Math.min(1, p[1] / r)))
+  })
+  corridorSpread = Math.max(corridorSpread, Math.max(...lats) - Math.min(...lats))
+  if (frame > 8) {
+    corridorGap = Math.min(corridorGap, closestPair(squad))
+    const cells = new Set(squad.map((id) => m._core_nav_nearest_walkable(...followerPosition(id))))
+    corridorNodes = Math.max(corridorNodes, cells.size)
+  }
+}
+ok('a group walking a corridor fans out instead of occupying one vertex',
+   corridorSpread > 0.035 && corridorNodes > 1,
+   `cross-track ${corridorSpread.toFixed(4)} rad, ${corridorNodes} cells`)
+ok('the file keeps a gap while it fans', corridorGap > 1e-3,
+   `closest ${corridorGap.toFixed(4)}`)
+const squadCells = new Set(squad.map((id) => m._core_nav_nearest_walkable(...followerPosition(id))))
+ok('the corridor group finishes on more than one cell',
+   squad.every((id) => !isWalking(id)) && squadCells.size > 1,
+   `${squadCells.size} cells, ${squad.filter(isWalking).length} still walking`)
+
+// A dead-end alley with someone already standing at the end. The walker
+// repaths or stops; a second follower out on open ground still arrives, so
+// the blocked one does not freeze the step.
+const alley = Float32Array.from(grid.heights)
+for (let j = 0; j < GRID; j += 1) {
+  for (let i = 0; i < GRID; i += 1) {
+    const lane = j === 8 && i >= 2 && i <= 8
+    const open = j >= 1 && j <= 3 && i >= 1 && i <= 15
+    if (!lane && !open) alley[nodeAt(i, j)] = 0.4
+  }
+}
+writeHeights(alley)
+m._core_followers_clear()
+const alleyIdle = m._core_follower_spawn(...gridDirection(8, 8), 0)
+const alleyWalker = m._core_follower_spawn(...gridDirection(3, 8), 0)
+const freeWalker = m._core_follower_spawn(...gridDirection(2, 2), 0)
+selectOnly([alleyWalker])
+ok('the alley walker is given the occupied cell',
+   m._core_follower_order_move(...gridDirection(8, 8)) === 1)
+selectOnly([freeWalker])
+ok('a free follower is ordered at the same time',
+   m._core_follower_order_move(...gridDirection(14, 2)) === 1)
+const alleyStarted = process.hrtime.bigint()
+for (let frame = 0; frame < 500 && (isWalking(alleyWalker) || isWalking(freeWalker)); frame += 1) {
+  m._core_tick(50)
+}
+const alleyMs = Number(process.hrtime.bigint() - alleyStarted) / 1e6
+ok('a blocked follower does not freeze the sim',
+   alleyMs < 2000 && !isWalking(freeWalker) &&
+   angleTo(followerPosition(freeWalker), gridDirection(14, 2)) < 0.02,
+   `${alleyMs.toFixed(0)}ms, free walker ${angleTo(followerPosition(freeWalker), gridDirection(14, 2)).toFixed(4)} rad short, walking ${isWalking(freeWalker)}`)
+ok('the blocked follower repaths or stops short of the body in the way',
+   !isWalking(alleyWalker) && closestPair([alleyWalker, alleyIdle]) > 1e-3,
+   `gap ${closestPair([alleyWalker, alleyIdle]).toFixed(4)}, walking ${isWalking(alleyWalker)}`)
+writeHeights(grid.heights)
+
+// ---------------------------------------------------------------------------
 // Cost at the size the game actually runs at. The default planet is a 24-quad
 // cube-sphere: 3458 welded nodes and a little over 26000 links. A 60x60 patch
 // is the same order, and a mass order across its diagonal is the worst case:

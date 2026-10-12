@@ -1,5 +1,6 @@
 import type { Vec3 } from '../engine/math'
 import createCoreModule, { type CoreModule } from '../wasm/core.js'
+import type { HutSite } from './hutSite'
 
 /**
  * The JS side of the WASM boundary.
@@ -23,6 +24,8 @@ export type NavCommitOptions = {
   /** Steepest walkable ground as height over run. Omit for the core's default. */
   maxSlope?: number
 }
+
+export { HutSite } from './hutSite'
 
 export type Simulation = {
   /** Core version reported by the module, e.g. "0.2.0". */
@@ -67,6 +70,23 @@ export type Simulation = {
   followerInstances: () => Float32Array
   readonly followerInstanceFloats: number
 
+  /** Whether a hut could stand centred on a direction, and if not, why. */
+  hutSite: (direction: Vec3) => HutSite
+  /** Builds a hut there, door along `heading`. Returns its id, or -1 if refused. */
+  placeHut: (direction: Vec3, heading: Vec3) => number
+  readonly hutCount: number
+  /** Followers inside every hut together. */
+  readonly housedCount: number
+  hutOccupants: (id: number) => number
+  /** Sends selected followers into a hut, as many as fit. Returns how many went. */
+  orderEnterHut: (id: number) => number
+  /** Live view of the hut instance buffer, `hutInstanceFloats` per hut. Re-read per frame. */
+  hutInstances: () => Float32Array
+  readonly hutInstanceFloats: number
+  /** Hut footprint radius in world units, as the core places them. */
+  readonly hutRadius: number
+  readonly hutCapacity: number
+
   /** Escape hatch for future bulk reads straight out of linear memory. */
   readonly module: CoreModule
 }
@@ -108,6 +128,7 @@ export async function createSimulation(
   module._core_init(options.stepMs ?? 0)
 
   const instanceFloats = module._core_follower_instance_floats()
+  const hutInstanceFloats = module._core_hut_instance_floats()
   // Cached only to spot a stale build; the pointer itself is re-read per call.
   let navNodeCount = 0
 
@@ -219,5 +240,49 @@ export async function createSimulation(
     },
 
     followerInstanceFloats: instanceFloats,
+
+    hutSite(direction: Vec3) {
+      return module._core_hut_site(direction[0], direction[1], direction[2]) as HutSite
+    },
+
+    placeHut(direction: Vec3, heading: Vec3) {
+      return module._core_hut_place(
+        direction[0],
+        direction[1],
+        direction[2],
+        heading[0],
+        heading[1],
+        heading[2],
+      )
+    },
+
+    get hutCount() {
+      return module._core_hut_count()
+    },
+
+    get housedCount() {
+      return module._core_huts_housed()
+    },
+
+    hutOccupants(id: number) {
+      return module._core_hut_occupants(id)
+    },
+
+    orderEnterHut(id: number) {
+      return module._core_hut_order_enter(id)
+    },
+
+    hutInstances() {
+      const count = module._core_hut_count()
+      if (count === 0) {
+        return new Float32Array(0)
+      }
+      const start = module._core_hut_instances() >> 2
+      return module.HEAPF32.subarray(start, start + count * hutInstanceFloats)
+    },
+
+    hutInstanceFloats,
+    hutRadius: module._core_hut_radius(),
+    hutCapacity: module._core_hut_capacity(),
   }
 }

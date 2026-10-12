@@ -7,10 +7,12 @@ import type { Planet } from './planet'
  * Terrain brush. Holding the sculpt modifier arms it: left button raises the
  * land under the cursor, right button lowers it, and the stroke is continuous —
  * holding still keeps piling earth up, as in Populous, rather than needing the
- * mouse to move.
+ * mouse to move. Shift with the left button flattens instead: the ground under
+ * the brush is pulled level with wherever the stroke began, which is how a hut
+ * site gets made.
  */
 
-export type SculptMode = 'idle' | 'raise' | 'lower'
+export type SculptMode = 'idle' | 'raise' | 'lower' | 'flatten'
 
 export type Sculptor = {
   /** True while the sculpt modifier is held, whether or not a button is down. */
@@ -44,6 +46,7 @@ const MAX_STRENGTH_FRACTION = 3
 const STRENGTH_STEP = 1.25
 
 const SCULPT_KEYS = ['KeyC']
+const FLATTEN_KEYS = ['ShiftLeft', 'ShiftRight']
 
 /**
  * Whether the brush is armed this frame. Exported so the camera can be told to
@@ -64,6 +67,9 @@ export function createSculptor(planet: Planet): Sculptor {
   let hoverDirection: Vec3 | null = null
   let mode: SculptMode = 'idle'
   let armed = false
+  // The level a flatten stroke is pulling towards, fixed when the stroke
+  // starts so dragging across a slope carries that height with it.
+  let flattenTarget: number | null = null
 
   return {
     get armed() {
@@ -105,15 +111,20 @@ export function createSculptor(planet: Planet): Sculptor {
       if (!armed || !pointer.ndc) {
         hoverDirection = null
         mode = 'idle'
+        flattenTarget = null
         return
       }
 
       const ray = screenRay(view.camera, pointer.ndc.x, pointer.ndc.y, view.aspect)
       hoverDirection = planet.pickDirection(ray)
 
-      const raise = pointer.buttons.left
+      const flattening = pointer.buttons.left && FLATTEN_KEYS.some((code) => input.keys.has(code))
+      const raise = pointer.buttons.left && !flattening
       const lower = pointer.buttons.right
-      mode = raise ? 'raise' : lower ? 'lower' : 'idle'
+      mode = flattening ? 'flatten' : raise ? 'raise' : lower ? 'lower' : 'idle'
+      if (mode !== 'flatten') {
+        flattenTarget = null
+      }
 
       if (!hoverDirection || mode === 'idle') {
         return
@@ -122,6 +133,11 @@ export function createSculptor(planet: Planet): Sculptor {
       // Clamp the step so one long frame cannot gouge the terrain.
       const dt = Math.min(deltaMs, 100) / 1000
       const delta = strengthFraction * planet.maxHeight * dt
+      if (mode === 'flatten') {
+        flattenTarget ??= planet.heightAt(hoverDirection)
+        planet.flatten(hoverDirection, brushRadius, flattenTarget, delta)
+        return
+      }
       planet.sculpt(hoverDirection, brushRadius, mode === 'raise' ? delta : -delta)
     },
   }

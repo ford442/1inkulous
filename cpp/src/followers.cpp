@@ -212,6 +212,69 @@ std::int32_t FollowerSet::spawn(double x, double y, double z, std::int32_t tribe
   return static_cast<std::int32_t>(followers_.size()) - 1;
 }
 
+std::int32_t FollowerSet::spawn_at(const double dir[3], std::int32_t tribe) {
+  if (grid_ == nullptr || !grid_->ready()) {
+    return -1;
+  }
+  double at[3] = {dir[0], dir[1], dir[2]};
+  if (!normalize3(at)) {
+    return -1;
+  }
+  const std::int32_t id = spawn(at[0], at[1], at[2], tribe);
+  if (id < 0) {
+    return id;
+  }
+
+  // spawn() stands it on the nearest node. Move it onto the exact point when
+  // that is ground to stand on: a hut's doorstep is rarely a node, and the
+  // node nearest it may well be under the hut.
+  Follower& follower = followers_[static_cast<std::size_t>(id)];
+  const std::int32_t node = grid_->locate(at, follower.node);
+  SurfacePoint ground;
+  if (node >= 0 && grid_->footing(at, node, kRouteSupport, ground)) {
+    follower.dir[0] = at[0];
+    follower.dir[1] = at[1];
+    follower.dir[2] = at[2];
+    follower.node = node;
+    follower.height = ground.height;
+    flatten(follower.heading, follower.dir);
+    if (!normalize3(follower.heading)) {
+      double e2[3];
+      tangent_basis(follower.dir, follower.heading, e2);
+    }
+    refresh_instances();
+  }
+  return id;
+}
+
+void FollowerSet::remove(std::int32_t id) {
+  if (id < 0 || id >= count()) {
+    return;
+  }
+  followers_.erase(followers_.begin() + id);
+  refresh_instances();
+}
+
+std::int32_t FollowerSet::hut(std::int32_t id) const {
+  if (id < 0 || id >= count()) {
+    return -1;
+  }
+  return followers_[static_cast<std::size_t>(id)].hut;
+}
+
+void FollowerSet::set_hut(std::int32_t id, std::int32_t hut) {
+  if (id < 0 || id >= count()) {
+    return;
+  }
+  followers_[static_cast<std::size_t>(id)].hut = hut;
+}
+
+void FollowerSet::clear_huts() {
+  for (Follower& follower : followers_) {
+    follower.hut = -1;
+  }
+}
+
 void FollowerSet::clear() {
   followers_.clear();
   instances_.clear();
@@ -513,6 +576,19 @@ void FollowerSet::claim_distinct_nodes(const double centre[3]) {
 }
 
 std::int32_t FollowerSet::order_move_selected(double x, double y, double z) {
+  std::vector<std::int32_t> ids;
+  for (std::int32_t id = 0; id < count(); ++id) {
+    if (followers_[static_cast<std::size_t>(id)].selected) {
+      ids.push_back(id);
+    }
+  }
+  return order_move(ids, x, y, z);
+}
+
+std::int32_t FollowerSet::order_move(const std::vector<std::int32_t>& ids,
+                                     double x,
+                                     double y,
+                                     double z) {
   if (grid_ == nullptr || !grid_->ready()) {
     return 0;
   }
@@ -526,13 +602,15 @@ std::int32_t FollowerSet::order_move_selected(double x, double y, double z) {
 
   members_.clear();
   start_scratch_.clear();
-  for (std::int32_t id = 0; id < count(); ++id) {
-    const Follower& follower = followers_[static_cast<std::size_t>(id)];
-    if (follower.selected) {
-      const std::int32_t start = start_node(follower);
-      members_.push_back(Member{id, start, 0.0});
-      start_scratch_.push_back(start);
+  for (const std::int32_t id : ids) {
+    if (id < 0 || id >= count()) {
+      continue;
     }
+    Follower& follower = followers_[static_cast<std::size_t>(id)];
+    follower.hut = -1;
+    const std::int32_t start = start_node(follower);
+    members_.push_back(Member{id, start, 0.0});
+    start_scratch_.push_back(start);
   }
   if (members_.empty()) {
     return 0;

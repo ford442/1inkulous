@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "1inkulous/followers.hpp"
+#include "1inkulous/huts.hpp"
 #include "1inkulous/nav.hpp"
 
 // Simulation core. Compiled to WebAssembly and driven from TypeScript through
@@ -12,7 +13,7 @@ namespace inkulous {
 
 // Semantic version of the core, so the loader can report what it got.
 constexpr int kVersionMajor = 0;
-constexpr int kVersionMinor = 3;
+constexpr int kVersionMinor = 4;
 constexpr int kVersionPatch = 0;
 
 // Encoded as MAJOR * 10000 + MINOR * 100 + PATCH: cheap to pass across the
@@ -41,7 +42,7 @@ class Simulation {
   // `step_ms` is the fixed step length; anything <= 0 uses kDefaultStepMs.
   explicit Simulation(double step_ms = kDefaultStepMs);
 
-  // The follower set holds a pointer to this instance's grid, so a Simulation
+  // The follower and hut sets hold pointers into this instance, so a Simulation
   // cannot be copied or moved out from under it. There is one world per module
   // anyway; re-timing goes through `set_step_ms`.
   Simulation(const Simulation&) = delete;
@@ -56,6 +57,7 @@ class Simulation {
 
   NavGrid& nav() { return nav_; }
   FollowerSet& followers() { return followers_; }
+  HutSet& huts() { return huts_; }
 
   std::int64_t step_count() const { return step_count_; }
   // Simulated time in milliseconds, i.e. whole steps only.
@@ -73,6 +75,7 @@ class Simulation {
 
   NavGrid nav_;
   FollowerSet followers_;
+  HutSet huts_;
 };
 
 }  // namespace inkulous

@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "deploy": "python3 deploy.py",
     "test:core": "node scripts/test-core.mjs",
-    "test:select": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-rubber-band.ts"
+    "test:select": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-rubber-band.ts",
+    "test:huts": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-huts.ts"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.71",

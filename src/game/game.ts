@@ -2,6 +2,7 @@ import type { InputSnapshot } from '../input/input'
 import type { Simulation } from '../sim/simulation'
 import { createCamera, type Camera } from './camera'
 import { createFollowers, type Followers } from './followers'
+import { createHuts, type Huts } from './huts'
 import { createPlanet, type Planet } from './planet'
 import { createSculptor, isSculptModifierHeld, type Sculptor } from './sculpt'
 
@@ -11,6 +12,7 @@ export type Game = {
   camera: Camera
   sculptor: Sculptor
   followers: Followers
+  huts: Huts
   /**
    * `aspect` is the viewport's width / height, needed to turn the cursor into a
    * world-space ray for terrain picking.
@@ -33,6 +35,7 @@ export function createGame(simulation: Simulation): Game {
 
   const sculptor = createSculptor(planet)
   const followers = createFollowers(planet, simulation)
+  const huts = createHuts(planet, simulation)
 
   // Open on the tribe. The starting village is wherever the flattest land
   // turned out to be, which is as likely to be behind the planet as in front.
@@ -49,6 +52,7 @@ export function createGame(simulation: Simulation): Game {
     camera,
     sculptor,
     followers,
+    huts,
     get clearColor() {
       return state.clearColor
     },
@@ -64,10 +68,31 @@ export function createGame(simulation: Simulation): Game {
       // After the camera, so picking uses the view that is about to be drawn.
       sculptor.update(deltaMs, input, { camera, aspect })
       // After the brush, so terrain edited this frame reaches the core's height
-      // buffer before anything paths over it. Followers ignore clicks and
-      // selection drags that overlapped C, so a sculpt stroke is filtered out
-      // on the gesture itself, not only by the `sculpting` flag above.
-      followers.update(deltaMs, input, { camera, aspect })
+      // buffer before a hut site is judged or anything paths over it.
+      followers.syncTerrain()
+
+      // Huts see the clicks first: one that built a hut or sent people inside
+      // is not also a selection or a move order. Build mode owns the left
+      // button outright, so no selection box starts while placing.
+      const claimed = huts.update(deltaMs, input, { camera, aspect })
+      const pointer = input.pointer
+      const forFollowers: InputSnapshot =
+        claimed.consumed.size === 0 && !claimed.building
+          ? input
+          : {
+              ...input,
+              pointer: {
+                ...pointer,
+                clicks: pointer.clicks.filter((click) => !claimed.consumed.has(click)),
+                drags: claimed.building ? [] : pointer.drags,
+                dragRect: claimed.building ? null : pointer.dragRect,
+              },
+            }
+
+      // Followers ignore clicks and selection drags that overlapped C, so a
+      // sculpt stroke is filtered out on the gesture itself, not only by the
+      // `sculpting` flag above.
+      followers.update(deltaMs, forFollowers, { camera, aspect })
     },
   }
 }

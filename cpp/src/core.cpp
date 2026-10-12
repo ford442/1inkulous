@@ -6,13 +6,13 @@
 namespace inkulous {
 namespace {
 
-// "0.3.0" — built by hand so the string is static storage with no allocation,
+// "0.4.0" — built by hand so the string is static storage with no allocation,
 // which keeps core_version_text() safe to hand across the WASM boundary.
 #define INKULOUS_STRINGIFY_(x) #x
 #define INKULOUS_STRINGIFY(x) INKULOUS_STRINGIFY_(x)
-constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(3) "." INKULOUS_STRINGIFY(0);
+constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(4) "." INKULOUS_STRINGIFY(0);
 
-static_assert(kVersionMajor == 0 && kVersionMinor == 3 && kVersionPatch == 0,
+static_assert(kVersionMajor == 0 && kVersionMinor == 4 && kVersionPatch == 0,
               "kVersionText must be kept in step with the version constants");
 
 }  // namespace
@@ -24,6 +24,7 @@ int core_version() { return kVersion; }
 Simulation::Simulation(double step_ms)
     : step_ms_(step_ms > 0.0 ? step_ms : kDefaultStepMs) {
   followers_.set_grid(&nav_);
+  huts_.attach(&nav_, &followers_);
 }
 
 void Simulation::set_step_ms(double step_ms) {
@@ -50,12 +51,16 @@ std::int32_t Simulation::advance(double delta_ms) {
     ++step_count_;
     ++steps;
     followers_.step(dt_seconds);
+    // After the followers have moved, so someone who reached a door this step
+    // goes in on it.
+    huts_.step(dt_seconds);
   }
 
   // One rebuild per frame rather than per step: the renderer only ever sees the
   // state the last step left behind.
   if (steps > 0) {
     followers_.refresh_instances();
+    huts_.refresh_instances();
   }
 
   return steps;

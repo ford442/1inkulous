@@ -7,11 +7,11 @@ the JS main thread.
 
 ```
 src/engine/   WebGPU device, planet + follower meshes, renderer, picking, math
-src/game/     planet + terrain heights, orbit camera, terrain brush, followers
+src/game/     planet + terrain heights, orbit camera, terrain brush, followers, huts
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
 src/wasm/     build output (generated) + core.d.ts, the checked-in ABI contract
-cpp/          simulation core: fixed-step clock, navigation graph, followers
+cpp/          simulation core: fixed-step clock, navigation graph, followers, huts
 ```
 
 ## Prerequisites
@@ -49,6 +49,7 @@ emcc -v   # confirm
 | `npm run build:web` | Skips the WASM step; fails if `src/wasm/core.js` is absent |
 | `npm run build:wasm` | Compiles `cpp/` into `src/wasm/core.js` + `core.wasm` |
 | `npm run test:core` | Headless checks of the core in Node (no browser needed) |
+| `npm run test:huts` | Flatten brush, hut picking and build mode, against a fake core |
 | `npm run clean:wasm` | Removes the CMake build directory and generated artifacts |
 
 `src/wasm/core.js` and `core.wasm` are generated and git-ignored;
@@ -95,6 +96,10 @@ heights get in.
 | Click bare ground | Clear the selection |
 | Right-click | Send the selected followers walking there |
 | Hold `C` + left / right drag | Raise / lower terrain |
+| Hold `C` + Shift + left drag | Flatten terrain to the height where the stroke began |
+| `B` | Build mode: place a hut (`B`, `Esc` or right-click cancels) |
+| Click, in build mode | Build a hut there, if the site is good (Shift keeps placing) |
+| Right-click a hut | Send the selected followers inside |
 | Hold `C` + wheel, `[` `]` | Brush size, brush strength |
 
 Shift-click toggles one follower; Shift-drag adds everyone in the box. A plain
@@ -102,6 +107,9 @@ drag replaces the selection, and a click that does not move stays a single
 pick. Hold `C` to sculpt: the brush has first claim on the mouse while it is
 held, so a sculpt stroke never also picks a follower or starts a selection box.
 Right-drag orbits; a right-click that stays put still sends the selection.
+Build mode owns the left button while it is on, so placing a hut never starts
+a selection box; C still wins over it, so a pad can be flattened without
+leaving build mode.
 
 ## Followers
 
@@ -221,6 +229,56 @@ and reading the ground under each follower, both linear in the population.
   planning, so two crowds crossing still jostle where they meet.
 - Followers are placeholder pawns. The opening village cycles the four
   placeholder tribe colours (blue, red, yellow, green); unique art comes later.
+
+## Huts
+
+The first game loop, as in the original: flatten a pad, drop a hut, send
+people in, and the hut breeds more. Huts live in the C++ core next to the
+followers (`cpp/src/huts.cpp`); TypeScript runs build mode, picks huts under
+the cursor and draws them (`src/game/huts.ts`).
+
+**A site has to be flat.** The core checks every graph node within 0.07 of the
+centre and sixteen samples of the ground under the footprint (on the wall and
+halfway in): all of it land, and no more than 0.0025 between the highest and
+lowest point — about 4% of the tallest terrain. Huts also keep a footprint and
+a follower's width apart. On the default planet about 3% of land passes as it
+is, so most huts start with the flatten brush: hold C and Shift and drag, and
+the ground under the brush is pulled level with wherever the stroke began. It
+goes through `planet.flatten`, the sibling of `sculpt`, so builders and spells
+can use it later. A pad levels in a fraction of a second at default strength.
+
+In build mode the brush disc becomes the hut's footprint, green where the core
+would build and red where it would not, with a see-through ghost of the hut on
+top and the reason on the HUD (water, too uneven, too close to another hut).
+The door faces the camera.
+
+**Going in.** Right-click a hut with followers selected and the nearest of
+them walk to it, as many as it has room for (three) once anyone already on
+the way is counted. It is an ordinary group move to the hut's centre with the
+hut remembered on each follower, so formation and avoidance work as they do
+for any order. The hut belongs to the first tribe sent to it, and only that
+tribe goes in. A follower that comes within reach of the wall goes inside:
+it leaves the follower set and becomes one of the hut's occupants. One that
+stops short, or gets another order, drops the enter order.
+
+**Breeding.** A hut with people in it breeds one follower per 30
+occupant-seconds — one birth every 30 seconds with one inside, every 10 with
+three. Newborns step out of the door and stand there; separation spreads them
+out. The occupants stay inside. The HUD's population line counts everyone,
+outside and in.
+
+**Rendering is one more instanced draw**: the core keeps a packed hut buffer
+(position, heading, tribe, occupants) beside the follower one. The roof takes
+the owning tribe's colour, and the door glows once someone lives there. The
+ghost is one more instance on the end of that buffer, drawn blended.
+
+### Not done yet
+
+- Huts do not block walking: a follower ordered past one walks through it.
+  Carving the footprint out of the graph comes with real buildings.
+- Sculpting under a hut moves it with the ground rather than damaging it.
+- Nobody comes back out except newborns; there is no eject order yet.
+- No wood, no training huts, no upgrades — first huts are free and all alike.
 
 ## Design notes
 

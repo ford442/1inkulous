@@ -73,7 +73,8 @@ const RING_OUTER = 1.95
  */
 const RING_LIFT = 0.25
 
-type Builder = {
+/** Collects flat-shaded triangles; shared with the other placeholder meshes. */
+export type Builder = {
   push: (
     a: readonly [number, number, number],
     b: readonly [number, number, number],
@@ -83,7 +84,7 @@ type Builder = {
   data: number[]
 }
 
-function createBuilder(): Builder {
+export function createBuilder(): Builder {
   const data: number[] = []
   return {
     data,

@@ -25,4 +25,5 @@ jobs:
       - run: npm ci
       - run: npm run build:wasm
       - run: npm run test:core
+      - run: npm run test:huts
       - run: npm run build

@@ -1,4 +1,6 @@
 import type { DragRect } from '../input/input'
+import { siteProblem, type HutGhost } from '../game/huts'
+import { HutSite } from '../sim/hutSite'
 
 /** The slice of the terrain brush the HUD reports on. */
 export type BrushReadout = {
@@ -21,6 +23,17 @@ export type FollowerReadout = {
   readonly walkingCount: number
 }
 
+/** The slice of the huts the HUD reports on. */
+export type HutReadout = {
+  readonly building: boolean
+  readonly ghost: HutGhost | null
+  readonly count: number
+  readonly housedCount: number
+  readonly capacity: number
+  readonly population: number
+  readonly notice: string | null
+}
+
 /** Smoothed frame timing. `drawMs` is CPU time in `renderer.render`, not a GPU query. */
 export type FramePerf = {
   readonly fps: number
@@ -35,8 +48,25 @@ export type Hud = {
   setBrush: (brush: BrushReadout) => void
   setSimulation: (simulation: SimulationReadout) => void
   setFollowers: (followers: FollowerReadout) => void
+  setHuts: (huts: HutReadout) => void
   /** Screen-space selection box, or null when there isn't one. */
   setSelectionBand: (band: DragRect | null) => void
+}
+
+/** The HUD's population and build line. Pure, so it can be checked without a DOM. */
+export function hutLine(huts: HutReadout): string {
+  const head =
+    `population ${huts.population} · ${huts.count} hut${huts.count === 1 ? '' : 's'}, ` +
+    `${huts.housedCount} inside`
+  if (huts.building) {
+    const site = huts.ghost
+      ? huts.ghost.site === HutSite.ok
+        ? 'click to build (Shift keeps placing)'
+        : siteProblem(huts.ghost.site)
+      : 'point at the ground'
+    return `${head} · placing a hut: ${huts.notice ?? site}`
+  }
+  return huts.notice ? `${head} · ${huts.notice}` : `${head} · B to build a hut`
 }
 
 /**
@@ -76,9 +106,11 @@ export function createHud(): Hud {
       <p class="hint" id="hud-brush">—</p>
       <p class="hint" id="hud-sim">—</p>
       <p class="hint" id="hud-followers">—</p>
+      <p class="hint" id="hud-huts">—</p>
       <p class="hint">Right-drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
       <p class="hint">Drag a box to select · Shift-drag adds · click ground clears · right-click sends them</p>
-      <p class="hint">Hold C to sculpt: left raises, right lowers · wheel sizes the brush · [ ] strength</p>
+      <p class="hint">Hold C to sculpt: left raises, right lowers, Shift-left flattens · wheel sizes the brush · [ ] strength</p>
+      <p class="hint">B places a hut on flat ground · right-click a hut to send the selection inside</p>
     </div>
   `
 
@@ -87,6 +119,7 @@ export function createHud(): Hud {
   const brushEl = root.querySelector<HTMLParagraphElement>('#hud-brush')
   const simEl = root.querySelector<HTMLParagraphElement>('#hud-sim')
   const followersEl = root.querySelector<HTMLParagraphElement>('#hud-followers')
+  const hutsEl = root.querySelector<HTMLParagraphElement>('#hud-huts')
   const bandEl = document.querySelector<HTMLDivElement>('#select-band')
   const canvasEl = document.querySelector<HTMLCanvasElement>('#game-canvas')
 
@@ -124,6 +157,11 @@ export function createHud(): Hud {
         followersEl.textContent =
           `${followers.count} followers · ${followers.selectedCount} selected · ` +
           `${followers.walkingCount} walking`
+      }
+    },
+    setHuts(huts: HutReadout) {
+      if (hutsEl) {
+        hutsEl.textContent = hutLine(huts)
       }
     },
     setSelectionBand(band: DragRect | null) {

@@ -61,6 +61,30 @@ export type CoreModule = {
   _core_route_points: () => number
   _core_follower_speed: () => number
   _core_follower_set_speed: (speed: number) => void
+  /** Hut a follower was ordered into, or -1. */
+  _core_follower_hut: (id: number) => number
+
+  /** 0 when a hut fits centred on the direction, else a reason — see HutSite. */
+  _core_hut_site: (x: number, y: number, z: number) => number
+  _core_hut_place: (
+    x: number,
+    y: number,
+    z: number,
+    hx: number,
+    hy: number,
+    hz: number,
+  ) => number
+  _core_hut_count: () => number
+  _core_huts_clear: () => void
+  /** Pointer to the packed hut instance buffer; moves as huts are built. */
+  _core_hut_instances: () => number
+  _core_hut_instance_floats: () => number
+  _core_hut_occupants: (id: number) => number
+  _core_huts_housed: () => number
+  _core_hut_tribe: (id: number) => number
+  _core_hut_order_enter: (id: number) => number
+  _core_hut_radius: () => number
+  _core_hut_capacity: () => number
 
   UTF8ToString: (pointer: number) => string
 

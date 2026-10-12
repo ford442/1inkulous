@@ -80,6 +80,11 @@ export type Followers = {
    * dragging one — including while the sculpt modifier owns the gesture.
    */
   readonly selectionBand: DragRect | null
+  /**
+   * Pushes terrain edited since the last call into the core. `update` does it
+   * too; this is for anything that asks the core about the ground first.
+   */
+  syncTerrain: () => void
   update: (deltaMs: number, input: InputSnapshot, view: FollowerViewContext) => void
 }
 
@@ -235,6 +240,7 @@ export function createFollowers(
     get selectionBand() {
       return selectionBand
     },
+    syncTerrain: syncHeights,
     get walkingCount() {
       const data = simulation.followerInstances()
       const stride = simulation.followerInstanceFloats

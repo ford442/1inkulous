@@ -67,6 +67,38 @@ class FollowerSet {
   // group is given a spot each, packed round the point, and each one paths to
   // its own. Returns how many found a route.
   std::int32_t order_move_selected(double x, double y, double z);
+  // The same order for an explicit list of ids. Every listed follower drops
+  // any hut it was heading into; an enter order sets that again afterwards.
+  std::int32_t order_move(const std::vector<std::int32_t>& ids, double x, double y, double z);
+
+  // Places a follower on the exact direction when the ground there will hold
+  // it, and on the nearest walkable node otherwise. Same result as spawn().
+  std::int32_t spawn_at(const double dir[3], std::int32_t tribe);
+
+  // Takes a follower out of the world — into a hut. Ids above it shift down
+  // by one, so callers walking the set remove from the top.
+  void remove(std::int32_t id);
+
+  // Read access for the systems that act on followers from outside: huts.
+  // `id` must be in range.
+  const double* direction(std::int32_t id) const {
+    return followers_[static_cast<std::size_t>(id)].dir;
+  }
+  std::int32_t tribe(std::int32_t id) const {
+    return followers_[static_cast<std::size_t>(id)].tribe;
+  }
+  bool selected(std::int32_t id) const {
+    return followers_[static_cast<std::size_t>(id)].selected;
+  }
+  bool is_walking(std::int32_t id) const {
+    return walking(followers_[static_cast<std::size_t>(id)]);
+  }
+
+  // The hut a follower has been ordered into, or -1. Huts own the meaning;
+  // the follower only carries the number and loses it on any other order.
+  std::int32_t hut(std::int32_t id) const;
+  void set_hut(std::int32_t id, std::int32_t hut);
+  void clear_huts();
 
   // Advances every follower by one fixed step.
   void step(double dt_seconds);
@@ -129,6 +161,8 @@ class FollowerSet {
     // Lateral place in the group, in spacings left of the file. Zero alone.
     // Intermediate legs steer aside by this so a file spreads round a vertex.
     double lane = 0.0;
+    // Hut this follower was ordered into, or -1. See HutSet.
+    std::int32_t hut = -1;
 
     // Separation push gathered this step, world units in the tangent plane.
     double push[3] = {0.0, 0.0, 0.0};

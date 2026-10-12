@@ -126,6 +126,46 @@ float* core_route_points(void);
 double core_follower_speed(void);
 void core_follower_set_speed(double speed);
 
+// The hut a follower has been ordered into, or -1 (also for a bad id).
+int core_follower_hut(int id);
+
+// --- huts -----------------------------------------------------------------
+//
+// Ids are dense indices into the hut instance buffer, like followers'. Huts
+// are never removed during a match, so an id stays good until core_huts_clear.
+
+// Whether a hut could stand centred on the direction: 0 yes, otherwise the
+// reason — 1 no grid, 2 water, 3 uneven, 4 too close to another hut, 5 the
+// hut ceiling is reached. Mirrors inkulous::HutSite.
+int core_hut_site(double x, double y, double z);
+
+// Builds a hut centred on (x, y, z) with its door along (hx, hy, hz). Returns
+// its id, or -1 if core_hut_site would refuse it.
+int core_hut_place(double x, double y, double z, double hx, double hy, double hz);
+
+int core_hut_count(void);
+void core_huts_clear(void);
+
+// Packed render instances: core_hut_instance_floats() floats each, in id
+// order. Moves as huts are built, so re-read it per frame.
+float* core_hut_instances(void);
+int core_hut_instance_floats(void);
+
+// People inside hut `id`, or -1 for a bad id; and inside every hut together.
+int core_hut_occupants(int id);
+int core_huts_housed(void);
+// Tribe that owns hut `id`: -1 while unclaimed, or for a bad id.
+int core_hut_tribe(int id);
+
+// Sends selected followers into hut `id`, as many as it has room for. Returns
+// how many were sent.
+int core_hut_order_enter(int id);
+
+// Fixed rules, so TypeScript draws and picks huts at the size the core
+// places them: footprint radius in world units, and people per hut.
+double core_hut_radius(void);
+int core_hut_capacity(void);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

@@ -206,4 +206,47 @@ INKULOUS_EXPORT void core_follower_set_speed(double speed) {
   simulation().followers().set_speed(speed);
 }
 
+INKULOUS_EXPORT int core_follower_hut(int id) { return simulation().followers().hut(id); }
+
+// --- huts -----------------------------------------------------------------
+
+INKULOUS_EXPORT int core_hut_site(double x, double y, double z) {
+  return static_cast<int>(simulation().huts().check_site(x, y, z));
+}
+
+INKULOUS_EXPORT int core_hut_place(double x,
+                                   double y,
+                                   double z,
+                                   double hx,
+                                   double hy,
+                                   double hz) {
+  return simulation().huts().place(x, y, z, hx, hy, hz);
+}
+
+INKULOUS_EXPORT int core_hut_count(void) { return simulation().huts().count(); }
+
+INKULOUS_EXPORT void core_huts_clear(void) { simulation().huts().clear(); }
+
+INKULOUS_EXPORT float* core_hut_instances(void) {
+  return const_cast<float*>(simulation().huts().instances());
+}
+
+INKULOUS_EXPORT int core_hut_instance_floats(void) { return inkulous::kHutInstanceFloats; }
+
+INKULOUS_EXPORT int core_hut_occupants(int id) { return simulation().huts().occupants(id); }
+
+INKULOUS_EXPORT int core_huts_housed(void) { return simulation().huts().housed(); }
+
+INKULOUS_EXPORT int core_hut_tribe(int id) { return simulation().huts().tribe(id); }
+
+INKULOUS_EXPORT int core_hut_order_enter(int id) {
+  const int sent = simulation().huts().order_enter_selected(id);
+  simulation().followers().refresh_instances();
+  return sent;
+}
+
+INKULOUS_EXPORT double core_hut_radius(void) { return inkulous::kHutRadius; }
+
+INKULOUS_EXPORT int core_hut_capacity(void) { return inkulous::kHutCapacity; }
+
 }  // extern "C"

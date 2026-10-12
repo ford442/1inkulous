@@ -22,8 +22,8 @@ const ok = (name, pass, detail = '') => out.push(`${pass ? 'PASS' : 'FAIL'}  ${n
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
-ok('version string', version === '0.3.0', version)
-ok('encoded version matches', m._core_version() === 300, String(m._core_version()))
+ok('version string', version === '0.4.0', version)
+ok('encoded version matches', m._core_version() === 400, String(m._core_version()))
 
 // default step
 m._core_init(0)
@@ -794,6 +794,173 @@ ok('a blocked follower does not freeze the sim',
 ok('the blocked follower repaths or stops short of the body in the way',
    !isWalking(alleyWalker) && closestPair([alleyWalker, alleyIdle]) > 1e-3,
    `gap ${closestPair([alleyWalker, alleyIdle]).toFixed(4)}, walking ${isWalking(alleyWalker)}`)
+writeHeights(grid.heights)
+
+// ---------------------------------------------------------------------------
+// Huts: flatten a pad, build on it, send people in, watch them breed.
+
+/** Mirrors kHutCapacity / kHutRadius in cpp/include/1inkulous/huts.hpp. */
+const HUT_CAPACITY = 3
+const HUT_RADIUS = 0.05
+const SITE = { ok: 0, noGrid: 1, water: 2, uneven: 3, crowded: 4, full: 5 }
+
+function hutInstance(id) {
+  const stride = m._core_hut_instance_floats()
+  const start = (m._core_hut_instances() >> 2) + id * stride
+  return Array.from(m.HEAPF32.subarray(start, start + stride))
+}
+
+const tribeOf = (id) => {
+  const { data, stride } = instances()
+  return data[id * stride + 6]
+}
+
+m._core_followers_clear()
+m._core_huts_clear()
+writeHeights(grid.heights)
+
+ok('the core reports the hut rules', m._core_hut_capacity() === HUT_CAPACITY &&
+   Math.abs(m._core_hut_radius() - HUT_RADIUS) < 1e-12 && m._core_hut_instance_floats() === 8)
+
+const hutSite = [8, 8]
+ok('level ground takes a hut', m._core_hut_site(...gridDirection(...hutSite)) === SITE.ok,
+   String(m._core_hut_site(...gridDirection(...hutSite))))
+ok('the edge of the map does not', m._core_hut_site(...gridDirection(0, 0)) === SITE.water,
+   String(m._core_hut_site(...gridDirection(0, 0))))
+
+{
+  const wet = grid.heights.slice()
+  wet[nodeAt(9, 8)] = 0
+  writeHeights(wet)
+  ok('a pond inside the footprint refuses it', m._core_hut_site(...gridDirection(...hutSite)) === SITE.water,
+     String(m._core_hut_site(...gridDirection(...hutSite))))
+
+  const bumpy = grid.heights.slice()
+  bumpy[nodeAt(9, 8)] = LAND + 0.004
+  writeHeights(bumpy)
+  ok('a bump inside the footprint is too uneven', m._core_hut_site(...gridDirection(...hutSite)) === SITE.uneven,
+     String(m._core_hut_site(...gridDirection(...hutSite))))
+  ok('and nothing is built there', m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0) === -1 &&
+     m._core_hut_count() === 0)
+
+  bumpy[nodeAt(9, 8)] = LAND + 0.001
+  writeHeights(bumpy)
+  ok('a bump within tolerance is level enough', m._core_hut_site(...gridDirection(...hutSite)) === SITE.ok)
+
+  // A hill a cell beyond the footprint is somebody else's problem.
+  const hilly = grid.heights.slice()
+  hilly[nodeAt(11, 8)] = LAND + 0.03
+  writeHeights(hilly)
+  ok('a hill outside the footprint does not count', m._core_hut_site(...gridDirection(...hutSite)) === SITE.ok,
+     String(m._core_hut_site(...gridDirection(...hutSite))))
+  writeHeights(grid.heights)
+}
+
+const hut = m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0)
+ok('a hut is built on the pad', hut === 0 && m._core_hut_count() === 1, `id ${hut}`)
+{
+  const [x, y, z, hx, hy, hz, tribe, occupants] = hutInstance(hut)
+  const centre = gridDirection(...hutSite)
+  ok('it stands on the ground, centred where it was put',
+     Math.abs(Math.hypot(x, y, z) - (RADIUS + LAND)) < 1e-5 && angleTo([x, y, z], centre) < 1e-6,
+     `r ${Math.hypot(x, y, z).toFixed(5)}`)
+  ok('with its door along the surface, the way it was asked to face',
+     Math.abs(hx * centre[0] + hy * centre[1] + hz * centre[2]) < 1e-6 && hy > 0.99,
+     `heading ${[hx, hy, hz].map((v) => v.toFixed(3))}`)
+  ok('empty and unclaimed', tribe === -1 && occupants === 0 && m._core_hut_tribe(hut) === -1)
+}
+ok('a site overlapping it is refused', m._core_hut_site(...gridDirection(9, 8)) === SITE.crowded)
+ok('one a footprint and a gap away is not', m._core_hut_site(...gridDirection(11, 8)) === SITE.ok,
+   String(m._core_hut_site(...gridDirection(11, 8))))
+
+// Four of tribe 0 and one of tribe 2, all west of the hut. The nearest is tribe
+// 0, so the hut goes to tribe 0, and only three fit.
+const settlers = [
+  m._core_follower_spawn(...gridDirection(5, 8), 0),
+  m._core_follower_spawn(...gridDirection(5, 9), 0),
+  m._core_follower_spawn(...gridDirection(5, 7), 0),
+  m._core_follower_spawn(...gridDirection(4, 8), 0),
+  m._core_follower_spawn(...gridDirection(3, 8), 2),
+]
+selectOnly(settlers)
+const sent = m._core_hut_order_enter(hut)
+ok('an enter order sends as many as the hut holds', sent === HUT_CAPACITY, `${sent} sent`)
+ok('the nearest three, claiming the hut for their tribe',
+   [0, 1, 2].every((f) => m._core_follower_hut(f) === hut) &&
+   m._core_follower_hut(3) === -1 && m._core_follower_hut(4) === -1 && m._core_hut_tribe(hut) === 0,
+   settlers.map((f) => m._core_follower_hut(f)).join(','))
+ok('and they set off', [0, 1, 2].every(isWalking))
+ok('a second order finds no room left for anyone else', m._core_hut_order_enter(hut) === 0)
+
+simulate(5)
+ok('they walk in and are housed', m._core_hut_occupants(hut) === HUT_CAPACITY &&
+   m._core_huts_housed() === HUT_CAPACITY && m._core_follower_count() === 2,
+   `${m._core_hut_occupants(hut)} inside, ${m._core_follower_count()} outside`)
+ok('the ones left outside are the ones not sent',
+   tribeOf(0) === 0 && tribeOf(1) === 2 && !isWalking(0) && !isWalking(1))
+ok('the hut instance counts them', hutInstance(hut)[7] === HUT_CAPACITY && hutInstance(hut)[6] === 0)
+
+// A full hut breeds once every kHutBreedSeconds / 3 = 10 seconds.
+const before = m._core_follower_count()
+simulate(11)
+const born = m._core_follower_count() - before
+ok('a full hut breeds a new follower', born === 1, `${born} born in 11s`)
+{
+  const newborn = m._core_follower_count() - 1
+  const away = angleTo(followerPosition(newborn), gridDirection(...hutSite)) * RADIUS
+  const door = gridDirection(8, 9)
+  ok('of the hut\'s tribe, at its door', tribeOf(newborn) === 0 && away > HUT_RADIUS * 0.9 &&
+     away < HUT_RADIUS + SPACING * 3 &&
+     angleTo(followerPosition(newborn), door) < angleTo(followerPosition(newborn), gridDirection(8, 7)),
+     `tribe ${tribeOf(newborn)}, ${away.toFixed(3)} from the centre`)
+  ok('standing, not walking anywhere', !isWalking(newborn))
+}
+ok('the occupants stay inside', m._core_hut_occupants(hut) === HUT_CAPACITY)
+
+const beforeLong = m._core_follower_count()
+simulate(30)
+const bornLong = m._core_follower_count() - beforeLong
+ok('and keeps breeding at that rate', bornLong === 3, `${bornLong} born in 30s`)
+ok('newborns do not stand inside the hut',
+   Array.from({ length: m._core_follower_count() }, (_, f) => f).slice(2)
+     .every((f) => angleTo(followerPosition(f), gridDirection(...hutSite)) * RADIUS > HUT_RADIUS * 0.8))
+
+selectOnly([0])
+ok('a full hut takes nobody', m._core_hut_order_enter(hut) === 0 && m._core_follower_hut(0) === -1)
+
+// The tribe-2 follower claims a second, empty hut, then thinks better of it.
+const second = m._core_hut_place(...gridDirection(12, 12), 1, 0, 0)
+ok('a second hut goes up', second === 1 && m._core_hut_count() === 2)
+selectOnly([1])
+ok('a lone follower of another tribe can claim it', m._core_hut_order_enter(second) === 1 &&
+   m._core_hut_tribe(second) === 2 && m._core_follower_hut(1) === second)
+m._core_follower_order_move(...gridDirection(2, 2))
+ok('a move order calls the enter order off', m._core_follower_hut(1) === -1 && isWalking(1))
+simulate(10)
+ok('so it never goes in', m._core_hut_occupants(second) === 0 && tribeOf(1) === 2)
+
+// A follower that cannot get there gives up the order instead of carrying it.
+{
+  m._core_followers_clear()
+  const moat = grid.heights.slice()
+  for (let j = 0; j < GRID; j += 1) moat[nodeAt(4, j)] = 0
+  writeHeights(moat)
+  const islander = m._core_follower_spawn(...gridDirection(2, 8), 2)
+  selectOnly([islander])
+  m._core_hut_order_enter(second)
+  simulate(2)
+  ok('an enter order that cannot arrive is dropped', m._core_follower_hut(islander) === -1 &&
+     m._core_hut_occupants(second) === 0 && m._core_follower_count() === 1)
+  writeHeights(grid.heights)
+}
+
+{
+  const population = m._core_follower_count() + m._core_huts_housed()
+  m._core_huts_clear()
+  ok('clearing huts empties them', m._core_hut_count() === 0 && m._core_huts_housed() === 0 &&
+     population > 0)
+}
+m._core_followers_clear()
 writeHeights(grid.heights)
 
 // ---------------------------------------------------------------------------

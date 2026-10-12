@@ -10,8 +10,8 @@ import { normalize, type Vec3 } from '../engine/math'
 
 /**
  * The playable world. Terrain is a per-vertex height above sea level, stored on
- * the mesh and edited in place — `sculpt` is the primitive that the player's
- * brush and, later, raise/lower spells both go through.
+ * the mesh and edited in place — `sculpt` and `flatten` are the primitives that
+ * the player's brush and, later, raise/lower spells and builders all go through.
  */
 
 export type TerrainKind = 'placeholder' | 'flat'
@@ -45,6 +45,13 @@ export type Planet = {
    * radius, with a smooth falloff to the edge. Returns true if anything moved.
    */
   sculpt: (centre: Vec3, angularRadius: number, delta: number) => boolean
+  /**
+   * Pulls the terrain inside an angular radius towards `targetHeight`, moving
+   * each vertex by at most `rate` at the centre and less towards the rim. A
+   * vertex within reach of the target lands on it exactly, so a few strokes
+   * leave a truly level pad. Returns true if anything moved.
+   */
+  flatten: (centre: Vec3, angularRadius: number, targetHeight: number, rate: number) => boolean
 }
 
 /** Refinement passes for ray → surface picking. */
@@ -156,6 +163,57 @@ export function createPlanet(options: PlanetOptions = {}): Planet {
 
         if (after !== before) {
           heights[i] = after
+          touched.push(i)
+        }
+      }
+
+      if (touched.length === 0) {
+        return false
+      }
+
+      refreshVertices(mesh, touched)
+      return true
+    },
+
+    flatten(centre: Vec3, angularRadius: number, targetHeight: number, rate: number) {
+      if (!(rate > 0) || angularRadius <= 0) {
+        return false
+      }
+
+      const unit = normalize(centre)
+      const cosRadius = Math.cos(angularRadius)
+      const { directions, heights, vertexCount } = mesh
+      const touched: number[] = []
+      // Stored as float32, so the target is too: a vertex that has arrived has
+      // to compare equal to it, or the pad would re-upload every frame.
+      const target = Math.fround(Math.min(Math.max(targetHeight, 0), maxHeight))
+
+      for (let i = 0; i < vertexCount; i += 1) {
+        const dot =
+          directions[i * 3] * unit[0] +
+          directions[i * 3 + 1] * unit[1] +
+          directions[i * 3 + 2] * unit[2]
+        if (dot <= cosRadius) {
+          continue
+        }
+
+        const before = heights[i]
+        const gap = target - before
+        if (gap === 0) {
+          continue
+        }
+
+        // Same falloff as `sculpt`, so the pad's edge blends into the slope
+        // round it instead of stepping down a cliff.
+        const angle = Math.acos(Math.min(1, dot))
+        const t = 1 - angle / angularRadius
+        const reach = rate * t * t * (3 - 2 * t)
+        if (reach <= 0) {
+          continue
+        }
+
+        heights[i] = Math.abs(gap) <= reach ? target : before + Math.sign(gap) * reach
+        if (heights[i] !== before) {
           touched.push(i)
         }
       }

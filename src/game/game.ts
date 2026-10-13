@@ -1,5 +1,6 @@
-import type { InputSnapshot } from '../input/input'
+import type { InputSnapshot, PointerClick } from '../input/input'
 import type { Simulation } from '../sim/simulation'
+import { createBuildings, type Buildings } from './buildings'
 import { createCamera, type Camera } from './camera'
 import { createFollowers, type Followers } from './followers'
 import { createHuts, type Huts } from './huts'
@@ -13,6 +14,7 @@ export type Game = {
   sculptor: Sculptor
   followers: Followers
   huts: Huts
+  buildings: Buildings
   /**
    * `aspect` is the viewport's width / height, needed to turn the cursor into a
    * world-space ray for terrain picking.
@@ -35,7 +37,10 @@ export function createGame(simulation: Simulation): Game {
 
   const sculptor = createSculptor(planet)
   const followers = createFollowers(planet, simulation)
-  const huts = createHuts(planet, simulation)
+  // B places a land-claim hut. The breeding huts keep their enter order, but
+  // they no longer share the build key.
+  const buildings = createBuildings(planet, simulation)
+  const huts = createHuts(planet, simulation, { buildMode: false })
 
   // Open on the tribe. The starting village is wherever the flattest land
   // turned out to be, which is as likely to be behind the planet as in front.
@@ -53,6 +58,7 @@ export function createGame(simulation: Simulation): Game {
     sculptor,
     followers,
     huts,
+    buildings,
     get clearColor() {
       return state.clearColor
     },
@@ -71,21 +77,35 @@ export function createGame(simulation: Simulation): Game {
       // buffer before a hut site is judged or anything paths over it.
       followers.syncTerrain()
 
-      // Huts see the clicks first: one that built a hut or sent people inside
-      // is not also a selection or a move order. Build mode owns the left
-      // button outright, so no selection box starts while placing.
-      const claimed = huts.update(deltaMs, input, { camera, aspect })
+      // Buildings see the clicks first: placing a hut is not also a selection
+      // or a move order. Build mode owns the left button, so no selection box
+      // starts while placing. Breeding huts still claim a right-click on one
+      // of their own.
+      const placed = buildings.update(deltaMs, input, { camera, aspect })
       const pointer = input.pointer
-      const forFollowers: InputSnapshot =
-        claimed.consumed.size === 0 && !claimed.building
+      const afterPlace: InputSnapshot =
+        placed.consumed.size === 0
           ? input
           : {
               ...input,
               pointer: {
                 ...pointer,
-                clicks: pointer.clicks.filter((click) => !claimed.consumed.has(click)),
-                drags: claimed.building ? [] : pointer.drags,
-                dragRect: claimed.building ? null : pointer.dragRect,
+                clicks: pointer.clicks.filter((click) => !placed.consumed.has(click)),
+              },
+            }
+      const housed = huts.update(deltaMs, afterPlace, { camera, aspect })
+      const claimed = new Set<PointerClick>([...placed.consumed, ...housed.consumed])
+      const placing = placed.building || housed.building
+      const forFollowers: InputSnapshot =
+        claimed.size === 0 && !placing
+          ? input
+          : {
+              ...input,
+              pointer: {
+                ...pointer,
+                clicks: pointer.clicks.filter((click) => !claimed.has(click)),
+                drags: placing ? [] : pointer.drags,
+                dragRect: placing ? null : pointer.dragRect,
               },
             }
 

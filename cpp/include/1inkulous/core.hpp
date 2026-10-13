@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "1inkulous/buildings.hpp"
 #include "1inkulous/followers.hpp"
 #include "1inkulous/huts.hpp"
 #include "1inkulous/nav.hpp"
@@ -58,6 +59,7 @@ class Simulation {
   NavGrid& nav() { return nav_; }
   FollowerSet& followers() { return followers_; }
   HutSet& huts() { return huts_; }
+  BuildingSet& buildings() { return buildings_; }
 
   std::int64_t step_count() const { return step_count_; }
   // Simulated time in milliseconds, i.e. whole steps only.
@@ -76,6 +78,7 @@ class Simulation {
   NavGrid nav_;
   FollowerSet followers_;
   HutSet huts_;
+  BuildingSet buildings_;
 };
 
 }  // namespace inkulous

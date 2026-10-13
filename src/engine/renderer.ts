@@ -7,7 +7,9 @@ import type { PlanetMesh } from './mesh/cubeSphere'
 import { consumeDirtyRange, VERTEX_BYTES, VERTEX_FLOATS } from './mesh/cubeSphere'
 import { createFollowerMesh, FOLLOWER_VERTEX_BYTES } from './mesh/followerMesh'
 import { createHutMesh, HUT_VERTEX_BYTES } from './mesh/hutMesh'
+import { BUILDING_HEIGHT_RATIO } from '../game/buildings'
 import { HUT_HEIGHT_RATIO } from '../game/huts'
+import { BuildingSite } from '../sim/buildingSite'
 import { HutSite } from '../sim/hutSite'
 import {
   mat4Identity,
@@ -36,6 +38,9 @@ const MAX_FOLLOWER_INSTANCES = 1024
 
 /** Mirrors kMaxHuts in cpp/include/1inkulous/huts.hpp; one more slot holds the build ghost. */
 const MAX_HUT_INSTANCES = 256
+
+/** Mirrors kMaxBuildings; one more slot holds the build ghost. */
+const MAX_BUILDING_INSTANCES = 256
 
 /**
  * The sun follows the camera as a three-quarter key light (up and to the right of
@@ -421,6 +426,115 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
 }
 `
 
+/**
+ * Land-claim huts. One placeholder mesh, one instance per building, copied
+ * straight out of the core buffer: position, tribe, kind, occupants, flags.
+ * The door faces a stable tangent of the anchor — buildings do not turn.
+ */
+const buildingShader = /* wgsl */ `
+struct Uniforms {
+  viewProj: mat4x4f,
+  model: mat4x4f,
+  lightDir: vec4f,
+  cameraPos: vec4f,
+  params: vec4f,
+  brush: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+const PART_DOOR: f32 = 1.0;
+const PART_ROOF: f32 = 2.0;
+
+struct VertexOutput {
+  @builtin(position) clipPosition: vec4f,
+  @location(0) worldPosition: vec3f,
+  @location(1) worldNormal: vec3f,
+  @location(2) @interpolate(flat) tribe: f32,
+  @location(3) @interpolate(flat) occupants: f32,
+  @location(4) @interpolate(flat) part: f32,
+  @location(5) @interpolate(flat) kind: f32,
+  @location(6) @interpolate(flat) flags: f32,
+}
+
+fn tribeColor(tribe: f32) -> vec3f {
+  let index = i32(round(tribe)) % 4;
+  if (index == 1) { return vec3f(0.78, 0.20, 0.18); }
+  if (index == 2) { return vec3f(0.86, 0.74, 0.20); }
+  if (index == 3) { return vec3f(0.24, 0.62, 0.28); }
+  return vec3f(0.24, 0.44, 0.82);
+}
+
+fn facing(up: vec3f) -> vec3f {
+  let helper = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(up.y) > 0.9);
+  return normalize(cross(up, helper));
+}
+
+@vertex
+fn vs_main(
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) part: f32,
+  @location(3) instancePosition: vec3f,
+  @location(4) instanceTribe: f32,
+  @location(5) instanceKind: f32,
+  @location(6) instanceOccupants: f32,
+  @location(7) instanceFlags: f32,
+) -> VertexOutput {
+  let up = normalize(instancePosition);
+  let forward = facing(up);
+  let right = cross(up, forward);
+  let world = instancePosition + right * position.x + up * position.y + forward * position.z;
+
+  var output: VertexOutput;
+  output.clipPosition = uniforms.viewProj * vec4f(world, 1.0);
+  output.worldPosition = world;
+  output.worldNormal = right * normal.x + up * normal.y + forward * normal.z;
+  output.tribe = instanceTribe;
+  output.occupants = instanceOccupants;
+  output.part = part;
+  output.kind = instanceKind;
+  output.flags = instanceFlags;
+  return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+  let normal = normalize(input.worldNormal);
+  let lightDir = normalize(uniforms.lightDir.xyz);
+  let viewDir = normalize(uniforms.cameraPos.xyz - input.worldPosition);
+  let diffuse = max(dot(normal, lightDir), 0.0);
+  let skyMix = normal.y * 0.5 + 0.5;
+  let ambient = mix(vec3f(0.12, 0.13, 0.18), vec3f(0.30, 0.34, 0.42), skyMix);
+
+  if (input.occupants < -0.5) {
+    let tint = select(vec3f(1.00, 0.32, 0.25), vec3f(0.35, 0.95, 0.45), input.occupants > -1.5);
+    let lit = tint * (0.55 + 0.45 * diffuse);
+    return vec4f(lit, 0.5);
+  }
+
+  var albedo = vec3f(0.56, 0.42, 0.28);
+  if (input.part == PART_ROOF) {
+    let thatch = vec3f(0.66, 0.55, 0.30);
+    albedo = select(thatch, mix(thatch, tribeColor(input.tribe), 0.55), input.tribe > -0.5);
+    // A later kind reads a little cooler, so the packed kind is not dead data.
+    albedo = mix(albedo, vec3f(0.45, 0.48, 0.52), step(0.5, input.kind) * 0.35);
+  }
+
+  var color = albedo * (ambient + vec3f(1.0, 0.97, 0.90) * diffuse);
+  if (input.part == PART_DOOR) {
+    color = vec3f(0.05, 0.035, 0.025);
+  }
+  // Flags are packed for later (construction, selection). They do not tint yet.
+  color += vec3f(input.flags * 0.0);
+
+  let rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.5) * 0.15;
+  color += albedo * rim;
+  color = vec3f(1.0) - exp(-1.35 * color);
+  return vec4f(color, 1.0);
+}
+`
+
 export type Renderer = {
   statusMessage: string
   render: (game: Game) => void
@@ -680,6 +794,92 @@ export async function createRenderer(
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
   })
 
+  const buildingShaderModule = device.createShaderModule({
+    label: 'building-shader',
+    code: buildingShader,
+  })
+
+  const buildingVertexBuffers: GPUVertexBufferLayout[] = [
+    {
+      arrayStride: HUT_VERTEX_BYTES,
+      attributes: [
+        { shaderLocation: 0, offset: 0, format: 'float32x3' },
+        { shaderLocation: 1, offset: 12, format: 'float32x3' },
+        { shaderLocation: 2, offset: 24, format: 'float32' },
+      ],
+    },
+    {
+      // Straight from the core's building buffer: position(3), tribe, kind,
+      // occupants, flags, reserved.
+      arrayStride: game.buildings.instanceFloats * 4,
+      stepMode: 'instance',
+      attributes: [
+        { shaderLocation: 3, offset: 0, format: 'float32x3' },
+        { shaderLocation: 4, offset: 12, format: 'float32' },
+        { shaderLocation: 5, offset: 16, format: 'float32' },
+        { shaderLocation: 6, offset: 20, format: 'float32' },
+        { shaderLocation: 7, offset: 24, format: 'float32' },
+      ],
+    },
+  ]
+
+  const buildingPipeline = device.createRenderPipeline({
+    label: 'building-pipeline',
+    layout: 'auto',
+    vertex: { module: buildingShaderModule, entryPoint: 'vs_main', buffers: buildingVertexBuffers },
+    fragment: { module: buildingShaderModule, entryPoint: 'fs_main', targets: [{ format }] },
+    primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+    depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
+  })
+
+  const buildingGhostPipeline = device.createRenderPipeline({
+    label: 'building-ghost-pipeline',
+    layout: 'auto',
+    vertex: { module: buildingShaderModule, entryPoint: 'vs_main', buffers: buildingVertexBuffers },
+    fragment: {
+      module: buildingShaderModule,
+      entryPoint: 'fs_main',
+      targets: [
+        {
+          format,
+          blend: {
+            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          },
+        },
+      ],
+    },
+    primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+    depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
+  })
+
+  const buildingBindGroup = device.createBindGroup({
+    layout: buildingPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+  })
+  const buildingGhostBindGroup = device.createBindGroup({
+    layout: buildingGhostPipeline.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+  })
+
+  const buildingMesh = createHutMesh({
+    radius: game.buildings.radius,
+    height: game.buildings.radius * BUILDING_HEIGHT_RATIO,
+  })
+  const buildingVertexBuffer = device.createBuffer({
+    label: 'building-vertices',
+    size: buildingMesh.vertexData.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  })
+  device.queue.writeBuffer(buildingVertexBuffer, 0, buildingMesh.vertexData)
+
+  const buildingInstanceBytes = game.buildings.instanceFloats * 4
+  const buildingInstanceBuffer = device.createBuffer({
+    label: 'building-instances',
+    size: (MAX_BUILDING_INSTANCES + 1) * buildingInstanceBytes,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  })
+
   let depthTexture: GPUTexture | null = null
   const ensureDepthTexture = (): GPUTexture => {
     if (
@@ -713,7 +913,8 @@ export async function createRenderer(
     statusMessage:
       `WebGPU ready — cube-sphere planet (${triangleCount} triangles), ` +
       `followers instanced (${followerMesh.triangleCount} triangles each), ` +
-      `huts instanced (${hutMesh.triangleCount} each)`,
+      `huts instanced (${hutMesh.triangleCount} each), ` +
+      `buildings instanced (${buildingMesh.triangleCount} each)`,
     render(currentGame: Game) {
       const { camera, planet } = currentGame
       const mesh = planet.mesh
@@ -747,12 +948,14 @@ export async function createRenderer(
       uniformData[37] = eye[1]
       uniformData[38] = eye[2]
       uniformData[39] = 0
-      const { sculptor, huts } = currentGame
+      const { sculptor, huts, buildings } = currentGame
       // The brush cursor while sculpting; otherwise, in build mode, the same
       // disc marks the hut's footprint and says whether it can go there.
-      const ghost = huts.ghost
+      const buildGhost = buildings.ghost
+      const ghost = buildGhost ?? huts.ghost
       const hover = sculptor.armed ? sculptor.hoverDirection : (ghost?.direction ?? null)
-      const cursorRadius = sculptor.armed ? sculptor.brushRadius : huts.radius / planet.radius
+      const padRadius = buildGhost ? buildings.radius : huts.radius
+      const cursorRadius = sculptor.armed ? sculptor.brushRadius : padRadius / planet.radius
 
       uniformData[40] = planet.radius
       uniformData[41] = planet.maxHeight
@@ -764,7 +967,12 @@ export async function createRenderer(
             : sculptor.mode === 'flatten'
               ? 2
               : 0
-      uniformData[43] = !sculptor.armed && ghost ? (ghost.site === HutSite.ok ? 1 : -1) : 0
+      uniformData[43] =
+        !sculptor.armed && ghost
+          ? ghost.site === (buildGhost ? BuildingSite.ok : HutSite.ok)
+            ? 1
+            : -1
+          : 0
       uniformData[44] = hover ? hover[0] : 0
       uniformData[45] = hover ? hover[1] : 0
       uniformData[46] = hover ? hover[2] : 0
@@ -805,6 +1013,29 @@ export async function createRenderer(
       const ghostInstance = huts.ghostInstance()
       if (ghostInstance) {
         device.queue.writeBuffer(hutInstanceBuffer, hutCount * hutInstanceBytes, ghostInstance)
+      }
+
+      const buildingInstances = buildings.instances()
+      const buildingCount = Math.min(
+        buildingInstances.length / buildings.instanceFloats,
+        MAX_BUILDING_INSTANCES,
+      )
+      if (buildingCount > 0) {
+        device.queue.writeBuffer(
+          buildingInstanceBuffer,
+          0,
+          buildingInstances,
+          0,
+          buildingCount * buildings.instanceFloats,
+        )
+      }
+      const buildingGhost = buildings.ghostInstance()
+      if (buildingGhost) {
+        device.queue.writeBuffer(
+          buildingInstanceBuffer,
+          buildingCount * buildingInstanceBytes,
+          buildingGhost,
+        )
       }
 
       const encoder = device.createCommandEncoder()
@@ -857,6 +1088,21 @@ export async function createRenderer(
           pass.setPipeline(ghostPipeline)
           pass.setBindGroup(0, ghostBindGroup)
           pass.draw(hutMesh.vertexCount, 1, 0, hutCount)
+        }
+      }
+
+      if (buildingCount > 0 || buildingGhost) {
+        pass.setVertexBuffer(0, buildingVertexBuffer)
+        pass.setVertexBuffer(1, buildingInstanceBuffer)
+        if (buildingCount > 0) {
+          pass.setPipeline(buildingPipeline)
+          pass.setBindGroup(0, buildingBindGroup)
+          pass.draw(buildingMesh.vertexCount, buildingCount)
+        }
+        if (buildingGhost) {
+          pass.setPipeline(buildingGhostPipeline)
+          pass.setBindGroup(0, buildingGhostBindGroup)
+          pass.draw(buildingMesh.vertexCount, 1, 0, buildingCount)
         }
       }
 

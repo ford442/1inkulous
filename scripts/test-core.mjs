@@ -797,6 +797,107 @@ ok('the blocked follower repaths or stops short of the body in the way',
 writeHeights(grid.heights)
 
 // ---------------------------------------------------------------------------
+// Buildings: a hut claims a flat land node. Water, a cliff, and a taken pad
+// are refused. Placing does not sculpt; a later stroke lifts the hut with the
+// anchor node's height.
+
+/** Mirrors BuildingSite / kBuildingKindHut / kBuildingRadius in buildings.hpp. */
+const BUILDING_SITE = { ok: 0, noGrid: 1, water: 2, steep: 3, occupied: 4, full: 5 }
+const BUILDING_KIND_HUT = 0
+const BUILDING_RADIUS = 0.05
+
+function buildingInstance(id) {
+  const stride = m._core_building_instance_floats()
+  const start = (m._core_building_instances() >> 2) + id * stride
+  return Array.from(m.HEAPF32.subarray(start, start + stride))
+}
+
+m._core_followers_clear()
+m._core_buildings_clear()
+writeHeights(grid.heights)
+
+ok('building instance layout is position, tribe, kind, occupants, flags',
+   m._core_building_instance_floats() === 8 && Math.abs(m._core_building_radius() - BUILDING_RADIUS) < 1e-12)
+
+const pad = gridDirection(8, 8)
+const coreHeights = () => {
+  const start = m._core_nav_heights() >> 2
+  return m.HEAPF32.slice(start, start + grid.nodeCount)
+}
+const heightsBefore = coreHeights()
+const hutId = m._core_building_place(...pad, 2, BUILDING_KIND_HUT)
+ok('flat land takes a hut', hutId === 0 && m._core_building_count() === 1 &&
+   m._core_building_site(...pad) === BUILDING_SITE.occupied, `id ${hutId}`)
+ok('placing does not sculpt', heightsBefore.every((h, i) => h === coreHeights()[i]))
+{
+  const [x, y, z, tribe, kind, occupants, flags] = buildingInstance(hutId)
+  const placed = Math.hypot(x, y, z)
+  const along = x * pad[0] + y * pad[1] + z * pad[2]
+  ok('the hut stands on the anchor node, tribe and kind packed',
+     Math.abs(placed - (RADIUS + LAND)) < 1e-4 && along > 0 &&
+     tribe === 2 && kind === BUILDING_KIND_HUT && occupants === 0 && flags === 0,
+     `r ${placed.toFixed(4)} tribe ${tribe} kind ${kind}`)
+}
+ok('a second hut on that pad is refused',
+   m._core_building_place(...pad, 0, BUILDING_KIND_HUT) === -1 && m._core_building_count() === 1)
+ok('a hut on the neighbouring cell is refused',
+   m._core_building_site(...gridDirection(8, 10)) === BUILDING_SITE.occupied &&
+   m._core_building_place(...gridDirection(8, 10), 0, BUILDING_KIND_HUT) === -1)
+const farHut = m._core_building_place(...gridDirection(8, 12), 0, BUILDING_KIND_HUT)
+ok('a hut clear of the footprint is accepted', farHut === 1 && m._core_building_count() === 2, `id ${farHut}`)
+ok('a negative kind is refused', m._core_building_place(...gridDirection(2, 2), 0, -1) === -1)
+
+{
+  const wet = Float32Array.from(grid.heights)
+  wet[nodeAt(4, 4)] = 0
+  writeHeights(wet)
+  ok('water refuses a hut',
+     m._core_building_site(...gridDirection(4, 4)) === BUILDING_SITE.water &&
+     m._core_building_place(...gridDirection(4, 4), 0, BUILDING_KIND_HUT) === -1)
+  wet[nodeAt(4, 4)] = LAND
+  wet[nodeAt(4, 5)] = 0
+  writeHeights(wet)
+  ok('water in the neighbourhood refuses a hut',
+     m._core_building_site(...gridDirection(4, 4)) === BUILDING_SITE.water &&
+     m._core_building_place(...gridDirection(4, 4), 0, BUILDING_KIND_HUT) === -1)
+}
+
+{
+  const cliff = Float32Array.from(grid.heights)
+  // One link up is far past the pad cap (0.15) and past the walk limit too.
+  cliff[nodeAt(4, 5)] = LAND + 0.05
+  writeHeights(cliff)
+  ok('a cliff refuses a hut',
+     m._core_building_site(...gridDirection(4, 4)) === BUILDING_SITE.steep &&
+     m._core_building_place(...gridDirection(4, 4), 0, BUILDING_KIND_HUT) === -1)
+  cliff[nodeAt(4, 5)] = LAND + 0.004
+  writeHeights(cliff)
+  const mild = m._core_building_place(...gridDirection(4, 4), 0, BUILDING_KIND_HUT)
+  ok('a gentle slope still reads as a pad', mild === 2 && m._core_building_site(...gridDirection(4, 4)) === BUILDING_SITE.occupied,
+     `id ${mild}, site ${m._core_building_site(...gridDirection(4, 4))}`)
+}
+
+writeHeights(grid.heights)
+{
+  const before = Math.hypot(...buildingInstance(hutId).slice(0, 3))
+  const raised = Float32Array.from(grid.heights)
+  raised[nodeAt(8, 8)] = LAND + 0.01
+  writeHeights(raised)
+  m._core_tick(50)
+  const after = buildingInstance(hutId).slice(0, 3)
+  const radius = Math.hypot(...after)
+  ok('a sculpt under the hut lifts it with the anchor node',
+     Math.abs((radius - before) - 0.01) < 1e-4, `before ${before.toFixed(4)} after ${radius.toFixed(4)}`)
+  const along = after[0] * pad[0] + after[1] * pad[1] + after[2] * pad[2]
+  ok('and it stays anchored to that node', along / radius > 0.999)
+}
+
+m._core_buildings_clear()
+writeHeights(grid.heights)
+ok('clearing buildings frees the pad', m._core_building_count() === 0 &&
+   m._core_building_site(...pad) === BUILDING_SITE.ok)
+
+// ---------------------------------------------------------------------------
 // Huts: flatten a pad, build on it, send people in, watch them breed.
 
 /** Mirrors kHutCapacity / kHutRadius in cpp/include/1inkulous/huts.hpp. */

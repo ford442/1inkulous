@@ -19,6 +19,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CORE_SOURCES
   src/core.cpp
   src/core_abi.cpp
+  src/buildings.cpp
   src/followers.cpp
   src/huts.cpp
   src/nav.cpp

@@ -1,5 +1,6 @@
 import type { Vec3 } from '../engine/math'
 import createCoreModule, { type CoreModule } from '../wasm/core.js'
+import type { BuildingSite } from './buildingSite'
 import type { HutSite } from './hutSite'
 
 /**
@@ -25,6 +26,7 @@ export type NavCommitOptions = {
   maxSlope?: number
 }
 
+export { BuildingSite } from './buildingSite'
 export { HutSite } from './hutSite'
 
 export type Simulation = {
@@ -87,6 +89,24 @@ export type Simulation = {
   readonly hutRadius: number
   readonly hutCapacity: number
 
+  /** Whether a building could claim the nav node nearest a direction, and if not, why. */
+  buildingSite: (direction: Vec3) => BuildingSite
+  /**
+   * Claims that node for `tribe` and `kind` (0 is a hut). Returns its id, or
+   * -1 if the site is water, too steep, already taken, or otherwise refused.
+   * Does not sculpt.
+   */
+  placeBuilding: (direction: Vec3, tribe: number, kind: number) => number
+  readonly buildingCount: number
+  /**
+   * Live view of the building instance buffer — position, tribe, kind,
+   * occupants, flags. Re-read it every frame.
+   */
+  buildingInstances: () => Float32Array
+  readonly buildingInstanceFloats: number
+  /** Placeholder radius in world units, for the mesh and the build cursor. */
+  readonly buildingRadius: number
+
   /** Escape hatch for future bulk reads straight out of linear memory. */
   readonly module: CoreModule
 }
@@ -129,6 +149,7 @@ export async function createSimulation(
 
   const instanceFloats = module._core_follower_instance_floats()
   const hutInstanceFloats = module._core_hut_instance_floats()
+  const buildingInstanceFloats = module._core_building_instance_floats()
   // Cached only to spot a stale build; the pointer itself is re-read per call.
   let navNodeCount = 0
 
@@ -284,5 +305,29 @@ export async function createSimulation(
     hutInstanceFloats,
     hutRadius: module._core_hut_radius(),
     hutCapacity: module._core_hut_capacity(),
+
+    buildingSite(direction: Vec3) {
+      return module._core_building_site(direction[0], direction[1], direction[2]) as BuildingSite
+    },
+
+    placeBuilding(direction: Vec3, tribe: number, kind: number) {
+      return module._core_building_place(direction[0], direction[1], direction[2], tribe, kind)
+    },
+
+    get buildingCount() {
+      return module._core_building_count()
+    },
+
+    buildingInstances() {
+      const count = module._core_building_count()
+      if (count === 0) {
+        return new Float32Array(0)
+      }
+      const start = module._core_building_instances() >> 2
+      return module.HEAPF32.subarray(start, start + count * buildingInstanceFloats)
+    },
+
+    buildingInstanceFloats,
+    buildingRadius: module._core_building_radius(),
   }
 }

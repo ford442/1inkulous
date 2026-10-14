@@ -249,4 +249,28 @@ INKULOUS_EXPORT double core_hut_radius(void) { return inkulous::kHutRadius; }
 
 INKULOUS_EXPORT int core_hut_capacity(void) { return inkulous::kHutCapacity; }
 
+// --- buildings ------------------------------------------------------------
+
+INKULOUS_EXPORT int core_building_site(double x, double y, double z) {
+  return static_cast<int>(simulation().buildings().check_site(x, y, z));
+}
+
+INKULOUS_EXPORT int core_building_place(double x, double y, double z, int tribe, int kind) {
+  return simulation().buildings().place(x, y, z, tribe, kind);
+}
+
+INKULOUS_EXPORT int core_building_count(void) { return simulation().buildings().count(); }
+
+INKULOUS_EXPORT void core_buildings_clear(void) { simulation().buildings().clear(); }
+
+INKULOUS_EXPORT float* core_building_instances(void) {
+  return const_cast<float*>(simulation().buildings().instances());
+}
+
+INKULOUS_EXPORT int core_building_instance_floats(void) {
+  return inkulous::kBuildingInstanceFloats;
+}
+
+INKULOUS_EXPORT double core_building_radius(void) { return inkulous::kBuildingRadius; }
+
 }  // extern "C"

@@ -14,7 +14,8 @@
     "deploy": "python3 deploy.py",
     "test:core": "node scripts/test-core.mjs",
     "test:select": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-rubber-band.ts",
-    "test:huts": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-huts.ts"
+    "test:huts": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-huts.ts",
+    "test:buildings": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-buildings.ts"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.71",

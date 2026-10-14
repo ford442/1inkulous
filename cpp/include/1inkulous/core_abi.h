@@ -166,6 +166,35 @@ int core_hut_order_enter(int id);
 double core_hut_radius(void);
 int core_hut_capacity(void);
 
+// --- buildings ------------------------------------------------------------
+//
+// A building claims the nav node nearest the point and that node's
+// neighbourhood, when the patch is land and flatter than the walk limit.
+// Ids are dense indices into the building instance buffer. Buildings are not
+// removed during a match, so an id stays good until core_buildings_clear.
+
+// Whether a building could stand on the node nearest the direction: 0 yes,
+// otherwise the reason — 1 no grid, 2 water, 3 too steep, 4 footprint
+// overlaps a building, 5 the building ceiling is reached. Mirrors
+// inkulous::BuildingSite.
+int core_building_site(double x, double y, double z);
+
+// Claims that node. `kind` is 0 for a hut. Returns the id, or -1 if
+// core_building_site would refuse it or `kind` is negative. Does not sculpt.
+int core_building_place(double x, double y, double z, int tribe, int kind);
+
+int core_building_count(void);
+void core_buildings_clear(void);
+
+// Packed render instances: core_building_instance_floats() floats each, in id
+// order. Position, tribe, kind, occupant count, flags. Moves as buildings are
+// placed, so re-read it per frame.
+float* core_building_instances(void);
+int core_building_instance_floats(void);
+
+// Placeholder radius in world units, for the mesh and the build cursor.
+double core_building_radius(void);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

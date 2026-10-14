@@ -25,6 +25,7 @@ Simulation::Simulation(double step_ms)
     : step_ms_(step_ms > 0.0 ? step_ms : kDefaultStepMs) {
   followers_.set_grid(&nav_);
   huts_.attach(&nav_, &followers_);
+  buildings_.set_grid(&nav_);
 }
 
 void Simulation::set_step_ms(double step_ms) {
@@ -61,6 +62,7 @@ std::int32_t Simulation::advance(double delta_ms) {
   if (steps > 0) {
     followers_.refresh_instances();
     huts_.refresh_instances();
+    buildings_.refresh_instances();
   }
 
   return steps;

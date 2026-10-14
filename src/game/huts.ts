@@ -52,7 +52,17 @@ export type HutUpdate = {
   building: boolean
 }
 
+export type HutOptions = {
+  /**
+   * When false, B does not toggle build mode. Land-claim buildings own that
+   * key; a right-click on one of these huts is still an enter order.
+   */
+  buildMode?: boolean
+}
+
 export type Huts = {
+  /** False when another system owns the B key, so the HUD does not offer it here. */
+  readonly ownsBuildKey: boolean
   readonly building: boolean
   /** Null outside build mode, while sculpting, or with the cursor off the planet. */
   readonly ghost: HutGhost | null
@@ -73,7 +83,8 @@ export type Huts = {
   update: (deltaMs: number, input: InputSnapshot, view: HutViewContext) => HutUpdate
 }
 
-export function createHuts(planet: Planet, simulation: Simulation): Huts {
+export function createHuts(planet: Planet, simulation: Simulation, options: HutOptions = {}): Huts {
+  const buildMode = options.buildMode !== false
   const radius = simulation.hutRadius
   const height = radius * HUT_HEIGHT_RATIO
   const instanceFloats = simulation.hutInstanceFloats
@@ -102,6 +113,7 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
   }
 
   return {
+    ownsBuildKey: buildMode,
     get building() {
       return building
     },
@@ -151,7 +163,7 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
         notice = null
       }
 
-      if (BUILD_KEYS.some((code) => input.pressed.has(code))) {
+      if (buildMode && BUILD_KEYS.some((code) => input.pressed.has(code))) {
         building = !building
       }
       if (CANCEL_KEYS.some((code) => input.pressed.has(code))) {

@@ -6,6 +6,7 @@ import { createFollowers, type Followers } from './followers'
 import { createHuts, type Huts } from './huts'
 import { createPlanet, type Planet } from './planet'
 import { createSculptor, isSculptModifierHeld, type Sculptor } from './sculpt'
+import { createShaman, type Shaman } from './shaman'
 
 export type Game = {
   clearColor: [number, number, number]
@@ -15,6 +16,7 @@ export type Game = {
   followers: Followers
   huts: Huts
   buildings: Buildings
+  shaman: Shaman
   /**
    * `aspect` is the viewport's width / height, needed to turn the cursor into a
    * world-space ray for terrain picking.
@@ -41,6 +43,7 @@ export function createGame(simulation: Simulation): Game {
   // they no longer share the build key.
   const buildings = createBuildings(planet, simulation)
   const huts = createHuts(planet, simulation, { buildMode: false })
+  const shaman = createShaman(planet, simulation, { syncTerrain: followers.syncTerrain })
 
   // Open on the tribe. The starting village is wherever the flattest land
   // turned out to be, which is as likely to be behind the planet as in front.
@@ -59,6 +62,7 @@ export function createGame(simulation: Simulation): Game {
     followers,
     huts,
     buildings,
+    shaman,
     get clearColor() {
       return state.clearColor
     },
@@ -77,25 +81,34 @@ export function createGame(simulation: Simulation): Game {
       // buffer before a hut site is judged or anything paths over it.
       followers.syncTerrain()
 
-      // Buildings see the clicks first: placing a hut is not also a selection
-      // or a move order. Build mode owns the left button, so no selection box
-      // starts while placing. Breeding huts still claim a right-click on one
-      // of their own.
-      const placed = buildings.update(deltaMs, input, { camera, aspect })
+      // A spell being aimed sees the clicks first: a Land Bridge cast is not
+      // also a hut, a selection or a move order. Then buildings, which own the
+      // left button in build mode so no selection box starts while placing.
+      // Breeding huts still claim a right-click on one of their own.
       const pointer = input.pointer
-      const afterPlace: InputSnapshot =
-        placed.consumed.size === 0
+      const without = (taken: ReadonlySet<PointerClick>): InputSnapshot =>
+        taken.size === 0
           ? input
           : {
               ...input,
               pointer: {
                 ...pointer,
-                clicks: pointer.clicks.filter((click) => !placed.consumed.has(click)),
+                clicks: pointer.clicks.filter((click) => !taken.has(click)),
               },
             }
-      const housed = huts.update(deltaMs, afterPlace, { camera, aspect })
-      const claimed = new Set<PointerClick>([...placed.consumed, ...housed.consumed])
-      const placing = placed.building || housed.building
+      const aimed = shaman.update(deltaMs, input, { camera, aspect })
+      const placed = buildings.update(deltaMs, without(aimed.consumed), { camera, aspect })
+      const housed = huts.update(
+        deltaMs,
+        without(new Set([...aimed.consumed, ...placed.consumed])),
+        { camera, aspect },
+      )
+      const claimed = new Set<PointerClick>([
+        ...aimed.consumed,
+        ...placed.consumed,
+        ...housed.consumed,
+      ])
+      const placing = aimed.targeting || placed.building || housed.building
       const forFollowers: InputSnapshot =
         claimed.size === 0 && !placing
           ? input

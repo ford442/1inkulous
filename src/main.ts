@@ -27,7 +27,7 @@ async function main() {
 
   const game = createGame(simulation)
   hud.setStatus(
-    `core ${simulation.version} · ${game.followers.count} followers — starting renderer…`,
+    `core ${simulation.version} · ${game.followers.count} followers (one a shaman) — starting renderer…`,
   )
 
   const renderer = await createRenderer(canvas, game)
@@ -85,6 +85,7 @@ async function main() {
     hud.setFollowers(game.followers)
     hud.setHuts(game.huts)
     hud.setBuildings(game.buildings)
+    hud.setShaman(game.shaman)
     hud.setSelectionBand(game.followers.selectionBand)
 
     input.endFrame()

@@ -6,6 +6,7 @@
 #include "1inkulous/followers.hpp"
 #include "1inkulous/huts.hpp"
 #include "1inkulous/nav.hpp"
+#include "1inkulous/shaman.hpp"
 
 // Simulation core. Compiled to WebAssembly and driven from TypeScript through
 // the flat C ABI in `core_abi.hpp` — pathfinding, AI and sphere maths will grow
@@ -14,7 +15,7 @@ namespace inkulous {
 
 // Semantic version of the core, so the loader can report what it got.
 constexpr int kVersionMajor = 0;
-constexpr int kVersionMinor = 4;
+constexpr int kVersionMinor = 5;
 constexpr int kVersionPatch = 0;
 
 // Encoded as MAJOR * 10000 + MINOR * 100 + PATCH: cheap to pass across the
@@ -60,6 +61,7 @@ class Simulation {
   FollowerSet& followers() { return followers_; }
   HutSet& huts() { return huts_; }
   BuildingSet& buildings() { return buildings_; }
+  Shamans& shamans() { return shamans_; }
 
   std::int64_t step_count() const { return step_count_; }
   // Simulated time in milliseconds, i.e. whole steps only.
@@ -79,6 +81,7 @@ class Simulation {
   FollowerSet followers_;
   HutSet huts_;
   BuildingSet buildings_;
+  Shamans shamans_;
 };
 
 }  // namespace inkulous

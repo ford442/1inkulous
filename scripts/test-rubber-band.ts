@@ -179,7 +179,7 @@ const simulation = {
 } as unknown as Simulation
 
 const planet = createPlanet({ resolution: 2, terrain: 'placeholder', radius: 1 })
-const followers = createFollowers(planet, simulation, { spawnCount: 0 })
+const followers = createFollowers(planet, simulation, { spawnCount: 0, shamanTribe: null })
 
 const view = { camera, aspect: CANVAS_ASPECT }
 

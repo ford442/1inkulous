@@ -195,6 +195,55 @@ int core_building_instance_floats(void);
 // Placeholder radius in world units, for the mesh and the build cursor.
 double core_building_radius(void);
 
+// --- shaman and Land Bridge ---------------------------------------------
+//
+// The shaman is a follower with kFlagShaman set: select, order and draw her
+// through the follower calls. Mana is one number per tribe (0..3), filled
+// every fixed step by the tribe's population.
+//
+// A cast is decided here and carried out in TypeScript, which owns the
+// terrain: on success the core has charged the mana and written a plan — a
+// row of stamp directions, a crest height and a stamp radius — that the game
+// lays with the sculpt primitive before writing the new heights into
+// core_nav_heights. A refused cast writes no plan.
+
+// Spawns `tribe`'s shaman on the walkable node nearest the direction. Returns
+// her follower id, or -1 if the tribe already has one or there is no land.
+int core_shaman_spawn(double x, double y, double z, int tribe);
+// `tribe`'s shaman's follower id, or -1. Ids shift as followers go into huts,
+// so look it up each time rather than keeping it.
+int core_shaman(int tribe);
+
+// Mana `tribe` holds, 0 for a bad tribe; what it gains per second right now;
+// and the ceiling it stops at.
+double core_mana(int tribe);
+double core_mana_income(int tribe);
+double core_mana_max(void);
+// Sets a tribe's mana, clamped to [0, max]. For tests and scenario setup.
+void core_mana_set(int tribe, double mana);
+
+// Mana a Land Bridge costs, and how far from the shaman, in world units along
+// the surface, both of its ends may lie.
+double core_land_bridge_cost(void);
+double core_land_bridge_range(void);
+
+// Whether `tribe`'s shaman could raise a bridge from (x0, y0, z0) to (x1, y1,
+// z1): 0 yes, otherwise the reason — 1 no grid, 2 no shaman, 3 an end out of
+// range, 4 neither end near land, 5 already dry, 6 not enough mana. Mirrors
+// inkulous::LandBridge. Charges nothing.
+int core_land_bridge_check(int tribe, double x0, double y0, double z0, double x1, double y1, double z1);
+// The same check; on 0 the mana is spent and the plan below is written. Any
+// other result empties the plan.
+int core_land_bridge_cast(int tribe, double x0, double y0, double z0, double x1, double y1, double z1);
+
+// The last cast's plan: core_land_bridge_stamp_count() stamps of 3 floats (a
+// unit direction) each; every stamp's angular radius in radians; and the
+// height above sea level the stamps raise the centre line to.
+int core_land_bridge_stamp_count(void);
+float* core_land_bridge_stamps(void);
+double core_land_bridge_stamp_radius(void);
+double core_land_bridge_height(void);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

@@ -2,6 +2,7 @@ import type { Vec3 } from '../engine/math'
 import createCoreModule, { type CoreModule } from '../wasm/core.js'
 import type { BuildingSite } from './buildingSite'
 import type { HutSite } from './hutSite'
+import type { LandBridge } from './landBridge'
 
 /**
  * The JS side of the WASM boundary.
@@ -28,6 +29,17 @@ export type NavCommitOptions = {
 
 export { BuildingSite } from './buildingSite'
 export { HutSite } from './hutSite'
+export { LandBridge } from './landBridge'
+
+/** What a successful Land Bridge cast asks the terrain to do. */
+export type LandBridgePlan = {
+  /** Stamp centres along the bridge, as unit directions, in order. */
+  readonly stamps: readonly Vec3[]
+  /** Angular radius of each stamp, in radians. */
+  readonly stampRadius: number
+  /** Height above sea level the centre line is raised to. */
+  readonly height: number
+}
 
 export type Simulation = {
   /** Core version reported by the module, e.g. "0.2.0". */
@@ -106,6 +118,32 @@ export type Simulation = {
   readonly buildingInstanceFloats: number
   /** Placeholder radius in world units, for the mesh and the build cursor. */
   readonly buildingRadius: number
+
+  /** Spawns a tribe's shaman. Returns her follower id, or -1 if refused. */
+  spawnShaman: (direction: Vec3, tribe: number) => number
+  /** A tribe's shaman's follower id, or -1. Ids shift; look it up each time. */
+  shamanId: (tribe: number) => number
+  mana: (tribe: number) => number
+  /** Mana a tribe is gaining per second right now. */
+  manaIncome: (tribe: number) => number
+  setMana: (tribe: number, mana: number) => void
+  readonly manaMax: number
+  readonly landBridgeCost: number
+  /** Furthest either end of a bridge may be from the shaman, in world units. */
+  readonly landBridgeRange: number
+  /** Angular radius of each bridge stamp, in radians: half the strip's width. */
+  readonly landBridgeStampRadius: number
+  /** Whether a tribe's shaman could bridge `from` to `to`, and if not, why. */
+  checkLandBridge: (tribe: number, from: Vec3, to: Vec3) => LandBridge
+  /**
+   * Casts it: on success the mana is spent and the plan comes back for the
+   * terrain to carry out; otherwise the reason, and nothing has changed.
+   */
+  castLandBridge: (
+    tribe: number,
+    from: Vec3,
+    to: Vec3,
+  ) => { result: LandBridge; plan: LandBridgePlan | null }
 
   /** Escape hatch for future bulk reads straight out of linear memory. */
   readonly module: CoreModule
@@ -329,5 +367,76 @@ export async function createSimulation(
 
     buildingInstanceFloats,
     buildingRadius: module._core_building_radius(),
+
+    spawnShaman(direction: Vec3, tribe: number) {
+      return module._core_shaman_spawn(direction[0], direction[1], direction[2], tribe)
+    },
+
+    shamanId(tribe: number) {
+      return module._core_shaman(tribe)
+    },
+
+    mana(tribe: number) {
+      return module._core_mana(tribe)
+    },
+
+    manaIncome(tribe: number) {
+      return module._core_mana_income(tribe)
+    },
+
+    setMana(tribe: number, mana: number) {
+      module._core_mana_set(tribe, mana)
+    },
+
+    manaMax: module._core_mana_max(),
+    landBridgeCost: module._core_land_bridge_cost(),
+    landBridgeRange: module._core_land_bridge_range(),
+    // Read live: it depends on the planet radius the nav graph commits.
+    get landBridgeStampRadius() {
+      return module._core_land_bridge_stamp_radius()
+    },
+
+    checkLandBridge(tribe: number, from: Vec3, to: Vec3) {
+      return module._core_land_bridge_check(
+        tribe,
+        from[0],
+        from[1],
+        from[2],
+        to[0],
+        to[1],
+        to[2],
+      ) as LandBridge
+    },
+
+    castLandBridge(tribe: number, from: Vec3, to: Vec3) {
+      const result = module._core_land_bridge_cast(
+        tribe,
+        from[0],
+        from[1],
+        from[2],
+        to[0],
+        to[1],
+        to[2],
+      ) as LandBridge
+      if (result !== 0) {
+        return { result, plan: null }
+      }
+      // Copied out at once: the buffer is the core's and the next cast reuses it.
+      const count = module._core_land_bridge_stamp_count()
+      const start = module._core_land_bridge_stamps() >> 2
+      const stamps: Vec3[] = []
+      for (let i = 0; i < count; i += 1) {
+        const base = start + i * 3
+        stamps.push([module.HEAPF32[base], module.HEAPF32[base + 1], module.HEAPF32[base + 2]])
+      }
+      return {
+        result,
+        plan: {
+          stamps,
+          stampRadius: module._core_land_bridge_stamp_radius(),
+          height: module._core_land_bridge_height(),
+        },
+      }
+    },
   }
 }

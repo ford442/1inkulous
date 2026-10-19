@@ -255,6 +255,24 @@ void FollowerSet::remove(std::int32_t id) {
   refresh_instances();
 }
 
+bool FollowerSet::make_shaman(std::int32_t id) {
+  if (id < 0 || id >= count()) {
+    return false;
+  }
+  followers_[static_cast<std::size_t>(id)].shaman = true;
+  refresh_instances();
+  return true;
+}
+
+std::int32_t FollowerSet::shaman(std::int32_t tribe) const {
+  for (std::size_t i = 0; i < followers_.size(); ++i) {
+    if (followers_[i].shaman && followers_[i].tribe == tribe) {
+      return static_cast<std::int32_t>(i);
+    }
+  }
+  return -1;
+}
+
 std::int32_t FollowerSet::hut(std::int32_t id) const {
   if (id < 0 || id >= count()) {
     return -1;
@@ -1382,6 +1400,7 @@ void FollowerSet::refresh_instances() {
     std::int32_t flags = 0;
     if (follower.selected) flags |= kFlagSelected;
     if (walking(follower)) flags |= kFlagWalking;
+    if (follower.shaman) flags |= kFlagShaman;
     out[7] = static_cast<float>(flags);
   }
 }

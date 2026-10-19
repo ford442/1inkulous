@@ -50,6 +50,7 @@ emcc -v   # confirm
 | `npm run build:wasm` | Compiles `cpp/` into `src/wasm/core.js` + `core.wasm` |
 | `npm run test:core` | Headless checks of the core in Node (no browser needed) |
 | `npm run test:huts` | Flatten brush, hut picking and build mode, against a fake core |
+| `npm run test:shaman` | Shaman, mana and Land Bridge end to end, on the real core and planet |
 | `npm run clean:wasm` | Removes the CMake build directory and generated artifacts |
 
 `src/wasm/core.js` and `core.wasm` are generated and git-ignored;
@@ -101,6 +102,10 @@ heights get in.
 | Click, in build mode | Build a hut there, if the site is good (Shift keeps placing) |
 | Right-click a hut | Send the selected followers inside |
 | Hold `C` + wheel, `[` `]` | Brush size, brush strength |
+| `F` | Select the shaman and centre the view on her |
+| `L` | Aim a Land Bridge (`L`, `Esc`, `B` or right-click cancels) |
+| Click, while aiming | Raise land from the shaman to there (Shift keeps aiming) |
+| Drag, while aiming | Raise land from where the drag began to where it ends |
 
 Shift-click toggles one follower; Shift-drag adds everyone in the box. A plain
 drag replaces the selection, and a click that does not move stays a single
@@ -279,6 +284,63 @@ ghost is one more instance on the end of that buffer, drawn blended.
 - Sculpting under a hut moves it with the ground rather than damaging it.
 - Nobody comes back out except newborns; there is no eject order yet.
 - No wood, no training huts, no upgrades — first huts are free and all alike.
+
+## The shaman and Land Bridge
+
+One special unit and one spell, and the spell only works because the world
+already has live heights and a walkable graph.
+
+**The shaman is a follower with a flag.** She spawns at the heart of the
+opening village, on top of the 60 pawns, as the player's (blue) tribe's
+shaman: `kFlagShaman` in the instance buffer, drawn taller and in a pale robe
+over her tribe colour. Everything else — selecting, box selection, move
+orders, avoidance — is the follower code, unchanged. She never goes into a
+hut. Ids shift as followers go inside, so the core looks her up by tribe
+(`core_shaman`) instead of anyone keeping her number.
+
+**Mana is one number per tribe.** Every fixed step each tribe gains
+`population × 1` mana per second, counting followers outside and occupants
+inside huts, up to 1000. The HUD shows the player's mana and current income.
+
+**Land Bridge costs 200 and raises a strip of land along the great circle
+between two points.** Click while aiming and the strip runs from the shaman
+to the click; drag and it runs from where the drag began to where it ends.
+The core decides, in `Shamans::plan` (`cpp/src/shaman.cpp`):
+
+- both ends must be within 0.3 of the shaman (a few cells: a strait, not an
+  ocean);
+- at least one end must be ashore: dry, or within 0.1 of walkable land, in
+  which case it is pulled onto that land so the bridge lands rather than
+  stopping short. Two ends out at sea are refused; one is a pier;
+- the line must cross water — sampled a fraction of a cell at a time with the
+  same weight rule routes use — or there is nothing to raise;
+- and the tribe must have the mana.
+
+On success it charges the mana and hands back a plan: stamp centres half a
+stamp apart along the line, a stamp radius (0.09, about three cells of strip)
+and a crest height (0.01 above sea level). The terrain is TypeScript's, so
+`layLandBridge` (`src/game/shaman.ts`) lays the stamps with `planet.sculpt`,
+each lifting its centre to the crest and doing nothing where the ground is
+already higher, then pushes the new heights into the core with
+`writeNavHeights`. That is the whole update: the graph is never rebuilt, and
+the next order walks over the bridge. A refused cast returns no plan, spends
+nothing and moves no terrain. While aiming, the cursor disc marks the far end
+at the strip's width, green where the core would raise it and red where it
+would not, and the HUD says why.
+
+`npm run test:shaman` checks all of this on the real planet: it rings the
+village with a moat, shows no route crosses it, casts through the game
+module with no mana (nothing moves), then with mana, and walks the shaman
+over the new land with no graph upload.
+
+### Not done yet
+
+- Enemy shamans, reincarnation and a spell panel. Only the player's tribe
+  has a shaman; the other tribes bank mana with nothing to spend it on.
+- A bridge is a ridge of sculpted earth like any other, so the brush can
+  undo it, and followers standing in its path are lifted with the ground.
+- The cast is instant. There is no casting animation, cooldown or
+  line-of-sight rule.
 
 ## Design notes
 

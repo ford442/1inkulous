@@ -54,6 +54,11 @@ export type FollowersOptions = {
    * colours (blue, red, yellow, green) so they all show at game start.
    */
   tribe?: number
+  /**
+   * The tribe whose shaman stands at the heart of the village, on top of the
+   * `spawnCount` ordinary followers. Null for no shaman. Defaults to tribe 0.
+   */
+  shamanTribe?: number | null
 }
 
 export type FollowerViewContext = {
@@ -117,21 +122,32 @@ export function createFollowers(
 
   syncHeights()
 
-  const wanted = Math.min(options.spawnCount ?? DEFAULT_SPAWN_COUNT, MAX_FOLLOWERS)
-  const spawnNodes = findSpawnNodes(graph, heights, planet.radius, wanted)
+  const shamanTribe = options.shamanTribe === undefined ? 0 : options.shamanTribe
+  const wanted = Math.min(options.spawnCount ?? DEFAULT_SPAWN_COUNT, MAX_FOLLOWERS - 1)
+  const spawnNodes = findSpawnNodes(
+    graph,
+    heights,
+    planet.radius,
+    wanted + (shamanTribe === null ? 0 : 1),
+  )
+
+  const nodeDirection = (node: number): Vec3 => [
+    graph.directions[node * 3],
+    graph.directions[node * 3 + 1],
+    graph.directions[node * 3 + 2],
+  ]
 
   let homeDirection: Vec3 | null = null
-  for (let i = 0; i < spawnNodes.length; i += 1) {
-    const node = spawnNodes[i]
-    const tribe = options.tribe ?? i % 4
-    simulation.spawnFollower(
-      [
-        graph.directions[node * 3],
-        graph.directions[node * 3 + 1],
-        graph.directions[node * 3 + 2],
-      ],
-      tribe,
-    )
+  // The shaman takes the first node, the flattest spot the spread grew from,
+  // so she starts in the middle of her people.
+  let first = 0
+  if (shamanTribe !== null && spawnNodes.length > 0) {
+    simulation.spawnShaman(nodeDirection(spawnNodes[0]), shamanTribe)
+    first = 1
+  }
+  for (let i = first; i < spawnNodes.length; i += 1) {
+    const tribe = options.tribe ?? (i - first) % 4
+    simulation.spawnFollower(nodeDirection(spawnNodes[i]), tribe)
   }
 
   if (spawnNodes.length > 0) {

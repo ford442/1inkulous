@@ -6,13 +6,13 @@
 namespace inkulous {
 namespace {
 
-// "0.4.0" — built by hand so the string is static storage with no allocation,
+// "0.5.0" — built by hand so the string is static storage with no allocation,
 // which keeps core_version_text() safe to hand across the WASM boundary.
 #define INKULOUS_STRINGIFY_(x) #x
 #define INKULOUS_STRINGIFY(x) INKULOUS_STRINGIFY_(x)
-constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(4) "." INKULOUS_STRINGIFY(0);
+constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(5) "." INKULOUS_STRINGIFY(0);
 
-static_assert(kVersionMajor == 0 && kVersionMinor == 4 && kVersionPatch == 0,
+static_assert(kVersionMajor == 0 && kVersionMinor == 5 && kVersionPatch == 0,
               "kVersionText must be kept in step with the version constants");
 
 }  // namespace
@@ -26,6 +26,7 @@ Simulation::Simulation(double step_ms)
   followers_.set_grid(&nav_);
   huts_.attach(&nav_, &followers_);
   buildings_.set_grid(&nav_);
+  shamans_.attach(&nav_, &followers_, &huts_);
 }
 
 void Simulation::set_step_ms(double step_ms) {
@@ -55,6 +56,8 @@ std::int32_t Simulation::advance(double delta_ms) {
     // After the followers have moved, so someone who reached a door this step
     // goes in on it.
     huts_.step(dt_seconds);
+    // Last, so mana counts the tribe as this step left it: births and all.
+    shamans_.step(dt_seconds);
   }
 
   // One rebuild per frame rather than per step: the renderer only ever sees the

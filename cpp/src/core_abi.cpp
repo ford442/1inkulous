@@ -273,4 +273,71 @@ INKULOUS_EXPORT int core_building_instance_floats(void) {
 
 INKULOUS_EXPORT double core_building_radius(void) { return inkulous::kBuildingRadius; }
 
+// --- shaman and Land Bridge ---------------------------------------------
+
+INKULOUS_EXPORT int core_shaman_spawn(double x, double y, double z, int tribe) {
+  return simulation().shamans().spawn(x, y, z, tribe);
+}
+
+INKULOUS_EXPORT int core_shaman(int tribe) {
+  if (tribe < 0 || tribe >= inkulous::kMaxTribes) {
+    return -1;
+  }
+  return simulation().followers().shaman(tribe);
+}
+
+INKULOUS_EXPORT double core_mana(int tribe) { return simulation().shamans().mana(tribe); }
+
+INKULOUS_EXPORT double core_mana_income(int tribe) {
+  return simulation().shamans().income(tribe);
+}
+
+INKULOUS_EXPORT double core_mana_max(void) { return inkulous::kMaxMana; }
+
+INKULOUS_EXPORT void core_mana_set(int tribe, double mana) {
+  simulation().shamans().set_mana(tribe, mana);
+}
+
+INKULOUS_EXPORT double core_land_bridge_cost(void) { return inkulous::kLandBridgeCost; }
+
+INKULOUS_EXPORT double core_land_bridge_range(void) { return inkulous::kLandBridgeRange; }
+
+INKULOUS_EXPORT int core_land_bridge_check(int tribe,
+                                           double x0,
+                                           double y0,
+                                           double z0,
+                                           double x1,
+                                           double y1,
+                                           double z1) {
+  const double a[3] = {x0, y0, z0};
+  const double b[3] = {x1, y1, z1};
+  return static_cast<int>(simulation().shamans().check_land_bridge(tribe, a, b));
+}
+
+INKULOUS_EXPORT int core_land_bridge_cast(int tribe,
+                                          double x0,
+                                          double y0,
+                                          double z0,
+                                          double x1,
+                                          double y1,
+                                          double z1) {
+  const double a[3] = {x0, y0, z0};
+  const double b[3] = {x1, y1, z1};
+  return static_cast<int>(simulation().shamans().cast_land_bridge(tribe, a, b));
+}
+
+INKULOUS_EXPORT int core_land_bridge_stamp_count(void) {
+  return simulation().shamans().stamp_count();
+}
+
+INKULOUS_EXPORT float* core_land_bridge_stamps(void) {
+  return const_cast<float*>(simulation().shamans().stamps());
+}
+
+INKULOUS_EXPORT double core_land_bridge_stamp_radius(void) {
+  return simulation().shamans().stamp_angle();
+}
+
+INKULOUS_EXPORT double core_land_bridge_height(void) { return inkulous::kLandBridgeHeight; }
+
 }  // extern "C"

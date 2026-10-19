@@ -22,8 +22,8 @@ const ok = (name, pass, detail = '') => out.push(`${pass ? 'PASS' : 'FAIL'}  ${n
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
-ok('version string', version === '0.4.0', version)
-ok('encoded version matches', m._core_version() === 400, String(m._core_version()))
+ok('version string', version === '0.5.0', version)
+ok('encoded version matches', m._core_version() === 500, String(m._core_version()))
 
 // default step
 m._core_init(0)
@@ -1198,6 +1198,100 @@ const stepMs = Number(process.hrtime.bigint() - stepStarted) / 1e6
 // millisecond per step for a crowd this size is half a percent of the step.
 ok('200 steps of 60 walking followers stay cheap',
    stepMs < 50, `${stepMs.toFixed(1)}ms total, ${(stepMs / 200 * 1000).toFixed(0)}us per step`)
+
+// ---------------------------------------------------------------------------
+// The shaman, mana and Land Bridge, on the small patch with a strait down it.
+
+m._core_followers_clear()
+m._core_huts_clear()
+uploadGrid(grid.heights)
+const strait = Float32Array.from(grid.heights)
+for (let j = 0; j < GRID; j += 1) {
+  for (let i = 7; i <= 9; i += 1) strait[nodeAt(i, j)] = 0
+}
+writeHeights(strait)
+
+const westShore = gridDirection(6, 8)
+const eastShore = gridDirection(10, 8)
+const bridgeCheck = (a, b) => m._core_land_bridge_check(0, ...a, ...b)
+const bridgeCast = (a, b) => m._core_land_bridge_cast(0, ...a, ...b)
+
+ok('with no shaman there is no bridge', bridgeCheck(westShore, eastShore) === 2)
+const shamanId = m._core_shaman_spawn(...westShore, 0)
+ok('a shaman spawns as a follower', shamanId >= 0 && m._core_shaman(0) === shamanId &&
+   m._core_follower_count() === 1)
+ok('her instance carries the shaman flag', (instances().data[shamanId * 8 + 7] & 4) !== 0)
+ok('a second shaman for the tribe is refused', m._core_shaman_spawn(...westShore, 0) === -1)
+ok('and a tribe out of range gets none', m._core_shaman_spawn(...westShore, 9) === -1 && m._core_shaman(9) === -1)
+
+m._core_mana_set(0, 0)
+ok('a bridge needs mana', bridgeCheck(westShore, eastShore) === 6)
+ok('a cast without it is refused and plans nothing',
+   bridgeCast(westShore, eastShore) === 6 && m._core_land_bridge_stamp_count() === 0 && m._core_mana(0) === 0)
+
+m._core_mana_set(0, 500)
+ok('dry ground needs no bridge', bridgeCheck(westShore, gridDirection(5, 6)) === 5)
+ok('an end past her reach is refused', bridgeCheck(westShore, gridDirection(14, 8)) === 3)
+
+const openSea = Float32Array.from(grid.heights)
+for (let j = 0; j < GRID; j += 1) {
+  for (let i = 7; i < GRID; i += 1) openSea[nodeAt(i, j)] = 0
+}
+writeHeights(openSea)
+ok('a bridge with neither end near a shore is refused',
+   bridgeCheck(gridDirection(9, 8), gridDirection(11, 8)) === 4)
+ok('a pier from her shore out to sea is not', bridgeCheck(westShore, gridDirection(11, 8)) === 0)
+writeHeights(strait)
+ok('no refusal touched the mana', m._core_mana(0) === 500)
+
+const unbridged = m._core_nav_route(...westShore, ...eastShore, 0)
+ok('the strait has no way across', unbridged === -1)
+ok('a good cast succeeds and is paid for', bridgeCast(westShore, eastShore) === 0 &&
+   m._core_mana(0) === 500 - m._core_land_bridge_cost(), `${m._core_mana(0)} left`)
+const stampCount = m._core_land_bridge_stamp_count()
+const stampAt = (k) => {
+  const base = (m._core_land_bridge_stamps() >> 2) + k * 3
+  return [m.HEAPF32[base], m.HEAPF32[base + 1], m.HEAPF32[base + 2]]
+}
+ok('its plan runs shore to shore', stampCount >= 3 &&
+   angleTo(stampAt(0), westShore) < 1e-5 && angleTo(stampAt(stampCount - 1), eastShore) < 1e-5,
+   `${stampCount} stamps`)
+const stampRadius = m._core_land_bridge_stamp_radius()
+ok('and overlaps, stamp to stamp', angleTo(stampAt(0), stampAt(1)) <= stampRadius * 0.5 + 1e-6)
+
+// What the game does with the plan, reduced to the nav nodes: everything under
+// a stamp is raised to the crest, and only the heights are written back.
+const bridged = Float32Array.from(strait)
+for (let node = 0; node < grid.nodeCount; node += 1) {
+  const at = [grid.directions[node * 3], grid.directions[node * 3 + 1], grid.directions[node * 3 + 2]]
+  for (let k = 0; k < stampCount; k += 1) {
+    if (angleTo(at, stampAt(k)) < stampRadius * 0.8) {
+      bridged[node] = Math.max(bridged[node], m._core_land_bridge_height())
+    }
+  }
+}
+writeHeights(bridged)
+ok('a heights-only write opens a route over it',
+   m._core_nav_route(...westShore, ...eastShore, 1) > 0 && m._core_nav_ready() === 1)
+ok('a refused cast afterwards empties the plan', bridgeCast(westShore, gridDirection(5, 6)) === 5 &&
+   m._core_land_bridge_stamp_count() === 0)
+
+const shamanPad = gridDirection(4, 8)
+const shamanHut = m._core_hut_place(...shamanPad, 0, 1, 0)
+const brave = m._core_follower_spawn(...gridDirection(5, 9), 0)
+m._core_follower_clear_selection()
+m._core_follower_set_selected(m._core_shaman(0), 1)
+ok('the shaman will not go into a hut', shamanHut >= 0 && m._core_hut_order_enter(shamanHut) === 0)
+m._core_follower_set_selected(brave, 1)
+ok('though a brave beside her will', m._core_hut_order_enter(shamanHut) === 1)
+
+m._core_mana_set(0, 0)
+simulate(1)
+ok('mana grows with the tribe, a second a head', Math.abs(m._core_mana(0) - 2) < 1e-6 &&
+   m._core_mana_income(0) === 2, `${m._core_mana(0).toFixed(3)} mana, +${m._core_mana_income(0)}/s`)
+m._core_mana_set(0, 1e9)
+ok('and stops at the ceiling', m._core_mana(0) === m._core_mana_max())
+m._core_mana_set(0, 0)
 
 console.log(out.join('\n'))
 const failed = out.filter((r) => r.startsWith('FAIL'))

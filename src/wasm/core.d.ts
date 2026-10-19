@@ -97,6 +97,44 @@ export type CoreModule = {
   _core_building_instance_floats: () => number
   _core_building_radius: () => number
 
+  /** Spawns a tribe's shaman. Returns her follower id, or -1 if it has one already. */
+  _core_shaman_spawn: (x: number, y: number, z: number, tribe: number) => number
+  /** A tribe's shaman's follower id, or -1. */
+  _core_shaman: (tribe: number) => number
+  _core_mana: (tribe: number) => number
+  _core_mana_income: (tribe: number) => number
+  _core_mana_max: () => number
+  _core_mana_set: (tribe: number, mana: number) => void
+  _core_land_bridge_cost: () => number
+  _core_land_bridge_range: () => number
+  /** 0 when the bridge would go ahead, else a reason — see LandBridge. Charges nothing. */
+  _core_land_bridge_check: (
+    tribe: number,
+    x0: number,
+    y0: number,
+    z0: number,
+    x1: number,
+    y1: number,
+    z1: number,
+  ) => number
+  /** As the check; on 0 the mana is spent and the stamp plan is written. */
+  _core_land_bridge_cast: (
+    tribe: number,
+    x0: number,
+    y0: number,
+    z0: number,
+    x1: number,
+    y1: number,
+    z1: number,
+  ) => number
+  _core_land_bridge_stamp_count: () => number
+  /** Pointer to the plan: 3 floats (a unit direction) per stamp. */
+  _core_land_bridge_stamps: () => number
+  /** Angular radius of each stamp, in radians. */
+  _core_land_bridge_stamp_radius: () => number
+  /** Height above sea level the stamps raise the centre line to. */
+  _core_land_bridge_height: () => number
+
   UTF8ToString: (pointer: number) => string
 
   /** Module linear memory, for reading bulk state without per-call copies. */

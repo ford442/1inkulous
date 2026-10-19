@@ -11,6 +11,7 @@ import { BUILDING_HEIGHT_RATIO } from '../game/buildings'
 import { HUT_HEIGHT_RATIO } from '../game/huts'
 import { BuildingSite } from '../sim/buildingSite'
 import { HutSite } from '../sim/hutSite'
+import { LandBridge } from '../sim/landBridge'
 import {
   mat4Identity,
   mat4Multiply,
@@ -209,6 +210,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
 const FLAG_SELECTED: u32 = 1u;
+const FLAG_SHAMAN: u32 = 4u;
 const PART_RING: f32 = 1.0;
 
 struct VertexOutput {
@@ -246,6 +248,7 @@ fn vs_main(
 
   let flags = u32(instanceFlags);
   let selected = f32((flags & FLAG_SELECTED) != 0u);
+  let shaman = f32((flags & FLAG_SHAMAN) != 0u);
 
   // The selection ring only exists while the follower is selected. Collapsing
   // its triangles to a point costs one vertex shader invocation and rasterises
@@ -271,13 +274,21 @@ fn vs_main(
   forward = normalize(forward);
   let right = cross(up, forward);
 
-  let world = instancePosition + right * position.x + up * position.y + forward * position.z;
+  // The shaman is the same pawn, taller and a little broader, so she reads
+  // apart from her people at any zoom. Normals are left alone: the stretch is
+  // mild enough that the faceting still lights right.
+  let girth = mix(1.0, 1.25, shaman);
+  // The ring widens with her but stays on the ground.
+  let stature = select(mix(1.0, 1.7, shaman), 1.0, part == PART_RING);
+  let scaled = vec3f(position.x * girth, position.y * stature, position.z * girth);
+  let world = instancePosition + right * scaled.x + up * scaled.y + forward * scaled.z;
   let worldNormal = right * normal.x + up * normal.y + forward * normal.z;
 
   output.clipPosition = uniforms.viewProj * vec4f(world, 1.0);
   output.worldPosition = world;
   output.worldNormal = worldNormal;
-  output.tint = tribeColor(instanceTribe);
+  // A pale robe over the tribe colour: still her tribe's, plainly not a brave.
+  output.tint = mix(tribeColor(instanceTribe), vec3f(0.96, 0.92, 1.0), 0.45 * shaman);
   output.selected = selected;
   output.part = part;
   return output;
@@ -948,14 +959,25 @@ export async function createRenderer(
       uniformData[37] = eye[1]
       uniformData[38] = eye[2]
       uniformData[39] = 0
-      const { sculptor, huts, buildings } = currentGame
+      const { sculptor, huts, buildings, shaman } = currentGame
       // The brush cursor while sculpting; otherwise, in build mode, the same
-      // disc marks the hut's footprint and says whether it can go there.
+      // disc marks the hut's footprint and says whether it can go there; and
+      // while a Land Bridge is aimed, it marks the far end at the strip's
+      // width, green where the core would raise it.
+      const bridge = sculptor.armed ? null : shaman.preview
       const buildGhost = buildings.ghost
       const ghost = buildGhost ?? huts.ghost
-      const hover = sculptor.armed ? sculptor.hoverDirection : (ghost?.direction ?? null)
+      const hover = sculptor.armed
+        ? sculptor.hoverDirection
+        : bridge
+          ? bridge.to
+          : (ghost?.direction ?? null)
       const padRadius = buildGhost ? buildings.radius : huts.radius
-      const cursorRadius = sculptor.armed ? sculptor.brushRadius : padRadius / planet.radius
+      const cursorRadius = sculptor.armed
+        ? sculptor.brushRadius
+        : bridge
+          ? shaman.stripRadius
+          : padRadius / planet.radius
 
       uniformData[40] = planet.radius
       uniformData[41] = planet.maxHeight
@@ -967,8 +989,11 @@ export async function createRenderer(
             : sculptor.mode === 'flatten'
               ? 2
               : 0
-      uniformData[43] =
-        !sculptor.armed && ghost
+      uniformData[43] = bridge
+        ? bridge.result === LandBridge.ok
+          ? 1
+          : -1
+        : !sculptor.armed && ghost
           ? ghost.site === (buildGhost ? BuildingSite.ok : HutSite.ok)
             ? 1
             : -1

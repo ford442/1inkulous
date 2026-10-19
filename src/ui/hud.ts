@@ -1,5 +1,6 @@
 import type { DragRect } from '../input/input'
 import { siteProblem, type HutGhost } from '../game/huts'
+import { bridgeProblem, type BridgePreview } from '../game/shaman'
 import { HutSite } from '../sim/hutSite'
 
 /** The slice of the terrain brush the HUD reports on. */
@@ -44,6 +45,18 @@ export type HutReadout = {
   readonly notice: string | null
 }
 
+/** The slice of the shaman the HUD reports on. */
+export type ShamanReadout = {
+  readonly id: number
+  readonly mana: number
+  readonly manaMax: number
+  readonly income: number
+  readonly cost: number
+  readonly targeting: boolean
+  readonly preview: BridgePreview | null
+  readonly notice: string | null
+}
+
 /** Smoothed frame timing. `drawMs` is CPU time in `renderer.render`, not a GPU query. */
 export type FramePerf = {
   readonly fps: number
@@ -60,6 +73,7 @@ export type Hud = {
   setFollowers: (followers: FollowerReadout) => void
   setHuts: (huts: HutReadout) => void
   setBuildings: (buildings: BuildingReadout) => void
+  setShaman: (shaman: ShamanReadout) => void
   /** Screen-space selection box, or null when there isn't one. */
   setSelectionBand: (band: DragRect | null) => void
 }
@@ -90,6 +104,26 @@ export function hutLine(huts: HutReadout): string {
     return huts.notice ? `${head} · ${huts.notice}` : head
   }
   return huts.notice ? `${head} · ${huts.notice}` : `${head} · B to build a hut`
+}
+
+/** The shaman's line: mana, and the Land Bridge while it is being aimed. Pure. */
+export function shamanLine(shaman: ShamanReadout): string {
+  const head =
+    `mana ${Math.floor(shaman.mana)}/${shaman.manaMax} ` +
+    `(+${shaman.income.toFixed(0)}/s) · Land Bridge ${shaman.cost}`
+  if (shaman.id < 0) {
+    return `${head} · ${shaman.notice ?? 'no shaman'}`
+  }
+  if (shaman.targeting) {
+    const aim = shaman.preview
+      ? bridgeProblem(shaman.preview.result, shaman.cost)
+      : 'point across the water'
+    return `${head} · aiming: ${shaman.notice ?? aim}`
+  }
+  if (shaman.notice) {
+    return `${head} · ${shaman.notice}`
+  }
+  return shaman.mana >= shaman.cost ? `${head} ready · L to cast` : head
 }
 
 /**
@@ -131,11 +165,13 @@ export function createHud(): Hud {
       <p class="hint" id="hud-followers">—</p>
       <p class="hint" id="hud-buildings">—</p>
       <p class="hint" id="hud-huts">—</p>
+      <p class="hint" id="hud-shaman">—</p>
       <p class="hint">Right-drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
       <p class="hint">Drag a box to select · Shift-drag adds · click ground clears · right-click sends them</p>
       <p class="hint">Hold C to sculpt: left raises, right lowers, Shift-left flattens · wheel sizes the brush · [ ] strength</p>
       <p class="hint">B places a hut on a flat pad · water, cliffs, and occupied ground refuse it</p>
       <p class="hint">Right-click a bred hut to send the selection inside</p>
+      <p class="hint">F finds the shaman · L aims a Land Bridge: click across water from her, or drag shore to shore</p>
     </div>
   `
 
@@ -146,6 +182,7 @@ export function createHud(): Hud {
   const followersEl = root.querySelector<HTMLParagraphElement>('#hud-followers')
   const buildingsEl = root.querySelector<HTMLParagraphElement>('#hud-buildings')
   const hutsEl = root.querySelector<HTMLParagraphElement>('#hud-huts')
+  const shamanEl = root.querySelector<HTMLParagraphElement>('#hud-shaman')
   const bandEl = document.querySelector<HTMLDivElement>('#select-band')
   const canvasEl = document.querySelector<HTMLCanvasElement>('#game-canvas')
 
@@ -193,6 +230,11 @@ export function createHud(): Hud {
     setBuildings(buildings: BuildingReadout) {
       if (buildingsEl) {
         buildingsEl.textContent = buildingLine(buildings)
+      }
+    },
+    setShaman(shaman: ShamanReadout) {
+      if (shamanEl) {
+        shamanEl.textContent = shamanLine(shaman)
       }
     },
     setSelectionBand(band: DragRect | null) {

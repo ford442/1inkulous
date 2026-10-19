@@ -32,6 +32,9 @@ constexpr std::int32_t kFollowerInstanceFloats = 8;
 
 constexpr std::int32_t kFlagSelected = 1 << 0;
 constexpr std::int32_t kFlagWalking = 1 << 1;
+// The tribe's shaman: walks, paths and is selected like anyone else, but is
+// drawn apart and never goes into a hut. See shaman.hpp.
+constexpr std::int32_t kFlagShaman = 1 << 2;
 
 // World units per second along the surface. On a unit-radius planet a follower
 // crosses a typical island in a few seconds and laps the world in a minute or
@@ -93,6 +96,15 @@ class FollowerSet {
   bool is_walking(std::int32_t id) const {
     return walking(followers_[static_cast<std::size_t>(id)]);
   }
+  bool is_shaman(std::int32_t id) const {
+    return followers_[static_cast<std::size_t>(id)].shaman;
+  }
+
+  // Makes follower `id` its tribe's shaman. False for a bad id.
+  bool make_shaman(std::int32_t id);
+  // Id of `tribe`'s shaman, or -1. Ids shift as followers go into huts, so
+  // look her up rather than keeping the number.
+  std::int32_t shaman(std::int32_t tribe) const;
 
   // The hut a follower has been ordered into, or -1. Huts own the meaning;
   // the follower only carries the number and loses it on any other order.
@@ -121,6 +133,7 @@ class FollowerSet {
     double height = 0.0;
     std::int32_t tribe = 0;
     bool selected = false;
+    bool shaman = false;
 
     // Node nearest `dir`, followed as the follower moves.
     std::int32_t node = -1;

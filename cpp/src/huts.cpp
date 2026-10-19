@@ -237,7 +237,8 @@ std::int32_t HutSet::order_enter_selected(std::int32_t id) {
   // Selected followers not already on their way in, nearest first.
   std::vector<std::pair<double, std::int32_t>> candidates;
   for (std::int32_t f = 0; f < followers_->count(); ++f) {
-    if (!followers_->selected(f) || followers_->hut(f) == id) {
+    // The shaman stays out: she has spells to cast, not children to raise.
+    if (!followers_->selected(f) || followers_->hut(f) == id || followers_->is_shaman(f)) {
       continue;
     }
     candidates.emplace_back(angle_between(followers_->direction(f), hut.dir), f);

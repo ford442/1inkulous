@@ -253,6 +253,42 @@ std::int32_t FollowerSet::spawn_at(const double dir[3], std::int32_t tribe) {
   return id;
 }
 
+void FollowerSet::set_down(Follower& follower, std::int32_t node) {
+  const float* d = grid_->direction(node);
+  follower.dir[0] = d[0];
+  follower.dir[1] = d[1];
+  follower.dir[2] = d[2];
+  normalize3(follower.dir);
+  follower.node = node;
+  follower.height = grid_->height(node);
+  follower.grounded = true;
+  flatten(follower.heading, follower.dir);
+  if (!normalize3(follower.heading)) {
+    double e2[3];
+    tangent_basis(follower.dir, follower.heading, e2);
+  }
+}
+
+void FollowerSet::reroute(Follower& follower) {
+  // A goal on ground that has gone bad moves to the nearest good node; either
+  // way the route is planned again over the ground as it is now.
+  NavPoint goal = follower.goal;
+  if (goal.node < 0 || !grid_->walkable(goal.node)) {
+    goal.node = grid_->nearest_walkable_node(goal.dir[0], goal.dir[1], goal.dir[2]);
+    if (goal.node < 0) {
+      stop(follower);
+      return;
+    }
+    const float* g = grid_->direction(goal.node);
+    goal.dir[0] = g[0];
+    goal.dir[1] = g[1];
+    goal.dir[2] = g[2];
+  }
+  if (!route_to(follower, goal)) {
+    stop(follower);
+  }
+}
+
 void FollowerSet::step_off_blocked() {
   if (grid_ == nullptr || !grid_->ready()) {
     return;
@@ -281,44 +317,186 @@ void FollowerSet::step_off_blocked() {
       if (free < 0) {
         continue;
       }
-      const float* d = grid_->direction(free);
-      follower.dir[0] = d[0];
-      follower.dir[1] = d[1];
-      follower.dir[2] = d[2];
-      normalize3(follower.dir);
-      follower.node = free;
-      follower.height = grid_->height(free);
-      follower.grounded = true;
-      flatten(follower.heading, follower.dir);
-      if (!normalize3(follower.heading)) {
-        double e2[3];
-        tangent_basis(follower.dir, follower.heading, e2);
-      }
+      set_down(follower, free);
       moved = true;
     }
 
-    if (!walking(follower)) {
-      continue;
-    }
-    // A goal under the pad moves to the nearest free node; either way the
-    // route is planned again, round the footprint rather than through it.
-    NavPoint goal = follower.goal;
-    if (goal.node < 0 || !grid_->walkable(goal.node)) {
-      goal.node = grid_->nearest_walkable_node(goal.dir[0], goal.dir[1], goal.dir[2]);
-      if (goal.node < 0) {
-        stop(follower);
-        continue;
-      }
-      const float* g = grid_->direction(goal.node);
-      goal.dir[0] = g[0];
-      goal.dir[1] = g[1];
-      goal.dir[2] = g[2];
-    }
-    if (!route_to(follower, goal)) {
-      stop(follower);
+    if (walking(follower)) {
+      // Round the footprint rather than through it.
+      reroute(follower);
     }
   }
   if (moved) {
+    refresh_instances();
+  }
+}
+
+namespace {
+
+// Angle from unit `c` to the nearest point of the great-circle arc from unit
+// `a` to unit `b`.
+double arc_distance(const double c[3], const double a[3], const double b[3]) {
+  double n[3];
+  cross3(a, b, n);
+  if (normalize3(n)) {
+    // The foot of the perpendicular from c, if it falls between a and b.
+    double p[3] = {c[0], c[1], c[2]};
+    flatten(p, n);
+    if (normalize3(p)) {
+      double ap[3];
+      double pb[3];
+      cross3(a, p, ap);
+      cross3(p, b, pb);
+      if (dot3(ap, n) >= 0.0 && dot3(pb, n) >= 0.0) {
+        return angle_between(c, p);
+      }
+    }
+  }
+  return std::min(angle_between(c, a), angle_between(c, b));
+}
+
+}  // namespace
+
+std::int32_t FollowerSet::shove(const double centre_in[3], double angular_radius, double beyond) {
+  double centre[3] = {centre_in[0], centre_in[1], centre_in[2]};
+  if (grid_ == nullptr || !grid_->ready() || !(angular_radius > 0.0) || !normalize3(centre)) {
+    return 0;
+  }
+  const double out_to = angular_radius + std::max(beyond, 0.0);
+  std::int32_t moved = 0;
+  for (Follower& follower : followers_) {
+    const double from_centre = angle_between(centre, follower.dir);
+    if (from_centre >= angular_radius) {
+      continue;
+    }
+    // Straight away from the centre; someone standing on it goes the way
+    // they face.
+    double away[3];
+    if (!tangent_towards(centre, follower.dir, away)) {
+      away[0] = follower.heading[0];
+      away[1] = follower.heading[1];
+      away[2] = follower.heading[2];
+      flatten(away, centre);
+      if (!normalize3(away)) {
+        double e2[3];
+        tangent_basis(centre, away, e2);
+      }
+    }
+    double landing[3];
+    rotate_along(centre, away, out_to, landing);
+
+    const std::int32_t node = grid_->locate(landing, follower.node);
+    SurfacePoint ground;
+    if (node >= 0 && grid_->footing(landing, node, kRouteSupport, ground)) {
+      follower.dir[0] = landing[0];
+      follower.dir[1] = landing[1];
+      follower.dir[2] = landing[2];
+      follower.node = node;
+      follower.height = ground.height;
+      follower.grounded = true;
+    } else {
+      const std::int32_t free = grid_->nearest_walkable_node(landing[0], landing[1], landing[2]);
+      if (free < 0) {
+        continue;
+      }
+      set_down(follower, free);
+    }
+    // Facing the way they were thrown: away from the centre.
+    double back[3];
+    if (tangent_towards(follower.dir, centre, back)) {
+      follower.heading[0] = -back[0];
+      follower.heading[1] = -back[1];
+      follower.heading[2] = -back[2];
+    }
+    if (walking(follower)) {
+      reroute(follower);
+    }
+    ++moved;
+  }
+  if (moved > 0) {
+    refresh_instances();
+  }
+  return moved;
+}
+
+std::int32_t FollowerSet::strand(const double centre_in[3], double angular_radius) {
+  double centre[3] = {centre_in[0], centre_in[1], centre_in[2]};
+  if (grid_ == nullptr || !grid_->ready() || !(angular_radius > 0.0) || !normalize3(centre)) {
+    return 0;
+  }
+  // A cell's width past the rim: the falloff can leave a wet node there.
+  const double reach = angular_radius + grid_->max_link_angle();
+  std::int32_t moved = 0;
+  for (Follower& follower : followers_) {
+    if (angle_between(centre, follower.dir) > reach) {
+      continue;
+    }
+    const std::int32_t node = grid_->locate(follower.dir, follower.node);
+    SurfacePoint ground;
+    if (node >= 0 && grid_->footing(follower.dir, node, kStepSupport, ground)) {
+      continue;
+    }
+    const std::int32_t dry = grid_->nearest_walkable_node(follower.dir[0], follower.dir[1],
+                                                          follower.dir[2]);
+    if (dry < 0) {
+      continue;
+    }
+    set_down(follower, dry);
+    stop(follower);
+    ++moved;
+  }
+  if (moved > 0) {
+    refresh_instances();
+  }
+  return moved;
+}
+
+void FollowerSet::reroute_across(const double centre_in[3], double angular_radius) {
+  double centre[3] = {centre_in[0], centre_in[1], centre_in[2]};
+  if (grid_ == nullptr || !grid_->ready() || !(angular_radius > 0.0) || !normalize3(centre)) {
+    return;
+  }
+  bool changed = false;
+  for (Follower& follower : followers_) {
+    if (!walking(follower)) {
+      continue;
+    }
+    bool crosses = false;
+    const double* from = follower.dir;
+    for (std::size_t i = follower.path_index; i < follower.path.size() && !crosses; ++i) {
+      const double* to = follower.path[i].dir;
+      crosses = arc_distance(centre, from, to) < angular_radius;
+      from = to;
+    }
+    if (crosses) {
+      reroute(follower);
+      changed = true;
+    }
+  }
+  if (changed) {
+    refresh_instances();
+  }
+}
+
+bool FollowerSet::set_casting(std::int32_t id, bool casting) {
+  if (id < 0 || id >= count()) {
+    return false;
+  }
+  Follower& follower = followers_[static_cast<std::size_t>(id)];
+  if (follower.casting != casting) {
+    follower.casting = casting;
+    refresh_instances();
+  }
+  return true;
+}
+
+void FollowerSet::halt(std::int32_t id) {
+  if (id < 0 || id >= count()) {
+    return;
+  }
+  Follower& follower = followers_[static_cast<std::size_t>(id)];
+  if (walking(follower)) {
+    stop(follower);
     refresh_instances();
   }
 }
@@ -755,6 +933,7 @@ std::int32_t FollowerSet::order_move(const std::vector<std::int32_t>& ids,
     Follower& follower = followers_[static_cast<std::size_t>(id)];
     follower.hut = -1;
     follower.tree = -1;
+    ++follower.orders;
     const std::int32_t start = start_node(follower);
     members_.push_back(Member{id, start, 0.0});
     start_scratch_.push_back(start);
@@ -1582,6 +1761,7 @@ void FollowerSet::refresh_instances() {
     if (follower.selected) flags |= kFlagSelected;
     if (walking(follower)) flags |= kFlagWalking;
     if (follower.shaman) flags |= kFlagShaman;
+    if (follower.casting) flags |= kFlagCasting;
     flags |= (static_cast<std::int32_t>(follower.role) << kRoleShift) & kRoleMask;
     out[7] = static_cast<float>(flags);
   }

@@ -5,9 +5,11 @@
 struct Uniforms {
   viewProj: mat4x4f,
   model: mat4x4f,
+  // xyz: towards the sun; w: how far through a cast the cursor disc is
+  // (0..1), 0 when it is not a cast
   lightDir: vec4f,
   cameraPos: vec4f,
-  // x: planet radius, y: max land height, z: brush mode, w: hut site
+  // x: planet radius, y: max land height, z: brush mode, w: hut site or spell
   params: vec4f,
   // xyz: unit direction under the cursor, w: brush angular radius (0 = hidden)
   brush: vec4f,
@@ -89,8 +91,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     let surface = normalize(input.worldPosition);
     let angle = acos(clamp(dot(surface, uniforms.brush.xyz), -1.0, 1.0));
     // params.z carries the mode: +1 raising, -1 lowering, 2 flattening, 0
-    // hovering. params.w replaces it while placing a hut: +1 the site is good,
-    // -1 it is not.
+    // hovering. params.w replaces it while placing a hut or aiming a spell:
+    // +1 the site is good, -1 it is not; 2 a spell being cast lands here.
     let mode = uniforms.params.z;
     var cursorColor = vec3f(0.85, 0.90, 1.00);
     if (mode > 1.5) {
@@ -101,7 +103,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
       cursorColor = vec3f(0.30, 0.75, 1.00);
     }
     let site = uniforms.params.w;
-    if (site > 0.5) {
+    if (site > 1.5) {
+      cursorColor = vec3f(1.00, 0.86, 0.45);
+    } else if (site > 0.5) {
       cursorColor = vec3f(0.35, 0.95, 0.45);
     } else if (site < -0.5) {
       cursorColor = vec3f(1.00, 0.32, 0.25);
@@ -109,6 +113,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     let fill = 1.0 - smoothstep(brushRadius * 0.75, brushRadius, angle);
     let ring = 1.0 - smoothstep(0.0, brushRadius * 0.18, abs(angle - brushRadius * 0.88));
     brushTint = cursorColor * (fill * 0.22 + ring * 0.55);
+    // While she casts, the disc throbs and a second ring closes in from the
+    // rim, reaching the centre as the spell lands.
+    let castProgress = uniforms.lightDir.w;
+    if (castProgress > 0.0) {
+      let throb = 0.65 + 0.35 * sin(castProgress * 6.2831853 * 3.0);
+      let inner = brushRadius * 0.88 * (1.0 - castProgress);
+      let closing = 1.0 - smoothstep(0.0, brushRadius * 0.12, abs(angle - inner));
+      brushTint = cursorColor * ((fill * 0.3 + ring * 0.55) * throb + closing * 0.6);
+    }
   }
 
   // Rim term: makes the silhouette read as a sphere rather than a flat disc.

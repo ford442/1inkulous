@@ -168,33 +168,56 @@ export type CoreModule = {
   _core_mana_income: (tribe: number) => number
   _core_mana_max: () => number
   _core_mana_set: (tribe: number, mana: number) => void
-  _core_land_bridge_cost: () => number
-  _core_land_bridge_range: () => number
-  /** 0 when the bridge would go ahead, else a reason — see LandBridge. Charges nothing. */
-  _core_land_bridge_check: (
+  /** How many spells there are; ids run from 0. See Spell in src/sim/spell.ts. */
+  _core_spell_count: () => number
+  /** Per spell: mana spent when it lands, reach from the shaman, cast time, cooldown. */
+  _core_spell_cost: (spell: number) => number
+  _core_spell_range: (spell: number) => number
+  _core_spell_cast_seconds: (spell: number) => number
+  _core_spell_cooldown_seconds: (spell: number) => number
+  /** Angular radius in radians of the disc a spell writes (a bridge's stamps). */
+  _core_spell_radius: (spell: number) => number
+  /**
+   * 0 when the spell would go ahead, else a reason — see SpellResult. The
+   * origin is a Land Bridge's near end, all zero for the shaman. Changes nothing.
+   */
+  _core_spell_check: (
+    spell: number,
     tribe: number,
-    x0: number,
-    y0: number,
-    z0: number,
-    x1: number,
-    y1: number,
-    z1: number,
+    x: number,
+    y: number,
+    z: number,
+    ox: number,
+    oy: number,
+    oz: number,
   ) => number
-  /** As the check; on 0 the mana is spent and the land raised in the core. */
-  _core_land_bridge_cast: (
+  /** As the check; on 0 the shaman starts casting. The mana goes when it lands. */
+  _core_spell_cast: (
+    spell: number,
     tribe: number,
-    x0: number,
-    y0: number,
-    z0: number,
-    x1: number,
-    y1: number,
-    z1: number,
+    x: number,
+    y: number,
+    z: number,
+    ox: number,
+    oy: number,
+    oz: number,
   ) => number
+  _core_spell_cancel: (tribe: number) => void
+  /** The spell a tribe is casting, or -1. */
+  _core_spell_casting: (tribe: number) => number
+  /** 0..1 through the cast. */
+  _core_spell_progress: (tribe: number) => number
+  /** Pointer to 4 floats: where the cast lands (a unit direction) and its angular radius. */
+  _core_spell_target: (tribe: number) => number
+  /** Seconds before a tribe may cast a spell again. */
+  _core_spell_cooldown: (tribe: number, spell: number) => number
+  /** Casts a tribe has seen end so far, and the last one's spell and result. */
+  _core_spell_ended: (tribe: number) => number
+  _core_spell_ended_spell: (tribe: number) => number
+  _core_spell_ended_result: (tribe: number) => number
   _core_land_bridge_stamp_count: () => number
-  /** Pointer to the stamps the last cast laid: 3 floats (a unit direction) each. */
+  /** Pointer to the stamps the last bridge to land laid: 3 floats (a unit direction) each. */
   _core_land_bridge_stamps: () => number
-  /** Angular radius of each stamp, in radians. */
-  _core_land_bridge_stamp_radius: () => number
   /** Height above sea level the stamps raise the centre line to. */
   _core_land_bridge_height: () => number
 

@@ -1,7 +1,7 @@
 import type { Vec3 } from '../engine/math'
 import createCoreModule, { type CoreModule } from '../wasm/core.js'
 import { HutKind, type HutSite } from './hutSite'
-import type { LandBridge } from './landBridge'
+import type { Spell, SpellResult } from './spell'
 import type { Role } from './role'
 
 /**
@@ -33,7 +33,7 @@ export type NavCommitOptions = {
 export type NodeRange = { readonly first: number; readonly last: number }
 
 export { HutKind, HutSite } from './hutSite'
-export { LandBridge } from './landBridge'
+export { Spell, SpellResult, SPELLS } from './spell'
 export { Role } from './role'
 
 /** A hut site as the core judged it. */
@@ -46,7 +46,7 @@ export type HutSiteReport = {
 }
 
 /**
- * What a successful Land Bridge cast laid. The core has already raised the
+ * What the last Land Bridge to land laid. The core has already raised the
  * land; this is for drawing and for tests.
  */
 export type LandBridgePlan = {
@@ -56,6 +56,37 @@ export type LandBridgePlan = {
   readonly stampRadius: number
   /** Height above sea level the centre line is raised to. */
   readonly height: number
+}
+
+/** A spell's fixed rules, as the core holds them. */
+export type SpellRules = {
+  /** Mana, spent when the cast lands. */
+  readonly cost: number
+  /** Furthest its target may be from the shaman, in world units along the ground. */
+  readonly range: number
+  readonly castSeconds: number
+  /** Seconds after it lands before the tribe may cast it again. */
+  readonly cooldownSeconds: number
+}
+
+/** A cast under way. */
+export type SpellCast = {
+  readonly spell: Spell
+  /** 0..1 through the cast time. */
+  readonly progress: number
+  /** Where it lands: the disc's centre, a bridge's far end. */
+  readonly target: Vec3
+  /** The disc's angular radius, in radians. */
+  readonly radius: number
+}
+
+/** How a tribe's most recent cast ended. */
+export type SpellEnd = {
+  /** Goes up by one each time a cast ends; 0 before the first. */
+  readonly count: number
+  readonly spell: Spell
+  /** `SpellResult.ok` when it landed; otherwise why not. */
+  readonly result: SpellResult
 }
 
 export type Simulation = {
@@ -206,22 +237,30 @@ export type Simulation = {
   manaIncome: (tribe: number) => number
   setMana: (tribe: number, mana: number) => void
   readonly manaMax: number
-  readonly landBridgeCost: number
-  /** Furthest either end of a bridge may be from the shaman, in world units. */
-  readonly landBridgeRange: number
-  /** Angular radius of each bridge stamp, in radians: half the strip's width. */
-  readonly landBridgeStampRadius: number
-  /** Whether a tribe's shaman could bridge `from` to `to`, and if not, why. */
-  checkLandBridge: (tribe: number, from: Vec3, to: Vec3) => LandBridge
+  /** Each spell's rules, indexed by `Spell`. */
+  readonly spellRules: readonly SpellRules[]
+  /** Angular radius in radians of the disc a spell writes; for a bridge, of each stamp. */
+  spellRadius: (spell: Spell) => number
   /**
-   * Casts it: on success the mana is spent, the core raises the land, and the
-   * stamps it laid come back; otherwise the reason, and nothing has changed.
+   * Whether a tribe's shaman could cast `spell` at `target`, and if not, why.
+   * `origin` is a Land Bridge's near end; omit it for wherever she stands.
+   * Changes nothing.
    */
-  castLandBridge: (
-    tribe: number,
-    from: Vec3,
-    to: Vec3,
-  ) => { result: LandBridge; plan: LandBridgePlan | null }
+  checkSpell: (spell: Spell, tribe: number, target: Vec3, origin?: Vec3 | null) => SpellResult
+  /**
+   * The same check; on `ok` she stops and starts casting. Nothing is spent
+   * until it lands, a cast time later — see `spellCasting` and `lastSpellEnd`.
+   */
+  castSpell: (spell: Spell, tribe: number, target: Vec3, origin?: Vec3 | null) => SpellResult
+  /** Ends a tribe's cast in progress, with nothing spent. */
+  cancelSpell: (tribe: number) => void
+  /** The cast a tribe has under way, or null. */
+  spellCasting: (tribe: number) => SpellCast | null
+  /** Seconds before a tribe may cast `spell` again; 0 when it may. */
+  spellCooldown: (tribe: number, spell: Spell) => number
+  lastSpellEnd: (tribe: number) => SpellEnd
+  /** The stamps of the last Land Bridge to land, or null if none has. */
+  landBridgePlan: () => LandBridgePlan | null
 
   /** Escape hatch for future bulk reads straight out of linear memory. */
   readonly module: CoreModule
@@ -231,6 +270,9 @@ export type SimulationOptions = {
   /** Fixed step length in ms. Omit for the core's default (50ms = 20Hz). */
   stepMs?: number
 }
+
+/** A Land Bridge's near end when none is given: wherever the shaman stands. */
+const NO_ORIGIN: Vec3 = [0, 0, 0]
 
 export async function createSimulation(
   options: SimulationOptions = {},
@@ -572,40 +614,66 @@ export async function createSimulation(
     },
 
     manaMax: module._core_mana_max(),
-    landBridgeCost: module._core_land_bridge_cost(),
-    landBridgeRange: module._core_land_bridge_range(),
+
+    spellRules: Array.from({ length: module._core_spell_count() }, (_, spell) => ({
+      cost: module._core_spell_cost(spell),
+      range: module._core_spell_range(spell),
+      castSeconds: module._core_spell_cast_seconds(spell),
+      cooldownSeconds: module._core_spell_cooldown_seconds(spell),
+    })),
+
     // Read live: it depends on the planet radius the nav graph commits.
-    get landBridgeStampRadius() {
-      return module._core_land_bridge_stamp_radius()
+    spellRadius(spell: Spell) {
+      return module._core_spell_radius(spell)
     },
 
-    checkLandBridge(tribe: number, from: Vec3, to: Vec3) {
-      return module._core_land_bridge_check(
-        tribe,
-        from[0],
-        from[1],
-        from[2],
-        to[0],
-        to[1],
-        to[2],
-      ) as LandBridge
+    checkSpell(spell: Spell, tribe: number, target: Vec3, origin?: Vec3 | null) {
+      const from = origin ?? NO_ORIGIN
+      return module._core_spell_check(spell, tribe, ...target, ...from) as SpellResult
     },
 
-    castLandBridge(tribe: number, from: Vec3, to: Vec3) {
-      const result = module._core_land_bridge_cast(
-        tribe,
-        from[0],
-        from[1],
-        from[2],
-        to[0],
-        to[1],
-        to[2],
-      ) as LandBridge
-      if (result !== 0) {
-        return { result, plan: null }
+    castSpell(spell: Spell, tribe: number, target: Vec3, origin?: Vec3 | null) {
+      const from = origin ?? NO_ORIGIN
+      return module._core_spell_cast(spell, tribe, ...target, ...from) as SpellResult
+    },
+
+    cancelSpell(tribe: number) {
+      module._core_spell_cancel(tribe)
+    },
+
+    spellCasting(tribe: number) {
+      const spell = module._core_spell_casting(tribe)
+      if (spell < 0) {
+        return null
       }
-      // Copied out at once: the buffer is the core's and the next cast reuses it.
+      const base = module._core_spell_target(tribe) >> 2
+      const heap = module.HEAPF32
+      return {
+        spell: spell as Spell,
+        progress: module._core_spell_progress(tribe),
+        target: [heap[base], heap[base + 1], heap[base + 2]] as Vec3,
+        radius: heap[base + 3],
+      }
+    },
+
+    spellCooldown(tribe: number, spell: Spell) {
+      return module._core_spell_cooldown(tribe, spell)
+    },
+
+    lastSpellEnd(tribe: number) {
+      return {
+        count: module._core_spell_ended(tribe),
+        spell: module._core_spell_ended_spell(tribe) as Spell,
+        result: module._core_spell_ended_result(tribe) as SpellResult,
+      }
+    },
+
+    landBridgePlan() {
       const count = module._core_land_bridge_stamp_count()
+      if (count === 0) {
+        return null
+      }
+      // Copied out at once: the buffer is the core's and the next bridge reuses it.
       const start = module._core_land_bridge_stamps() >> 2
       const stamps: Vec3[] = []
       for (let i = 0; i < count; i += 1) {
@@ -613,12 +681,9 @@ export async function createSimulation(
         stamps.push([module.HEAPF32[base], module.HEAPF32[base + 1], module.HEAPF32[base + 2]])
       }
       return {
-        result,
-        plan: {
-          stamps,
-          stampRadius: module._core_land_bridge_stamp_radius(),
-          height: module._core_land_bridge_height(),
-        },
+        stamps,
+        stampRadius: module._core_spell_radius(0),
+        height: module._core_land_bridge_height(),
       }
     },
   }

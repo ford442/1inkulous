@@ -1,6 +1,8 @@
 import type { DragRect } from '../input/input'
 import { kindName, siteProblem, woodCost, type HutGhost } from '../game/huts'
-import { bridgeProblem, type BridgePreview } from '../game/shaman'
+import { SPELL_NAMES, spellProblem, type SpellPreview, type SpellSlot } from '../game/shaman'
+import type { SpellCast } from '../sim/simulation'
+import { SpellResult, type Spell } from '../sim/spell'
 import { HutKind, HutSite } from '../sim/hutSite'
 
 /** The slice of the terrain brush the HUD reports on. */
@@ -46,10 +48,11 @@ export type ShamanReadout = {
   readonly mana: number
   readonly manaMax: number
   readonly income: number
-  readonly cost: number
   readonly wood: number
-  readonly targeting: boolean
-  readonly preview: BridgePreview | null
+  readonly aiming: Spell | null
+  readonly preview: SpellPreview | null
+  readonly casting: SpellCast | null
+  readonly spells: readonly SpellSlot[]
   readonly notice: string | null
 }
 
@@ -124,24 +127,45 @@ export function treeLine(trees: TreeReadout): string {
   return trees.notice ? `${head} · ${trees.notice}` : `${head} · right-click one to chop it`
 }
 
-/** The shaman's line: mana, and the Land Bridge while it is being aimed. Pure. */
+/** The shaman's line: mana, wood, and what she has to say. Pure. */
 export function shamanLine(shaman: ShamanReadout): string {
   const head =
     `mana ${Math.floor(shaman.mana)}/${shaman.manaMax} ` +
-    `(+${shaman.income.toFixed(0)}/s) · wood ${shaman.wood} · Land Bridge ${shaman.cost}`
+    `(+${shaman.income.toFixed(0)}/s) · wood ${shaman.wood}`
   if (shaman.id < 0) {
     return `${head} · ${shaman.notice ?? 'no shaman'}`
-  }
-  if (shaman.targeting) {
-    const aim = shaman.preview
-      ? bridgeProblem(shaman.preview.result, shaman.cost)
-      : 'point across the water'
-    return `${head} · aiming: ${shaman.notice ?? aim}`
   }
   if (shaman.notice) {
     return `${head} · ${shaman.notice}`
   }
-  return shaman.mana >= shaman.cost ? `${head} ready · L to cast` : head
+  if (shaman.casting) {
+    return `${head} · casting ${SPELL_NAMES[shaman.casting.spell]}`
+  }
+  return `${head} · F finds her`
+}
+
+/**
+ * The spell row: every spell's key, name and cost, how long one that has just
+ * landed has left to recover, a cast under way, and — for the spell being
+ * aimed — the go-ahead or why not. Pure.
+ */
+export function spellLine(shaman: ShamanReadout): string {
+  const slots = shaman.spells.map((slot) => {
+    const label = `${slot.key} ${slot.name} ${slot.cost}`
+    const resting = slot.cooldown > 0 ? ` (${Math.ceil(slot.cooldown)}s)` : ''
+    if (slot.spell !== shaman.aiming) {
+      return label + resting
+    }
+    const aim = shaman.preview
+      ? spellProblem(slot.spell, shaman.preview.result, slot.cost)
+      : 'point at the ground'
+    const mark = shaman.preview && shaman.preview.result !== SpellResult.ok ? '✗' : '▸'
+    return `${mark} ${label}${resting}: ${aim}`
+  })
+  const casting = shaman.casting
+    ? `casting ${SPELL_NAMES[shaman.casting.spell]} ${Math.round(shaman.casting.progress * 100)}% · `
+    : ''
+  return `${casting}${slots.join(' · ')}`
 }
 
 /**
@@ -212,6 +236,7 @@ export function createHud(): Hud {
       <p class="hint" id="hud-followers">—</p>
       <p class="hint" id="hud-huts">—</p>
       <p class="hint" id="hud-shaman">—</p>
+      <p class="hint" id="hud-spells">—</p>
       <p class="hint" id="hud-trees">—</p>
       <p class="hint">Right-drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
       <p class="hint">Drag a box to select · Shift-drag adds · click ground clears · right-click sends them</p>
@@ -220,6 +245,7 @@ export function createHud(): Hud {
       <p class="hint">Right-click a hut to send the selected braves inside, or with nobody selected to empty it · right-click a tree to chop it</p>
       <p class="hint">A brave sent into a training hut, with wood to spare, comes out a warrior · warriors strike enemies next to them</p>
       <p class="hint">F finds the shaman · L aims a Land Bridge: click across water from her, or drag shore to shore</p>
+      <p class="hint">X Blast raises a hill and throws people off it · V Flatten levels a hut pad · M Swamp sinks the ground · a cast takes a moment: move her or cast again to cancel</p>
     </div>
   `
 
@@ -230,6 +256,7 @@ export function createHud(): Hud {
   const followersEl = root.querySelector<HTMLParagraphElement>('#hud-followers')
   const hutsEl = root.querySelector<HTMLParagraphElement>('#hud-huts')
   const shamanEl = root.querySelector<HTMLParagraphElement>('#hud-shaman')
+  const spellsEl = root.querySelector<HTMLParagraphElement>('#hud-spells')
   const treesEl = root.querySelector<HTMLParagraphElement>('#hud-trees')
   const bandEl = document.querySelector<HTMLDivElement>('#select-band')
   const canvasEl = document.querySelector<HTMLCanvasElement>('#game-canvas')
@@ -279,6 +306,14 @@ export function createHud(): Hud {
     setShaman(shaman: ShamanReadout) {
       if (shamanEl) {
         shamanEl.textContent = shamanLine(shaman)
+      }
+      if (spellsEl) {
+        spellsEl.textContent = spellLine(shaman)
+        // Red while the spell being aimed would be refused, like the ghost disc.
+        spellsEl.classList.toggle(
+          'refused',
+          shaman.preview !== null && shaman.preview.result !== SpellResult.ok,
+        )
       }
     },
     setTrees(trees: TreeReadout) {

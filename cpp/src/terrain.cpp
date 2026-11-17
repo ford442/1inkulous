@@ -24,7 +24,7 @@ void Terrain::set_max_height(double max_height) {
 }
 
 template <typename Step>
-NodeRange Terrain::brush(const double centre[3], double angular_radius, Step next) {
+NodeRange Terrain::brush(const double centre[3], double angular_radius, bool commit, Step next) const {
   NodeRange moved;
   double c[3];
   if (grid_ == nullptr || !grid_->ready() || !(angular_radius > 0.0) || !unit(centre, c)) {
@@ -52,16 +52,45 @@ NodeRange Terrain::brush(const double centre[3], double angular_radius, Step nex
     const float before = heights[node];
     const float after = next(falloff, static_cast<double>(before));
     if (after != before) {
-      heights[node] = after;
+      if (commit) {
+        heights[node] = after;
+      }
       moved.include(node);
     }
   }
-
-  dirty_.include(moved);
   return moved;
 }
 
 NodeRange Terrain::sculpt(const double centre[3], double angular_radius, double delta) {
+  const NodeRange moved = sculpt_impl(centre, angular_radius, delta, true);
+  dirty_.include(moved);
+  return moved;
+}
+
+bool Terrain::would_sculpt(const double centre[3], double angular_radius, double delta) const {
+  return !sculpt_impl(centre, angular_radius, delta, false).empty();
+}
+
+NodeRange Terrain::flatten(const double centre[3],
+                           double angular_radius,
+                           double target_height,
+                           double rate) {
+  const NodeRange moved = flatten_impl(centre, angular_radius, target_height, rate, true);
+  dirty_.include(moved);
+  return moved;
+}
+
+bool Terrain::would_flatten(const double centre[3],
+                            double angular_radius,
+                            double target_height,
+                            double rate) const {
+  return !flatten_impl(centre, angular_radius, target_height, rate, false).empty();
+}
+
+NodeRange Terrain::sculpt_impl(const double centre[3],
+                               double angular_radius,
+                               double delta,
+                               bool commit) const {
   if (!(delta != 0.0) || !std::isfinite(delta)) {
     return NodeRange{};
   }
@@ -73,7 +102,7 @@ NodeRange Terrain::sculpt(const double centre[3], double angular_radius, double 
   const double scale = capped ? max_height_ : (grid_ != nullptr ? grid_->planet_radius() : 1.0);
   const double min_step = kMinStepFraction * scale;
 
-  return brush(centre, angular_radius, [&](double falloff, double before) -> float {
+  return brush(centre, angular_radius, commit, [&](double falloff, double before) -> float {
     const double step = delta * falloff;
     if (std::fabs(step) < min_step) {
       return static_cast<float>(before);
@@ -85,10 +114,11 @@ NodeRange Terrain::sculpt(const double centre[3], double angular_radius, double 
   });
 }
 
-NodeRange Terrain::flatten(const double centre[3],
-                           double angular_radius,
-                           double target_height,
-                           double rate) {
+NodeRange Terrain::flatten_impl(const double centre[3],
+                                double angular_radius,
+                                double target_height,
+                                double rate,
+                                bool commit) const {
   if (!(rate > 0.0) || !std::isfinite(rate) || !std::isfinite(target_height)) {
     return NodeRange{};
   }
@@ -100,7 +130,7 @@ NodeRange Terrain::flatten(const double centre[3],
   }
   const float target = static_cast<float>(clamped);
 
-  return brush(centre, angular_radius, [&](double falloff, double before) -> float {
+  return brush(centre, angular_radius, commit, [&](double falloff, double before) -> float {
     const double gap = static_cast<double>(target) - before;
     // Same falloff as sculpt, so the pad's edge blends into the slope round it
     // instead of stepping down a cliff.

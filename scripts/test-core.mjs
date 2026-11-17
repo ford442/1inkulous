@@ -30,8 +30,8 @@ const budget = (name, pass, detail = '') =>
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
-ok('version string', version === '0.8.0', version)
-ok('encoded version matches', m._core_version() === 800, String(m._core_version()))
+ok('version string', version === '0.9.0', version)
+ok('encoded version matches', m._core_version() === 900, String(m._core_version()))
 
 // default step
 m._core_init(0)
@@ -1380,8 +1380,19 @@ writeHeights(strait)
 
 const westShore = gridDirection(6, 8)
 const eastShore = gridDirection(10, 8)
-const bridgeCheck = (a, b) => m._core_land_bridge_check(0, ...a, ...b)
-const bridgeCast = (a, b) => m._core_land_bridge_cast(0, ...a, ...b)
+// Land Bridge is spell 0 on the shared spell path: the far end is the target,
+// the near end the origin.
+const LAND_BRIDGE = 0
+const bridgeCheck = (a, b) => m._core_spell_check(LAND_BRIDGE, 0, ...b, ...a)
+// Starts the cast and, if it starts, waits it out. The refusal if it does not;
+// otherwise how it ended.
+const bridgeCast = (a, b) => {
+  const started = m._core_spell_cast(LAND_BRIDGE, 0, ...b, ...a)
+  if (started !== 0) return started
+  const ended = m._core_spell_ended(0)
+  simulate(m._core_spell_cast_seconds(LAND_BRIDGE) + 0.1)
+  return m._core_spell_ended(0) === ended + 1 ? m._core_spell_ended_result(0) : -1
+}
 
 ok('with no shaman there is no bridge', bridgeCheck(westShore, eastShore) === 2)
 const shamanId = m._core_shaman_spawn(...westShore, 0)
@@ -1416,8 +1427,10 @@ ok('or the ground', isClean())
 
 const unbridged = m._core_nav_route(...westShore, ...eastShore, 0)
 ok('the strait has no way across', unbridged === -1)
-ok('a good cast succeeds and is paid for', bridgeCast(westShore, eastShore) === 0 &&
-   m._core_mana(0) === 500 - m._core_land_bridge_cost(), `${m._core_mana(0)} left`)
+// She prays through the cast, a mana a second, so a little comes back.
+ok('a good cast lands and is paid for', bridgeCast(westShore, eastShore) === 0 &&
+   m._core_mana(0) > 500 - m._core_spell_cost(LAND_BRIDGE) && m._core_mana(0) < 502 - m._core_spell_cost(LAND_BRIDGE),
+   `${m._core_mana(0).toFixed(2)} left`)
 const stampCount = m._core_land_bridge_stamp_count()
 const stampAt = (k) => {
   const base = (m._core_land_bridge_stamps() >> 2) + k * 3
@@ -1426,7 +1439,7 @@ const stampAt = (k) => {
 ok('its plan runs shore to shore', stampCount >= 3 &&
    angleTo(stampAt(0), westShore) < 1e-5 && angleTo(stampAt(stampCount - 1), eastShore) < 1e-5,
    `${stampCount} stamps`)
-const stampRadius = m._core_land_bridge_stamp_radius()
+const stampRadius = m._core_spell_radius(LAND_BRIDGE)
 ok('and overlaps, stamp to stamp', angleTo(stampAt(0), stampAt(1)) <= stampRadius * 0.5 + 1e-6)
 
 // The core raised the land itself: no height write from here.
@@ -1446,8 +1459,8 @@ ok('a route opens over it with no height written from outside',
    m._core_nav_route(...westShore, ...eastShore, 1) > 0 && m._core_nav_ready() === 1)
 m._core_terrain_clear_dirty()
 const bridgedHeights = coreHeights()
-ok('a refused cast afterwards empties the plan', bridgeCast(westShore, gridDirection(5, 6)) === 5 &&
-   m._core_land_bridge_stamp_count() === 0)
+ok('a refused cast afterwards keeps the plan of the bridge that landed',
+   bridgeCast(westShore, gridDirection(5, 6)) === 5 && m._core_land_bridge_stamp_count() === stampCount)
 ok('and leaves the bridge as it was', isClean() && changedNodes(bridgedHeights).length === 0)
 
 const shamanPad = gridDirection(4, 8)

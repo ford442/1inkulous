@@ -289,17 +289,25 @@ double core_tree_progress(int id);
 int core_tree_wood(void);
 double core_tree_chop_seconds(void);
 
-// --- shaman and Land Bridge ---------------------------------------------
+// --- shaman and spells ---------------------------------------------------
 //
 // The shaman is a follower with kFlagShaman set: select, order and draw her
 // through the follower calls. Mana is one number per tribe (0..3), filled
 // every fixed step by the tribe's population.
 //
-// A cast is decided and carried out here: on success the core charges the
-// mana and raises the land through the terrain edits above, so the dirty range
-// covers it. The stamps it laid — directions, a crest height and a stamp
-// radius — stay readable for the ghost and for tests. A refused cast raises
-// nothing and keeps no stamps.
+// Spells are ids (0 Land Bridge, 1 Blast, 2 Flatten, 3 Swamp; mirrors
+// inkulous::Spell) on one path: core_spell_check says whether one would go
+// ahead, core_spell_cast starts it. A cast takes the spell's cast time, during
+// which the shaman stands still with kFlagCasting set; a move order, another
+// cast or her leaving the spell's range ends it with nothing spent. When it
+// lands, the core charges the mana and writes the terrain through the edits
+// above, so the dirty range covers it.
+//
+// Results, from check and as how a cast ended: 0 ok, 1 no grid, 2 no shaman,
+// 3 out of range, 4 neither end of a bridge near land, 5 the bridge's line is
+// dry already, 6 not enough mana, 7 cooling down, 8 nothing to do, 9 the
+// centre is under water, 10 cancelled, 11 no such spell. Mirrors
+// inkulous::SpellResult.
 
 // Spawns `tribe`'s shaman on the walkable node nearest the direction. Returns
 // her follower id, or -1 if the tribe already has one or there is no land.
@@ -316,26 +324,49 @@ double core_mana_max(void);
 // Sets a tribe's mana, clamped to [0, max]. For tests and scenario setup.
 void core_mana_set(int tribe, double mana);
 
-// Mana a Land Bridge costs, and how far from the shaman, in world units along
-// the surface, both of its ends may lie.
-double core_land_bridge_cost(void);
-double core_land_bridge_range(void);
+// How many spells there are, and each one's fixed rules: mana, spent when the
+// cast lands; how far from the shaman its target may be, in world units along
+// the surface; seconds to cast; seconds before the tribe may cast it again;
+// and the angular radius in radians of the disc it writes (for a bridge, of
+// each stamp along it). 0 for a bad spell.
+int core_spell_count(void);
+double core_spell_cost(int spell);
+double core_spell_range(int spell);
+double core_spell_cast_seconds(int spell);
+double core_spell_cooldown_seconds(int spell);
+double core_spell_radius(int spell);
 
-// Whether `tribe`'s shaman could raise a bridge from (x0, y0, z0) to (x1, y1,
-// z1): 0 yes, otherwise the reason — 1 no grid, 2 no shaman, 3 an end out of
-// range, 4 neither end near land, 5 already dry, 6 not enough mana. Mirrors
-// inkulous::LandBridge. Charges nothing.
-int core_land_bridge_check(int tribe, double x0, double y0, double z0, double x1, double y1, double z1);
-// The same check; on 0 the mana is spent and the land is raised. Any other
-// result changes nothing and empties the stamps.
-int core_land_bridge_cast(int tribe, double x0, double y0, double z0, double x1, double y1, double z1);
+// Whether `tribe`'s shaman could cast `spell` at (x, y, z): 0 yes, otherwise
+// the reason. (ox, oy, oz) is a Land Bridge's near end; all zero is wherever
+// she stands. The disc spells ignore it. Changes nothing.
+int core_spell_check(int spell, int tribe, double x, double y, double z, double ox, double oy, double oz);
+// The same check; on 0 she stops and starts casting, ending any cast already
+// under way. Any other result changes nothing.
+int core_spell_cast(int spell, int tribe, double x, double y, double z, double ox, double oy, double oz);
+// Ends `tribe`'s cast in progress, if any, with nothing spent.
+void core_spell_cancel(int tribe);
 
-// What the last cast laid: core_land_bridge_stamp_count() stamps of 3 floats (a
-// unit direction) each; every stamp's angular radius in radians; and the
-// height above sea level the stamps raise the centre line to.
+// The spell `tribe` is casting now, or -1; how far through it is, 0..1; and
+// where it will land: 4 floats, a unit direction and the disc's angular
+// radius, zeros when not casting. Valid until the next call.
+int core_spell_casting(int tribe);
+double core_spell_progress(int tribe);
+float* core_spell_target(int tribe);
+// Seconds before `tribe` may cast `spell` again; 0 when it may.
+double core_spell_cooldown(int tribe, int spell);
+
+// How `tribe`'s most recent cast ended: how many have ended so far (goes up
+// by one each time), which spell, and the result — 0 it landed.
+int core_spell_ended(int tribe);
+int core_spell_ended_spell(int tribe);
+int core_spell_ended_result(int tribe);
+
+// What the last Land Bridge to land laid: core_land_bridge_stamp_count()
+// stamps of 3 floats (a unit direction) each, every one
+// core_spell_radius(0) across; and the height above sea level the stamps
+// raise the centre line to.
 int core_land_bridge_stamp_count(void);
 float* core_land_bridge_stamps(void);
-double core_land_bridge_stamp_radius(void);
 double core_land_bridge_height(void);
 
 #ifdef __cplusplus

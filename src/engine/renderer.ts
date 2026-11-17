@@ -11,7 +11,7 @@ import { createTreeMesh, TREE_VERTEX_BYTES } from './mesh/treeMesh'
 import { HUT_HEIGHT_RATIO } from '../game/huts'
 import { MAX_TREES } from '../game/trees'
 import { HutSite } from '../sim/hutSite'
-import { LandBridge } from '../sim/landBridge'
+import { SpellResult } from '../sim/spell'
 import {
   mat4Identity,
   mat4Multiply,
@@ -512,30 +512,39 @@ export async function createRenderer(
       uniformData[32] = light[0]
       uniformData[33] = light[1]
       uniformData[34] = light[2]
-      uniformData[35] = 0
+      // [35], the light's w, carries the cast pulse; set with the cursor below.
       uniformData[36] = eye[0]
       uniformData[37] = eye[1]
       uniformData[38] = eye[2]
       uniformData[39] = 0
       const { sculptor, huts, shaman } = currentGame
-      // The brush cursor while sculpting; otherwise, in build mode, the same
-      // disc marks the hut's footprint and says whether it can go there; and
-      // while a Land Bridge is aimed, it marks the far end at the strip's
-      // width, green where the core would raise it.
-      const bridge = sculptor.armed ? null : shaman.preview
+      // The brush cursor while sculpting; otherwise, while a spell is aimed,
+      // the disc it would write (a bridge's far end, at the strip's width),
+      // green where the core would cast it; otherwise, while she casts, that
+      // disc pulsing where it will land; otherwise, in build mode, the hut's
+      // footprint and whether it can go there.
+      const aim = sculptor.armed ? null : shaman.preview
+      const cast = sculptor.armed || aim ? null : shaman.casting
       const ghost = huts.ghost
       const hover = sculptor.armed
         ? sculptor.hoverDirection
-        : bridge
-          ? bridge.to
-          : (ghost?.direction ?? null)
-      // The disc reaches the furthest footprint node: the patch the core will
-      // block, and the patch that has to be level.
+        : aim
+          ? aim.to
+          : cast
+            ? cast.target
+            : (ghost?.direction ?? null)
+      // The hut disc reaches the furthest footprint node: the patch the core
+      // will block, and the patch that has to be level.
       const cursorRadius = sculptor.armed
         ? sculptor.brushRadius
-        : bridge
-          ? shaman.stripRadius
-          : (ghost?.footprint ?? 0) || huts.radius / planet.radius
+        : aim
+          ? shaman.radiusOf(aim.spell)
+          : cast
+            ? cast.radius
+            : (ghost?.footprint ?? 0) || huts.radius / planet.radius
+
+      // How far through the cast she is, for the pulse; 0 is a steady disc.
+      uniformData[35] = cast ? Math.max(cast.progress, 1e-3) : 0
 
       uniformData[40] = planet.radius
       uniformData[41] = planet.maxHeight
@@ -547,15 +556,17 @@ export async function createRenderer(
             : sculptor.mode === 'flatten'
               ? 2
               : 0
-      uniformData[43] = bridge
-        ? bridge.result === LandBridge.ok
+      uniformData[43] = aim
+        ? aim.result === SpellResult.ok
           ? 1
           : -1
-        : !sculptor.armed && ghost
-          ? ghost.site === HutSite.ok
-            ? 1
-            : -1
-          : 0
+        : cast
+          ? 2
+          : !sculptor.armed && ghost
+            ? ghost.site === HutSite.ok
+              ? 1
+              : -1
+            : 0
       uniformData[44] = hover ? hover[0] : 0
       uniformData[45] = hover ? hover[1] : 0
       uniformData[46] = hover ? hover[2] : 0

@@ -85,7 +85,7 @@ export function createGame(simulation: Simulation): Game {
       // searched later this frame already sees it.
       sculptor.update(deltaMs, input, { camera, aspect })
 
-      // A spell being aimed sees the clicks first: a Land Bridge cast is not
+      // A spell being aimed sees the clicks first: a cast is not
       // also a hut, a selection or a move order. Then huts, which own the left
       // button in build mode so no selection box starts while placing, and a
       // right-click on a hut as an enter or eject order. Then trees, which

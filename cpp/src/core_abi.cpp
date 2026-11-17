@@ -258,10 +258,39 @@ INKULOUS_EXPORT void core_follower_set_speed(double speed) {
 
 INKULOUS_EXPORT int core_follower_hut(int id) { return simulation().followers().hut(id); }
 
+INKULOUS_EXPORT int core_follower_tree(int id) { return simulation().followers().tree(id); }
+
+INKULOUS_EXPORT int core_follower_role(int id) {
+  inkulous::FollowerSet& followers = simulation().followers();
+  if (id < 0 || id >= followers.count()) {
+    return -1;
+  }
+  return static_cast<int>(followers.role(id));
+}
+
+INKULOUS_EXPORT int core_follower_set_role(int id, int role) {
+  return simulation().followers().set_role(id, static_cast<inkulous::Role>(role)) ? 1 : 0;
+}
+
+INKULOUS_EXPORT double core_follower_health(int id) {
+  inkulous::FollowerSet& followers = simulation().followers();
+  if (id < 0 || id >= followers.count()) {
+    return 0.0;
+  }
+  return followers.health(id);
+}
+
+INKULOUS_EXPORT double core_follower_max_health(void) { return inkulous::kFollowerHealth; }
+
+INKULOUS_EXPORT void core_follower_set_health(int id, double health) {
+  simulation().followers().set_health(id, health);
+}
+
 // --- huts -----------------------------------------------------------------
 
-INKULOUS_EXPORT int core_hut_site(double x, double y, double z) {
-  return static_cast<int>(simulation().huts().check_site(x, y, z));
+INKULOUS_EXPORT int core_hut_site(double x, double y, double z, int kind, int tribe) {
+  return static_cast<int>(
+      simulation().huts().check_site(x, y, z, static_cast<inkulous::HutKind>(kind), tribe));
 }
 
 INKULOUS_EXPORT float* core_hut_site_point(void) {
@@ -274,12 +303,18 @@ INKULOUS_EXPORT int core_hut_place(double x,
                                    double hx,
                                    double hy,
                                    double hz,
-                                   int tribe) {
-  const int id = simulation().huts().place(x, y, z, hx, hy, hz, tribe);
+                                   int tribe,
+                                   int kind) {
+  const int id = simulation().huts().place(x, y, z, hx, hy, hz, tribe,
+                                           static_cast<inkulous::HutKind>(kind));
   if (id >= 0) {
     simulation().followers().refresh_instances();
   }
   return id;
+}
+
+INKULOUS_EXPORT int core_hut_cost(int kind, int tribe) {
+  return simulation().huts().cost(static_cast<inkulous::HutKind>(kind), tribe);
 }
 
 INKULOUS_EXPORT int core_hut_count(void) { return simulation().huts().count(); }
@@ -298,15 +333,59 @@ INKULOUS_EXPORT int core_huts_housed(void) { return simulation().huts().housed()
 
 INKULOUS_EXPORT int core_hut_tribe(int id) { return simulation().huts().tribe(id); }
 
+INKULOUS_EXPORT int core_hut_kind(int id) { return simulation().huts().kind(id); }
+
 INKULOUS_EXPORT int core_hut_order_enter(int id) {
   const int sent = simulation().huts().order_enter_selected(id);
   simulation().followers().refresh_instances();
   return sent;
 }
 
+INKULOUS_EXPORT int core_hut_eject(int id) {
+  const int out = simulation().huts().eject(id);
+  simulation().followers().refresh_instances();
+  return out;
+}
+
 INKULOUS_EXPORT double core_hut_radius(void) { return inkulous::kHutRadius; }
 
 INKULOUS_EXPORT int core_hut_capacity(void) { return inkulous::kHutCapacity; }
+
+INKULOUS_EXPORT int core_training_capacity(void) { return inkulous::kTrainingCapacity; }
+
+INKULOUS_EXPORT int core_warrior_cost(void) { return inkulous::kWarriorWoodCost; }
+
+INKULOUS_EXPORT double core_train_seconds(void) { return inkulous::kTrainSeconds; }
+
+// --- wood and trees -------------------------------------------------------
+
+INKULOUS_EXPORT int core_wood(int tribe) { return simulation().stores().wood(tribe); }
+
+INKULOUS_EXPORT void core_wood_set(int tribe, int wood) {
+  simulation().stores().set_wood(tribe, wood);
+}
+
+INKULOUS_EXPORT int core_trees_spawn(int count, int seed) {
+  return simulation().trees().spawn(count, static_cast<std::uint32_t>(seed));
+}
+
+INKULOUS_EXPORT int core_tree_count(void) { return simulation().trees().count(); }
+
+INKULOUS_EXPORT void core_trees_clear(void) { simulation().trees().clear(); }
+
+INKULOUS_EXPORT float* core_tree_instances(void) {
+  return const_cast<float*>(simulation().trees().instances());
+}
+
+INKULOUS_EXPORT int core_tree_instance_floats(void) { return inkulous::kTreeInstanceFloats; }
+
+INKULOUS_EXPORT int core_tree_order_chop(int id) { return simulation().trees().order_chop_selected(id); }
+
+INKULOUS_EXPORT double core_tree_progress(int id) { return simulation().trees().progress(id); }
+
+INKULOUS_EXPORT int core_tree_wood(void) { return inkulous::kWoodPerTree; }
+
+INKULOUS_EXPORT double core_tree_chop_seconds(void) { return inkulous::kChopSeconds; }
 
 // --- shaman and Land Bridge ---------------------------------------------
 

@@ -10,5 +10,15 @@ export const HutSite = {
   uneven: 3,
   occupied: 4,
   full: 5,
+  noWood: 6,
 } as const
 export type HutSite = (typeof HutSite)[keyof typeof HutSite]
+
+/** What a building is for. Mirrors inkulous::HutKind. */
+export const HutKind = {
+  /** Houses three and breeds. */
+  dwelling: 0,
+  /** Turns one brave and some wood into a warrior. */
+  training: 1,
+} as const
+export type HutKind = (typeof HutKind)[keyof typeof HutKind]

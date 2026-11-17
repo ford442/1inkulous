@@ -44,8 +44,6 @@ void slerp(const double a[3], const double b[3], double theta, double t, double 
   normalize3(out);
 }
 
-bool valid_tribe(std::int32_t tribe) { return tribe >= 0 && tribe < kMaxTribes; }
-
 }  // namespace
 
 std::int32_t Shamans::spawn(double x, double y, double z, std::int32_t tribe) {

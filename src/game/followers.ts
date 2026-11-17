@@ -1,6 +1,7 @@
 import type { Vec3 } from '../engine/math'
 import { screenRay, worldToNdc, type Ray, type RayCamera } from '../engine/picking'
 import type { DragRect, InputSnapshot } from '../input/input'
+import { Role, roleOfFlags } from '../sim/role'
 import type { Simulation } from '../sim/simulation'
 import type { NavGraph } from './navGraph'
 import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
@@ -73,6 +74,8 @@ export type Followers = {
   readonly instanceFloats: number
   /** How many followers are walking a path right now. */
   readonly walkingCount: number
+  /** How many of them are warriors. */
+  readonly warriorCount: number
   /**
    * The selection box currently on screen, or null when the player is not
    * dragging one — including while the sculpt modifier owns the gesture.
@@ -233,6 +236,17 @@ export function createFollowers(
         }
       }
       return walking
+    },
+    get warriorCount() {
+      const data = simulation.followerInstances()
+      const stride = simulation.followerInstanceFloats
+      let warriors = 0
+      for (let id = 0; id < data.length / stride; id += 1) {
+        if (roleOfFlags(data[id * stride + OFFSET_FLAGS]) === Role.warrior) {
+          warriors += 1
+        }
+      }
+      return warriors
     },
 
     update(_deltaMs: number, input: InputSnapshot, view: FollowerViewContext) {

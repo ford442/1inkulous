@@ -19,7 +19,9 @@
 // apart; then everyone's feet are put back on the ground. Positions are free
 // on the surface, not snapped to nodes, so a group spreads around a waypoint
 // instead of queueing on one vertex. A body that cannot take that step for
-// several fixed steps repaths once from the node it is anchored to.
+// several fixed steps repaths once from the node it is anchored to. A fourth
+// pass is the fight: every warrior strikes the nearest enemy in reach, and
+// anyone left with no health is taken out of the set.
 
 namespace inkulous {
 
@@ -27,7 +29,8 @@ namespace inkulous {
 //   0..2  world position (already scaled by radius + height)
 //   3..5  unit heading, tangent to the surface
 //   6     tribe index, as a float
-//   7     flags bitfield, as a float — see kFlag*
+//   7     flags bitfield, as a float — see kFlag*, with the Role in bits
+//         kRoleShift and up
 constexpr std::int32_t kFollowerInstanceFloats = 8;
 
 constexpr std::int32_t kFlagSelected = 1 << 0;
@@ -35,6 +38,50 @@ constexpr std::int32_t kFlagWalking = 1 << 1;
 // The tribe's shaman: walks, paths and is selected like anyone else, but is
 // drawn apart and never goes into a hut. See shaman.hpp.
 constexpr std::int32_t kFlagShaman = 1 << 2;
+// The role sits above the flags, three bits wide: room for the preachers and
+// firewarriors that come later without another instance float.
+constexpr std::int32_t kRoleShift = 3;
+constexpr std::int32_t kRoleMask = 0x7 << kRoleShift;
+
+// What a follower is for. Everyone is born a brave; a training hut turns a
+// brave into a warrior. The shaman is not a role but a flag on a brave.
+// Values cross the ABI as ints.
+enum class Role : std::int32_t {
+  // Gathers, builds a village's population, goes into huts. Does not fight.
+  kBrave = 0,
+  // Fights. Does not chop or go into huts.
+  kWarrior = 1,
+};
+constexpr std::int32_t kRoleCount = 2;
+
+// What a role changes, and nothing else: how fast it walks and how hard it
+// hits. Combat is the smallest thing that makes the role matter — a warrior
+// in reach of an enemy wears down its health on the fixed step, and at zero
+// the enemy is gone. No formations, no ranged, no fire.
+struct RoleStats {
+  // Multiplies the set's walking speed.
+  double speed;
+  // Health taken per second from one enemy in reach. Zero: does not fight.
+  double damage_per_second;
+  // Centre to centre, in world units along the ground.
+  double reach;
+};
+
+// Health everyone starts with, whatever the role.
+constexpr double kFollowerHealth = 100.0;
+
+constexpr RoleStats kRoleStats[kRoleCount] = {
+    // Brave.
+    {1.0, 0.0, 0.0},
+    // Warrior: a shade quicker, five seconds to cut down a brave alone, and
+    // a reach that covers anyone standing a spacing or so off.
+    {1.25, 20.0, 0.04},
+};
+
+inline const RoleStats& role_stats(Role role) {
+  const auto index = static_cast<std::int32_t>(role);
+  return kRoleStats[index >= 0 && index < kRoleCount ? index : 0];
+}
 
 // World units per second along the surface. On a unit-radius planet a follower
 // crosses a typical island in a few seconds and laps the world in a minute or
@@ -105,6 +152,19 @@ class FollowerSet {
   bool is_shaman(std::int32_t id) const {
     return followers_[static_cast<std::size_t>(id)].shaman;
   }
+  Role role(std::int32_t id) const { return followers_[static_cast<std::size_t>(id)].role; }
+  bool is_brave(std::int32_t id) const { return role(id) == Role::kBrave; }
+  double health(std::int32_t id) const {
+    return followers_[static_cast<std::size_t>(id)].health;
+  }
+
+  // Changes follower `id`'s role. A training hut does this to the warrior it
+  // lets out; tests and scenarios may do it directly. False for a bad id or
+  // role, or for the shaman, who stays what she is.
+  bool set_role(std::int32_t id, Role role);
+  // Sets health, clamped to [0, kFollowerHealth]. One set to 0 is removed on
+  // the next step. For tests and scenario setup.
+  void set_health(std::int32_t id, double health);
 
   // Makes follower `id` its tribe's shaman. False for a bad id.
   bool make_shaman(std::int32_t id);
@@ -117,6 +177,14 @@ class FollowerSet {
   std::int32_t hut(std::int32_t id) const;
   void set_hut(std::int32_t id, std::int32_t hut);
   void clear_huts();
+
+  // The tree a follower has been sent to chop, or -1. Trees own the meaning,
+  // as huts do; any other order drops it.
+  std::int32_t tree(std::int32_t id) const;
+  void set_tree(std::int32_t id, std::int32_t tree);
+  // Tree `tree` has gone and the ids above it have shifted down by one.
+  void tree_removed(std::int32_t tree);
+  void clear_trees();
 
   // Advances every follower by one fixed step.
   void step(double dt_seconds);
@@ -140,6 +208,8 @@ class FollowerSet {
     std::int32_t tribe = 0;
     bool selected = false;
     bool shaman = false;
+    Role role = Role::kBrave;
+    double health = kFollowerHealth;
 
     // Node nearest `dir`, followed as the follower moves.
     std::int32_t node = -1;
@@ -182,6 +252,8 @@ class FollowerSet {
     double lane = 0.0;
     // Hut this follower was ordered into, or -1. See HutSet.
     std::int32_t hut = -1;
+    // Tree this follower was sent to chop, or -1. See TreeSet.
+    std::int32_t tree = -1;
 
     // Separation push gathered this step, world units in the tangent plane.
     double push[3] = {0.0, 0.0, 0.0};
@@ -244,6 +316,9 @@ class FollowerSet {
   void watch_progress(Follower& follower, double dt_seconds);
   void separate();
   void settle(Follower& follower);
+  // Every warrior strikes the nearest enemy in its reach; then anyone with no
+  // health left is taken out of the set. Needs the neighbour index current.
+  void fight(double dt_seconds);
 
   // Lays out up to `wanted` standing spots round `centre`, reachable from
   // `goal_node`, centre first. Fills `slots_`.
@@ -284,6 +359,8 @@ class FollowerSet {
   // claim_distinct_nodes: which slot owns a node, or -1. Sized to the graph.
   std::vector<std::int32_t> node_claim_;
   std::vector<std::int32_t> claim_order_;
+  // fight: health each follower loses this step, by id.
+  std::vector<double> damage_scratch_;
   std::uint32_t flood_generation_ = 0;
   std::vector<Cell> cells_;
   std::vector<Run> runs_;

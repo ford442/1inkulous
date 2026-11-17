@@ -8,6 +8,7 @@
 #include "1inkulous/huts.hpp"
 #include "1inkulous/nav.hpp"
 #include "1inkulous/terrain.hpp"
+#include "1inkulous/tribes.hpp"
 
 // Shamans: one special follower per tribe, the mana her people pray up, and
 // the one spell she knows so far — Land Bridge.
@@ -27,9 +28,6 @@
 // raises nothing and keeps no stamps.
 
 namespace inkulous {
-
-// Tribes the core keeps mana for: the four placeholder colours.
-constexpr std::int32_t kMaxTribes = 4;
 
 // Mana each living member of a tribe — out walking or inside a hut — adds per
 // second. A village of a dozen pays for a bridge in a quarter of a minute.

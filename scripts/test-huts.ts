@@ -17,7 +17,7 @@ import { createFollowers } from '../src/game/followers.ts'
 import { createHuts, doorTowards, hutIdUnderRay, siteProblem } from '../src/game/huts.ts'
 import { createPlanet } from '../src/game/planet.ts'
 import { createTerrain } from '../src/game/terrain.ts'
-import { HutSite } from '../src/sim/hutSite.ts'
+import { HutKind, HutSite } from '../src/sim/hutSite.ts'
 import { hutLine } from '../src/ui/hud.ts'
 import type { InputSnapshot, PointerClick, PointerSnapshot } from '../src/input/input.ts'
 import { createSimulation, type HutSiteReport, type Simulation } from '../src/sim/simulation.ts'
@@ -39,17 +39,17 @@ function check(name: string, condition: boolean, detail = ''): void {
 
 const eye: Vec3 = [0, 0, 6]
 const camera: RayCamera = { eye, viewMatrix: mat4LookAt(eye, [0, 0, 0], [0, 1, 0]), fovY: Math.PI / 4 }
-const STRIDE = 8
+const STRIDE = 9
 const HUT_RADIUS = 0.05
 
 {
   const instances = new Float32Array([
     // In front, at the centre of the view.
-    0, 0, 1.02, 0, 1, 0, 0, 0,
+    0, 0, 1.02, 0, 1, 0, 0, 0, 0,
     // Behind the planet, on the same line of sight.
-    0, 0, -1.02, 0, 1, 0, 1, 0,
+    0, 0, -1.02, 0, 1, 0, 1, 0, 0,
     // Off to the side.
-    0.3, 0, 0.954, 0, 1, 0, 2, 0,
+    0.3, 0, 0.954, 0, 1, 0, 2, 0, 1,
   ])
   const ray = screenRay(camera, 0, 0, CANVAS_ASPECT)
   check('a ray through a hut picks it, not the one behind the planet',
@@ -79,12 +79,14 @@ const HUT_RADIUS = 0.05
 // --- build mode and enter orders, against a fake core ----------------------
 
 let site: HutSite = HutSite.ok
-const placed: Array<{ direction: Vec3; heading: Vec3; tribe: number }> = []
+const placed: Array<{ direction: Vec3; heading: Vec3; tribe: number; kind: HutKind }> = []
+const sitesAsked: Array<{ kind: HutKind | undefined; tribe: number | undefined }> = []
 // The fake core snaps every site a little way off the cursor, the way the real
 // one snaps to the nearest nav node.
 const SNAPPED: Vec3 = [0, 0.02 / Math.hypot(0.02, 1), 1 / Math.hypot(0.02, 1)]
 const FOOTPRINT = 0.07
 const entered: number[] = []
+const ejected: number[] = []
 let selectedCount = 0
 let hutData = new Float32Array(0)
 
@@ -100,13 +102,32 @@ const simulation = {
   get selectedFollowerCount() {
     return selectedCount
   },
-  hutSite(): HutSiteReport {
+  trainingCapacity: 1,
+  warriorCost: 5,
+  hutSite(_direction: Vec3, kind?: HutKind, tribe?: number): HutSiteReport {
+    sitesAsked.push({ kind, tribe })
     return { site, centre: SNAPPED, footprint: FOOTPRINT }
   },
-  placeHut(direction: Vec3, heading: Vec3, tribe: number) {
-    placed.push({ direction, heading, tribe })
-    hutData = new Float32Array([...hutData, direction[0] * 1.0, direction[1] * 1.0, direction[2] * 1.0, ...heading, -1, 0])
+  placeHut(direction: Vec3, heading: Vec3, tribe: number, kind: HutKind = HutKind.dwelling) {
+    placed.push({ direction, heading, tribe, kind })
+    hutData = new Float32Array([...hutData, direction[0] * 1.0, direction[1] * 1.0, direction[2] * 1.0, ...heading, tribe, 0, kind])
     return placed.length - 1
+  },
+  hutCost(kind: HutKind) {
+    return kind === HutKind.training ? 15 : placed.length === 0 ? 0 : 10
+  },
+  hutTribe(id: number) {
+    return hutData[id * STRIDE + 6]
+  },
+  hutKind(id: number) {
+    return hutData[id * STRIDE + 8]
+  },
+  wood() {
+    return 0
+  },
+  ejectHut(id: number) {
+    ejected.push(id)
+    return 3
   },
   hutOccupants() {
     return 0
@@ -158,9 +179,13 @@ check('B turns build mode on, and the ghost snaps to the node the core would bui
   huts.building && huts.ghost !== null && huts.ghost.direction === SNAPPED)
 check('the ghost asks the core about its site, and carries the footprint it would block',
   huts.ghost?.site === HutSite.ok && huts.ghost.footprint === FOOTPRINT)
+check('asking for a dwelling, built by the player, so the wood is judged too',
+  sitesAsked.at(-1)?.kind === HutKind.dwelling && sitesAsked.at(-1)?.tribe === 0 &&
+    huts.ghost?.kind === HutKind.dwelling && huts.ghostInstance()?.[8] === HutKind.dwelling)
 check('and is drawn as one more hut instance, marked good',
   huts.ghostInstance()?.[7] === -1 && Math.abs((huts.ghostInstance()?.[1] ?? 0) - SNAPPED[1]) < 1e-3)
-check('the HUD says where it stands', hutLine(huts).includes('click to build'), hutLine(huts))
+check('the HUD says where it stands, and that the first one is free',
+  hutLine(huts).includes('placing a hut: click to build (free'), hutLine(huts))
 
 site = HutSite.uneven
 frame()
@@ -195,6 +220,10 @@ check('water is refused and named', placed.length === 1 && huts.notice === siteP
 site = HutSite.occupied
 frame({ clicks: [click('left')] })
 check('so is a pad touching another hut', placed.length === 1 && huts.notice === 'too close to another hut')
+site = HutSite.noWood
+frame({ clicks: [click('left')] })
+check('and a site the tribe cannot pay for, with the price', placed.length === 1 &&
+  huts.notice !== null && huts.notice.includes('not enough wood (10 needed)'), huts.notice ?? '')
 site = HutSite.ok
 const queued = click('left', { x: 0.3, y: 0 }, true)
 frame({ clicks: [queued] })
@@ -205,10 +234,30 @@ frame({ pressed: new Set(['KeyB']) })
 frame({ pressed: new Set(['Escape']) })
 check('so does Escape', !huts.building)
 
+frame({ pressed: new Set(['KeyT']) })
+check('T is build mode for a training hut', huts.building && huts.buildKind === HutKind.training &&
+  sitesAsked.at(-1)?.kind === HutKind.training && huts.ghostInstance()?.[8] === HutKind.training)
+check('and the HUD names it and its price', hutLine(huts).includes('placing a training hut: click to build (15 wood'),
+  hutLine(huts))
+frame({ pressed: new Set(['KeyB']) })
+check('B from there switches to a hut', huts.buildKind === HutKind.dwelling)
+frame({ pressed: new Set(['KeyT']) })
+frame({ clicks: [click('left', { x: 0.1, y: 0 })] })
+check('a click places a training hut, for the player', placed.length === 3 &&
+  placed[2].kind === HutKind.training && placed[2].tribe === 0 && !huts.building)
+frame({ pressed: new Set(['KeyT']) })
+frame({ pressed: new Set(['KeyT']) })
+check('T again leaves build mode', !huts.building)
+
 const onHut = click('right')
 selectedCount = 0
-check('right-click on a hut with nobody selected is left alone', !frame({ clicks: [onHut] }).consumed.has(onHut) &&
-  entered.length === 0)
+check('right-click on the player\'s hut with nobody selected empties it',
+  frame({ clicks: [onHut] }).consumed.has(onHut) && entered.length === 0 && ejected.length === 1 &&
+    ejected[0] === 0)
+check('and the HUD says how many came out', huts.notice === '3 came out')
+hutData[6] = 2
+check('anyone else\'s is left alone', !frame({ clicks: [onHut] }).consumed.has(onHut) && ejected.length === 1)
+hutData[6] = 0
 selectedCount = 3
 const order = frame({ clicks: [onHut] })
 check('with followers selected it is an enter order for that hut',
@@ -217,11 +266,12 @@ check('and the HUD says how many went', huts.notice === '2 going in' && hutLine(
 const ground = click('right', { x: -0.6, y: 0.4 })
 check('right-click on bare ground stays a move order', !frame({ clicks: [ground] }).consumed.has(ground) &&
   entered.length === 1)
-check('the HUD counts everyone, walking and housed', hutLine(huts).startsWith('population 9 · 2 huts, 2 inside'),
+check('the HUD counts everyone, walking and housed', hutLine(huts).startsWith('population 9 · 3 huts, 2 inside'),
   hutLine(huts))
 huts.update(5000, { keys: new Set(), pressed: new Set(), pointer: pointer() }, view)
 check('the notice ages out', huts.notice === null)
-check('and the line offers the build key', hutLine(huts).endsWith('B to build a hut'), hutLine(huts))
+check('and the line offers both build keys, with their prices',
+  hutLine(huts).endsWith('B hut (10 wood) · T training hut (15 wood)'), hutLine(huts))
 
 await realCore()
 
@@ -397,6 +447,8 @@ async function realCore(): Promise<void> {
     const report = real.hutSite(site)
     check('a second site is good while someone stands on it', stander >= 0 && report.site === HutSite.ok,
       `site ${report.site}`)
+    // The tribe's first hut was free; this one is paid for.
+    real.setWood(0, real.hutCost(HutKind.dwelling, 0))
     const second = real.placeHut(site, north, 0)
     const data = real.followerInstances()
     const at: Vec3 = [data[0], data[1], data[2]]

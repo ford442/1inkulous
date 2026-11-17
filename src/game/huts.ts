@@ -1,20 +1,23 @@
 import type { Vec3 } from '../engine/math'
 import { screenRay, type Ray, type RayCamera } from '../engine/picking'
 import type { InputSnapshot, PointerClick } from '../input/input'
-import { HutSite } from '../sim/hutSite'
+import { HutKind, HutSite } from '../sim/hutSite'
 import type { Simulation } from '../sim/simulation'
 import type { Planet } from './planet'
 import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
 
 /**
- * Huts — the one kind of building, and the loop it starts: flatten a pad,
- * drop a hut, send followers in, and the hut breeds more.
+ * Huts — the buildings, and the loop they start: flatten a pad, drop a hut,
+ * send braves in, and the hut breeds more; or drop a training hut, and the
+ * braves sent in come out as warriors.
  *
  * As with followers, the huts themselves live in the C++ core: it decides
- * where one may stand, which nav nodes it blocks, who goes inside, and when a
- * hut breeds. This module is the player's side of it — build mode (B) and its
- * ghost, picking a hut under the cursor, and turning a right-click on one into
- * an enter order. Placing does not sculpt; the flatten brush makes the pad.
+ * where one may stand, what it costs, which nav nodes it blocks, who goes
+ * inside, and when a hut breeds or trains. This module is the player's side
+ * of it — build mode (B for a hut, T for a training hut) and its ghost,
+ * picking a hut under the cursor, and turning a right-click on one into an
+ * enter order, or with nobody selected into an eject. Placing does not
+ * sculpt; the flatten brush makes the pad.
  */
 
 /** Overall height of the placeholder hut, as a multiple of its footprint radius. */
@@ -23,8 +26,9 @@ export const HUT_HEIGHT_RATIO = 1.0
 /** The player's tribe. Huts it builds are its own from the start. */
 const PLAYER_TRIBE = 0
 
-/** Instance layout, in floats: position(3), heading(3), tribe, occupants. */
+/** Instance layout, in floats: position(3), heading(3), tribe, occupants, kind. */
 const OFFSET_POSITION = 0
+const OFFSET_KIND = 8
 
 /** A ghost instance's occupants slot: the hut shader tints by these. */
 export const GHOST_VALID = -1
@@ -33,7 +37,11 @@ export const GHOST_INVALID = -2
 /** How long a one-line notice (hut full, nobody fits) stays on the HUD. */
 const NOTICE_MS = 2500
 
-const BUILD_KEYS = ['KeyB']
+/** One key per kind of building; pressing it again leaves build mode. */
+const BUILD_KEYS: ReadonlyArray<readonly [string, HutKind]> = [
+  ['KeyB', HutKind.dwelling],
+  ['KeyT', HutKind.training],
+]
 const CANCEL_KEYS = ['Escape']
 
 export type HutViewContext = {
@@ -44,6 +52,7 @@ export type HutViewContext = {
 
 /** Where build mode would put a hut, and whether the core would allow it. */
 export type HutGhost = {
+  readonly kind: HutKind
   /** The anchor node the hut would stand on — the cursor, snapped. */
   readonly direction: Vec3
   readonly heading: Vec3
@@ -61,6 +70,12 @@ export type HutUpdate = {
 
 export type Huts = {
   readonly building: boolean
+  /** What build mode is placing, or null outside it. */
+  readonly buildKind: HutKind | null
+  /** Wood the player's next dwelling and training hut cost. */
+  readonly dwellingCost: number
+  readonly trainingCost: number
+  readonly wood: number
   /** Null outside build mode, while sculpting, or with the cursor off the planet. */
   readonly ghost: HutGhost | null
   readonly count: number
@@ -85,7 +100,7 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
   const height = radius * HUT_HEIGHT_RATIO
   const instanceFloats = simulation.hutInstanceFloats
 
-  let building = false
+  let buildKind: HutKind | null = null
   let ghost: HutGhost | null = null
   let notice: string | null = null
   let noticeMs = 0
@@ -96,14 +111,17 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
     noticeMs = NOTICE_MS
   }
 
-  const ghostAt = (ray: Ray, eye: Vec3): HutGhost | null => {
+  const ghostAt = (ray: Ray, eye: Vec3, kind: HutKind): HutGhost | null => {
     const direction = planet.pickDirection(ray)
     if (!direction) {
       return null
     }
-    const report = simulation.hutSite(direction)
+    // Judged for the player's tribe, so a site the ground would take but the
+    // stockpile cannot pay for shows red, with the price on the HUD.
+    const report = simulation.hutSite(direction, kind, PLAYER_TRIBE)
     const centre = report.centre ?? direction
     return {
+      kind,
       direction: centre,
       heading: doorTowards(centre, eye),
       site: report.site,
@@ -113,7 +131,19 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
 
   return {
     get building() {
-      return building
+      return buildKind !== null
+    },
+    get buildKind() {
+      return buildKind
+    },
+    get dwellingCost() {
+      return simulation.hutCost(HutKind.dwelling, PLAYER_TRIBE)
+    },
+    get trainingCost() {
+      return simulation.hutCost(HutKind.training, PLAYER_TRIBE)
+    },
+    get wood() {
+      return simulation.wood(PLAYER_TRIBE)
     },
     get ghost() {
       return ghost
@@ -150,6 +180,7 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
       ghostData[5] = ghost.heading[2]
       ghostData[6] = -1
       ghostData[7] = ghost.site === HutSite.ok ? GHOST_VALID : GHOST_INVALID
+      ghostData[OFFSET_KIND] = ghost.kind
       return ghostData
     },
 
@@ -161,11 +192,14 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
         notice = null
       }
 
-      if (BUILD_KEYS.some((code) => input.pressed.has(code))) {
-        building = !building
+      for (const [code, kind] of BUILD_KEYS) {
+        if (input.pressed.has(code)) {
+          // The same key again leaves; the other key switches what is placed.
+          buildKind = buildKind === kind ? null : kind
+        }
       }
       if (CANCEL_KEYS.some((code) => input.pressed.has(code))) {
-        building = false
+        buildKind = null
       }
 
       // The brush has first claim on the mouse while C is down, so the ghost
@@ -173,8 +207,12 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
       const sculpting = isSculptModifierHeld(input)
       const pointer = input.pointer
       ghost =
-        building && !sculpting && pointer.ndc
-          ? ghostAt(screenRay(view.camera, pointer.ndc.x, pointer.ndc.y, view.aspect), view.camera.eye)
+        buildKind !== null && !sculpting && pointer.ndc
+          ? ghostAt(
+              screenRay(view.camera, pointer.ndc.x, pointer.ndc.y, view.aspect),
+              view.camera.eye,
+              buildKind,
+            )
           : null
 
       for (const click of pointer.clicks) {
@@ -183,32 +221,34 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
         }
         const ray = screenRay(view.camera, click.ndc.x, click.ndc.y, view.aspect)
 
-        if (building) {
+        if (buildKind !== null) {
           consumed.add(click)
           if (click.button === 'right') {
-            building = false
+            buildKind = null
             continue
           }
           // Judged where the click landed, not where the ghost was drawn: the
           // two differ when the pointer moved between the event and the frame.
-          const site = ghostAt(ray, view.camera.eye)
+          const site = ghostAt(ray, view.camera.eye, buildKind)
           if (!site) {
             continue
           }
           if (site.site !== HutSite.ok) {
-            say(siteProblem(site.site))
+            say(siteProblem(site.site, simulation.hutCost(buildKind, PLAYER_TRIBE)))
             continue
           }
-          if (simulation.placeHut(site.direction, site.heading, PLAYER_TRIBE) >= 0) {
+          if (simulation.placeHut(site.direction, site.heading, PLAYER_TRIBE, buildKind) >= 0) {
             notice = null
             noticeMs = 0
             // Shift keeps placing, the usual RTS binding for queued builds.
-            building = click.shiftKey
+            if (!click.shiftKey) {
+              buildKind = null
+            }
           }
           continue
         }
 
-        if (click.button !== 'right' || simulation.selectedFollowerCount === 0) {
+        if (click.button !== 'right') {
           continue
         }
         const id = hutIdUnderRay(
@@ -222,26 +262,59 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
         if (id < 0) {
           continue
         }
+
+        if (simulation.selectedFollowerCount === 0) {
+          // Nobody to send in: the player's own hut empties instead, the
+          // reverse of going in. Anyone else's is left alone.
+          if (simulation.hutTribe(id) !== PLAYER_TRIBE) {
+            continue
+          }
+          consumed.add(click)
+          const out = simulation.ejectHut(id)
+          say(out > 0 ? `${out} came out` : 'nobody inside')
+          continue
+        }
+
         // A right-click on a hut is always an enter order, even one nobody can
         // follow: walking the selection into the wall instead would surprise.
         consumed.add(click)
         const sent = simulation.orderEnterHut(id)
-        say(
-          sent > 0
-            ? `${sent} going in`
-            : simulation.hutOccupants(id) >= simulation.hutCapacity
-              ? 'that hut is full'
-              : 'nobody selected can go in there',
-        )
+        say(sent > 0 ? `${sent} going in` : enterProblem(simulation, id))
       }
 
-      return { consumed, building }
+      return { consumed, building: buildKind !== null }
     },
   }
 }
 
-/** What the HUD says about a site the core turned down. */
-export function siteProblem(site: HutSite): string {
+/** Why an enter order sent nobody, as the HUD says it. */
+function enterProblem(simulation: Simulation, id: number): string {
+  const training = simulation.hutKind(id) === HutKind.training
+  const capacity = training ? simulation.trainingCapacity : simulation.hutCapacity
+  if (simulation.hutOccupants(id) >= capacity) {
+    return training ? 'that training hut is busy' : 'that hut is full'
+  }
+  if (training && simulation.wood(PLAYER_TRIBE) < simulation.warriorCost) {
+    return `training a warrior needs ${simulation.warriorCost} wood`
+  }
+  return 'nobody selected can go in there — only braves do'
+}
+
+/** "free", or "10 wood". */
+export function woodCost(wood: number): string {
+  return wood > 0 ? `${wood} wood` : 'free'
+}
+
+/** What a kind of hut is called on the HUD. */
+export function kindName(kind: HutKind): string {
+  return kind === HutKind.training ? 'training hut' : 'hut'
+}
+
+/**
+ * What the HUD says about a site the core turned down. `cost` is the wood the
+ * building would have cost, for a site refused for want of it.
+ */
+export function siteProblem(site: HutSite, cost = 0): string {
   switch (site) {
     case HutSite.ok:
       return 'site is clear'
@@ -253,6 +326,8 @@ export function siteProblem(site: HutSite): string {
       return 'too close to another hut'
     case HutSite.full:
       return 'no room for more huts'
+    case HutSite.noWood:
+      return `not enough wood (${cost} needed) — send braves to chop trees`
     default:
       return 'the world is not ready'
   }

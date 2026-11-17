@@ -1,7 +1,8 @@
 import type { Vec3 } from '../engine/math'
 import createCoreModule, { type CoreModule } from '../wasm/core.js'
-import type { HutSite } from './hutSite'
+import { HutKind, type HutSite } from './hutSite'
 import type { LandBridge } from './landBridge'
+import type { Role } from './role'
 
 /**
  * The JS side of the WASM boundary.
@@ -31,8 +32,9 @@ export type NavCommitOptions = {
 /** An inclusive run of nav node ids. */
 export type NodeRange = { readonly first: number; readonly last: number }
 
-export { HutSite } from './hutSite'
+export { HutKind, HutSite } from './hutSite'
 export { LandBridge } from './landBridge'
+export { Role } from './role'
 
 /** A hut site as the core judged it. */
 export type HutSiteReport = {
@@ -119,6 +121,16 @@ export type Simulation = {
   clearFollowerSelection: () => void
   /** Sends every selected follower to a terrain direction. Returns how many routed. */
   orderFollowerMove: (direction: Vec3) => number
+  /** 0 brave, 1 warrior; -1 for a bad id. */
+  followerRole: (id: number) => Role | -1
+  /** For tests and scenarios: false for a bad id or the shaman. */
+  setFollowerRole: (id: number, role: Role) => boolean
+  followerHealth: (id: number) => number
+  /** For tests and scenarios; a follower set to 0 is gone after the next step. */
+  setFollowerHealth: (id: number, health: number) => void
+  readonly followerMaxHealth: number
+  /** The tree a follower is on its way to chop, or -1. */
+  followerTree: (id: number) => number
   /**
    * Live view of the packed instance buffer — `followerInstanceFloats` floats
    * per follower, in id order. Re-read it every frame: the pointer moves as the
@@ -128,30 +140,62 @@ export type Simulation = {
   readonly followerInstanceFloats: number
 
   /**
-   * Whether a hut could stand on the nav node nearest a direction, and if not,
-   * why — with that node's direction, where the hut would be centred, and the
-   * angle to the edge of the footprint it would block. Null centre when there
-   * is no node.
+   * Whether `tribe` could build a hut of `kind` on the nav node nearest a
+   * direction, and if not, why — with that node's direction, where the hut
+   * would be centred, and the angle to the edge of the footprint it would
+   * block. Null centre when there is no node. Without a tribe (or with a
+   * negative one) only the ground is judged; the kind defaults to a dwelling.
    */
-  hutSite: (direction: Vec3) => HutSiteReport
+  hutSite: (direction: Vec3, kind?: HutKind, tribe?: number) => HutSiteReport
   /**
-   * Builds a hut there, door along `heading`, owned by `tribe` (negative:
-   * unclaimed until someone goes in). Blocks the footprint to walking. Returns
-   * its id, or -1 if refused. Does not sculpt.
+   * Builds a hut of `kind` (a dwelling by default) there, door along
+   * `heading`, owned by `tribe` (negative: unclaimed, and free, until someone
+   * goes in), and charges the tribe its wood. Blocks the footprint to walking.
+   * Returns its id, or -1 if refused. Does not sculpt.
    */
-  placeHut: (direction: Vec3, heading: Vec3, tribe: number) => number
+  placeHut: (direction: Vec3, heading: Vec3, tribe: number, kind?: HutKind) => number
+  /** Wood `tribe`'s next hut of `kind` costs: 0 for its first dwelling. */
+  hutCost: (kind: HutKind, tribe: number) => number
+  /** -1 while unclaimed, or for a bad id. */
+  hutTribe: (id: number) => number
+  /** -1 for a bad id. */
+  hutKind: (id: number) => HutKind | -1
   readonly hutCount: number
   /** Followers inside every hut together. */
   readonly housedCount: number
   hutOccupants: (id: number) => number
-  /** Sends selected followers into a hut, as many as fit. Returns how many went. */
+  /** Sends selected braves into a hut, as many as fit. Returns how many went. */
   orderEnterHut: (id: number) => number
+  /** Sends everyone inside a hut back out of the door as braves. Returns how many. */
+  ejectHut: (id: number) => number
   /** Live view of the hut instance buffer, `hutInstanceFloats` per hut. Re-read per frame. */
   hutInstances: () => Float32Array
   readonly hutInstanceFloats: number
   /** Hut footprint radius in world units, as the core places them. */
   readonly hutRadius: number
+  /** People per dwelling, and per training hut. */
   readonly hutCapacity: number
+  readonly trainingCapacity: number
+  /** Wood one warrior's training costs, and how long it takes. */
+  readonly warriorCost: number
+  readonly trainSeconds: number
+
+  /** Wood a tribe holds. */
+  wood: (tribe: number) => number
+  setWood: (tribe: number, wood: number) => void
+  /** Scatters up to `count` trees from `seed`, replacing any. Returns how many stand. */
+  spawnTrees: (count: number, seed: number) => number
+  readonly treeCount: number
+  /** Live view of the tree instance buffer, `treeInstanceFloats` per tree. Re-read per frame. */
+  treeInstances: () => Float32Array
+  readonly treeInstanceFloats: number
+  /** Sends selected braves to chop a tree. Returns how many went. */
+  orderChop: (id: number) => number
+  /** 0..1 through chopping; -1 for a bad id. */
+  treeProgress: (id: number) => number
+  /** Wood a felled tree gives, and the brave-seconds it takes. */
+  readonly woodPerTree: number
+  readonly chopSeconds: number
 
   /** Spawns a tribe's shaman. Returns her follower id, or -1 if refused. */
   spawnShaman: (direction: Vec3, tribe: number) => number
@@ -221,6 +265,7 @@ export async function createSimulation(
 
   const instanceFloats = module._core_follower_instance_floats()
   const hutInstanceFloats = module._core_hut_instance_floats()
+  const treeInstanceFloats = module._core_tree_instance_floats()
   // Sizes the heights view; the pointer itself is re-read per call.
   let navNodeCount = 0
 
@@ -357,6 +402,28 @@ export async function createSimulation(
       return module._core_follower_order_move(direction[0], direction[1], direction[2])
     },
 
+    followerRole(id: number) {
+      return module._core_follower_role(id) as Role | -1
+    },
+
+    setFollowerRole(id: number, role: Role) {
+      return module._core_follower_set_role(id, role) === 1
+    },
+
+    followerHealth(id: number) {
+      return module._core_follower_health(id)
+    },
+
+    setFollowerHealth(id: number, health: number) {
+      module._core_follower_set_health(id, health)
+    },
+
+    followerMaxHealth: module._core_follower_max_health(),
+
+    followerTree(id: number) {
+      return module._core_follower_tree(id)
+    },
+
     followerInstances() {
       const count = module._core_follower_count()
       if (count === 0) {
@@ -368,8 +435,14 @@ export async function createSimulation(
 
     followerInstanceFloats: instanceFloats,
 
-    hutSite(direction: Vec3) {
-      const site = module._core_hut_site(direction[0], direction[1], direction[2]) as HutSite
+    hutSite(direction: Vec3, kind: HutKind = HutKind.dwelling, tribe = -1) {
+      const site = module._core_hut_site(
+        direction[0],
+        direction[1],
+        direction[2],
+        kind,
+        tribe,
+      ) as HutSite
       const at = module._core_hut_site_point() >> 2
       const heap = module.HEAPF32
       const centre: Vec3 | null =
@@ -379,7 +452,7 @@ export async function createSimulation(
       return { site, centre, footprint: heap[at + 3] }
     },
 
-    placeHut(direction: Vec3, heading: Vec3, tribe: number) {
+    placeHut(direction: Vec3, heading: Vec3, tribe: number, kind: HutKind = HutKind.dwelling) {
       return module._core_hut_place(
         direction[0],
         direction[1],
@@ -388,7 +461,20 @@ export async function createSimulation(
         heading[1],
         heading[2],
         tribe,
+        kind,
       )
+    },
+
+    hutCost(kind: HutKind, tribe: number) {
+      return module._core_hut_cost(kind, tribe)
+    },
+
+    hutTribe(id: number) {
+      return module._core_hut_tribe(id)
+    },
+
+    hutKind(id: number) {
+      return module._core_hut_kind(id) as HutKind | -1
     },
 
     get hutCount() {
@@ -407,6 +493,10 @@ export async function createSimulation(
       return module._core_hut_order_enter(id)
     },
 
+    ejectHut(id: number) {
+      return module._core_hut_eject(id)
+    },
+
     hutInstances() {
       const count = module._core_hut_count()
       if (count === 0) {
@@ -419,6 +509,47 @@ export async function createSimulation(
     hutInstanceFloats,
     hutRadius: module._core_hut_radius(),
     hutCapacity: module._core_hut_capacity(),
+    trainingCapacity: module._core_training_capacity(),
+    warriorCost: module._core_warrior_cost(),
+    trainSeconds: module._core_train_seconds(),
+
+    wood(tribe: number) {
+      return module._core_wood(tribe)
+    },
+
+    setWood(tribe: number, wood: number) {
+      module._core_wood_set(tribe, wood)
+    },
+
+    spawnTrees(count: number, seed: number) {
+      return module._core_trees_spawn(count, seed)
+    },
+
+    get treeCount() {
+      return module._core_tree_count()
+    },
+
+    treeInstances() {
+      const count = module._core_tree_count()
+      if (count === 0) {
+        return new Float32Array(0)
+      }
+      const start = module._core_tree_instances() >> 2
+      return module.HEAPF32.subarray(start, start + count * treeInstanceFloats)
+    },
+
+    treeInstanceFloats,
+
+    orderChop(id: number) {
+      return module._core_tree_order_chop(id)
+    },
+
+    treeProgress(id: number) {
+      return module._core_tree_progress(id)
+    },
+
+    woodPerTree: module._core_tree_wood(),
+    chopSeconds: module._core_tree_chop_seconds(),
 
     spawnShaman(direction: Vec3, tribe: number) {
       return module._core_shaman_spawn(direction[0], direction[1], direction[2], tribe)

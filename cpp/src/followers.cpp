@@ -75,6 +75,12 @@ constexpr double kProgressFraction = 0.25;
 // from their ids, spread round the circle by the golden angle.
 constexpr double kGoldenAngle = 2.39996322972865332;
 
+// The fight reuses the step's neighbour index, whose cells are kAvoidReach
+// across. A reach past that, less what a body moves in a step, would miss
+// enemies in the next cell but one.
+static_assert(kRoleStats[static_cast<int>(Role::kWarrior)].reach < kAvoidReach * 0.75,
+              "a warrior's reach must fit inside the neighbour index");
+
 double clamp_unit(double value) {
   return value < -1.0 ? -1.0 : (value > 1.0 ? 1.0 : value);
 }
@@ -341,6 +347,58 @@ std::int32_t FollowerSet::shaman(std::int32_t tribe) const {
     }
   }
   return -1;
+}
+
+bool FollowerSet::set_role(std::int32_t id, Role role) {
+  const auto index = static_cast<std::int32_t>(role);
+  if (id < 0 || id >= count() || index < 0 || index >= kRoleCount) {
+    return false;
+  }
+  Follower& follower = followers_[static_cast<std::size_t>(id)];
+  if (follower.shaman) {
+    return false;
+  }
+  follower.role = role;
+  refresh_instances();
+  return true;
+}
+
+void FollowerSet::set_health(std::int32_t id, double health) {
+  if (id < 0 || id >= count() || !std::isfinite(health)) {
+    return;
+  }
+  followers_[static_cast<std::size_t>(id)].health =
+      health < 0.0 ? 0.0 : (health > kFollowerHealth ? kFollowerHealth : health);
+}
+
+std::int32_t FollowerSet::tree(std::int32_t id) const {
+  if (id < 0 || id >= count()) {
+    return -1;
+  }
+  return followers_[static_cast<std::size_t>(id)].tree;
+}
+
+void FollowerSet::set_tree(std::int32_t id, std::int32_t tree) {
+  if (id < 0 || id >= count()) {
+    return;
+  }
+  followers_[static_cast<std::size_t>(id)].tree = tree;
+}
+
+void FollowerSet::tree_removed(std::int32_t tree) {
+  for (Follower& follower : followers_) {
+    if (follower.tree == tree) {
+      follower.tree = -1;
+    } else if (follower.tree > tree) {
+      follower.tree -= 1;
+    }
+  }
+}
+
+void FollowerSet::clear_trees() {
+  for (Follower& follower : followers_) {
+    follower.tree = -1;
+  }
 }
 
 std::int32_t FollowerSet::hut(std::int32_t id) const {
@@ -696,6 +754,7 @@ std::int32_t FollowerSet::order_move(const std::vector<std::int32_t>& ids,
     }
     Follower& follower = followers_[static_cast<std::size_t>(id)];
     follower.hut = -1;
+    follower.tree = -1;
     const std::int32_t start = start_node(follower);
     members_.push_back(Member{id, start, 0.0});
     start_scratch_.push_back(start);
@@ -1001,7 +1060,7 @@ void FollowerSet::blocked(Follower& follower) {
 void FollowerSet::steer(std::int32_t id, double dt_seconds) {
   Follower& follower = followers_[static_cast<std::size_t>(id)];
   const double radius = grid_->planet_radius();
-  double budget = speed_ * dt_seconds / radius;
+  double budget = speed_ * role_stats(follower.role).speed * dt_seconds / radius;
   follower.crowded = false;
   follower.corner_wait -= dt_seconds;
   const double was[3] = {follower.dir[0], follower.dir[1], follower.dir[2]};
@@ -1443,6 +1502,58 @@ void FollowerSet::step(double dt_seconds) {
   for (Follower& follower : followers_) {
     settle(follower);
   }
+
+  fight(dt_seconds);
+}
+
+void FollowerSet::fight(double dt_seconds) {
+  // Struck all at once: everyone picks a target from where the step left
+  // them, then the blows land, so who is handled first does not decide who
+  // lives. Two warriors on one enemy take it down twice as fast.
+  bool anyone = false;
+  const std::int32_t total = count();
+  damage_scratch_.assign(static_cast<std::size_t>(total), 0.0);
+  for (std::int32_t id = 0; id < total; ++id) {
+    const Follower& self = followers_[static_cast<std::size_t>(id)];
+    const RoleStats& stats = role_stats(self.role);
+    if (!(stats.damage_per_second > 0.0) || self.health <= 0.0) {
+      continue;
+    }
+    std::int32_t target = -1;
+    double nearest = 0.0;
+    for_each_near(id, stats.reach, [&](std::int32_t other, const double*, double distance) {
+      const Follower& them = followers_[static_cast<std::size_t>(other)];
+      if (them.tribe == self.tribe || them.health <= 0.0) {
+        return;
+      }
+      if (target < 0 || distance < nearest || (distance == nearest && other < target)) {
+        target = other;
+        nearest = distance;
+      }
+    });
+    if (target >= 0) {
+      damage_scratch_[static_cast<std::size_t>(target)] += stats.damage_per_second * dt_seconds;
+      anyone = true;
+    }
+  }
+  if (anyone) {
+    for (std::int32_t id = 0; id < total; ++id) {
+      followers_[static_cast<std::size_t>(id)].health -=
+          damage_scratch_[static_cast<std::size_t>(id)];
+    }
+  }
+
+  // The fallen leave the set, from the top so the ids still to visit hold.
+  bool removed = false;
+  for (std::int32_t id = count() - 1; id >= 0; --id) {
+    if (followers_[static_cast<std::size_t>(id)].health <= 0.0) {
+      followers_.erase(followers_.begin() + id);
+      removed = true;
+    }
+  }
+  if (removed) {
+    refresh_instances();
+  }
 }
 
 void FollowerSet::refresh_instances() {
@@ -1471,6 +1582,7 @@ void FollowerSet::refresh_instances() {
     if (follower.selected) flags |= kFlagSelected;
     if (walking(follower)) flags |= kFlagWalking;
     if (follower.shaman) flags |= kFlagShaman;
+    flags |= (static_cast<std::int32_t>(follower.role) << kRoleShift) & kRoleMask;
     out[7] = static_cast<float>(flags);
   }
 }

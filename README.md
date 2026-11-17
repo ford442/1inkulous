@@ -56,7 +56,7 @@ emcc -v   # confirm
 | `npm run test:core` | Headless checks of the core in Node (no browser needed) |
 | `npm run test:select` | Rubber-band selection and the pointer gestures behind it |
 | `npm run test:huts` | Hut picking and build mode against a fake core; then placing, entering, breeding and routing round a hut on the real core and planet |
-| `npm run test:shaman` | Shaman, mana and Land Bridge: first on the core alone (no planet module), then cast through the game module |
+| `npm run test:shaman` | Shaman, mana and the four spells — cast, cancelled, short of mana, cooling down, and one enemy shaman — first on the core alone (no planet module), then aimed and cast through the game module |
 | `npm run test:terrain` | The core owns the ground: the brush moves core, graph, feet and mesh together, and a pick agrees with a path |
 | `npm run test:economy` | Chopping, what huts cost, eject, training a warrior and a kill: on the core alone, then through the game modules |
 | `npm run test:memory` | The core's heap holds the opening village and a full tribe without growing, and the module declares a ceiling |
@@ -187,9 +187,11 @@ the terrain heights come back out to the mesh.
 | Right-click a tree | Send up to three of the selected braves to chop it |
 | Hold `C` + wheel, `[` `]` | Brush size, brush strength |
 | `F` | Select the shaman and centre the view on her |
-| `L` | Aim a Land Bridge (`L`, `Esc`, `B` or right-click cancels) |
-| Click, while aiming | Raise land from the shaman to there (Shift keeps aiming) |
-| Drag, while aiming | Raise land from where the drag began to where it ends |
+| `L` | Aim a Land Bridge (`L`, `Esc`, `B` or right-click puts it away) |
+| `X` / `V` / `M` | Aim Blast / Flatten / Swamp (the same key, `Esc`, `B` or right-click puts it away; another spell's key switches) |
+| Click, while aiming | Cast there: a disc spell on the click, a bridge from the shaman to it (Shift keeps aiming) |
+| Drag, while aiming a bridge | Raise land from where the drag began to where it ends |
+| Order the shaman, while she casts | Cancels the cast; so does casting another spell |
 
 Shift-click toggles one follower; Shift-drag adds everyone in the box. A plain
 drag replaces the selection, and a click that does not move stays a single
@@ -479,9 +481,9 @@ and then the same orders through the game modules with synthetic clicks.
 - No chopping or striking animation: a timer, a lean, and a removed
   instance.
 
-## The shaman and Land Bridge
+## The shaman and her spells
 
-One special unit and one spell, and the spell only works because the world
+One special unit and four spells, and the spells only work because the world
 already has live heights and a walkable graph.
 
 **The shaman is a follower with a flag.** She spawns at the heart of the
@@ -496,46 +498,89 @@ hut. Ids shift as followers go inside, so the core looks her up by tribe
 `population × 1` mana per second, counting followers outside and occupants
 inside huts, up to 1000. The HUD shows the player's mana and current income.
 
-**Land Bridge costs 200 and raises a strip of land along the great circle
-between two points.** Click while aiming and the strip runs from the shaman
-to the click; drag and it runs from where the drag began to where it ends.
-The core decides, in `Shamans::plan` (`cpp/src/shaman.cpp`):
+**Every spell goes through one path.** A spell is an id (`Spell` in
+`cpp/include/1inkulous/shaman.hpp`), and there are two calls:
+`Shamans::check(spell, tribe, target)` says whether it would go ahead and, if
+not, why; `Shamans::cast(spell, tribe, target)` runs the same check and, if it
+passes, starts the cast. The player's keys reach them through
+`core_spell_check` / `core_spell_cast`; an enemy shaman's AI will call the
+same two from inside the core (`test:shaman` already has a second tribe's
+shaman Blast the player's out of range through them). Each spell's cost,
+range, cast time, cooldown and radius are one row of `kSpellRules`, not
+anything the input code knows:
 
-- both ends must be within 0.3 of the shaman (a few cells: a strait, not an
-  ocean);
-- at least one end must be ashore: dry, or within 0.1 of walkable land, in
-  which case it is pulled onto that land so the bridge lands rather than
-  stopping short. Two ends out at sea are refused; one is a pier;
-- the line must cross water — sampled a fraction of a cell at a time with the
-  same weight rule routes use — or there is nothing to raise;
-- and the tribe must have the mana.
+| Spell | Key | Mana | Radius | Cast | Cooldown | Does |
+| --- | --- | --- | --- | --- | --- | --- |
+| Land Bridge | `L` | 200 | 0.09 a stamp | 1s | 3s | Raises a strip along the great circle between two points |
+| Blast | `X` | 200 | 0.1 | 1s | 4s | Raises a hill 0.02 high, the way the brush does, and throws everyone standing on it out past the rim |
+| Flatten | `V` | 150 | 0.16 | 1s | 3s | Pulls the disc to the height at its centre: a pad `B` accepts, even for a click a little off it |
+| Swamp | `M` | 250 | 0.12 | 1.5s | 5s | Drops the disc to sea level, so its nodes are water and routes go round |
 
-On success it charges the mana and raises the land itself: stamps half a
-stamp apart along the line, each of radius 0.09 (about three cells of strip),
-laid with `Terrain::sculpt` and each lifting its centre to the crest (0.01
-above sea level) and doing nothing where the ground is already higher. That
-is the whole update — no TypeScript runs to finish the cast, the graph is
-never rebuilt, and the next order walks over the bridge; the mesh picks the
-new land up from the dirty range at the end of the frame. The stamps stay
-readable for drawing and tests. A refused cast spends nothing and moves no
-terrain. While aiming, the cursor disc marks the far end
-at the strip's width, green where the core would raise it and red where it
-would not, and the HUD says why.
+Every target must be within 0.3 of her (a few cells), and a bridge's both
+ends. A cast takes its cast time: she stops where she stands and carries
+`kFlagCasting` (her robe goes gold) while the disc pulses on the ground where
+it will land, a ring closing in from the rim. A move order, a second cast or
+being pushed out of range ends it early with nothing spent. When the time is
+up the check runs again on the world as it is then — the ground may have
+changed, the mana may have gone — and only if it still passes is the mana
+spent, the cooldown started and the ground written, by the core, through
+`Terrain::sculpt` and `Terrain::flatten`. No TypeScript runs to finish a
+cast, the graph is never rebuilt, and the mesh picks the change up from the
+dirty range at the end of the frame. A refused or cancelled cast spends
+nothing and writes no height. The terrain edits have dry runs
+(`Terrain::would_sculpt`, `would_flatten`), which is how a check tells
+"nothing to do" without touching the ground.
+
+What each spell asks of the target, in `Shamans::judge`:
+
+- **Land Bridge**: at least one end ashore — dry, or within 0.1 of walkable
+  land, in which case it is pulled onto that land so the bridge lands rather
+  than stopping short (one end at sea is a pier; two are refused) — and the
+  line must cross water, sampled a fraction of a cell at a time with the same
+  weight rule routes use. It lands as stamps half a stamp apart along the
+  line, each lifting its centre to the crest (0.01 above sea level) and doing
+  nothing where the ground is already higher. The stamps stay readable for
+  drawing and tests.
+- **Blast**: something to raise, or someone to throw. Anyone inside the disc
+  is set down a body's width past its rim, straight away from the centre, on
+  that point if it can be stood on and on the nearest walkable node if not;
+  anyone walking is routed again from there.
+- **Flatten**: a centre above water (a pad at sea level is a swamp), and
+  ground that is not level already.
+- **Swamp**: ground that is not water already. A follower caught on it is set
+  down on the nearest dry node and stops; anyone walking a route over it is
+  routed round, or stopped if there is no longer a way.
+
+While aiming, the cursor disc marks the spell's disc — a bridge's far end at
+the strip's width — green where the core would cast it and red where it would
+not. The HUD's spell row lists every spell's key, name and cost, the seconds
+one has left to rest, a cast under way, and for the spell being aimed, the
+go-ahead or the reason it is red (short of mana, out of range, nothing to do,
+under water, still resting).
 
 `npm run test:shaman` checks all of this twice. First on the core alone —
-topology and a flat seed in, a moat dug with the core's sculpt, casts refused
-for want of mana, over dry ground and out of reach (nothing moves), one spent,
-and the shaman walked across — with no planet module at all. Then through the
-game module, where the mesh has to match the core after each cast.
+topology and a flat seed in, a moat dug with the core's sculpt, every spell
+refused, started, landed and walked over, a cast cancelled by an order, by a
+second cast and by being thrown out of range, one that runs out of mana
+before it lands, and a held key bouncing off the cooldown — with no planet
+module at all. Then through the game module: the keys, the clicks and drags,
+the HUD row, a cancel, and the mesh matching the core after each cast.
 
 ### Not done yet
 
-- Enemy shamans, reincarnation and a spell panel. Only the player's tribe
-  has a shaman; the other tribes bank mana with nothing to spend it on.
-- A bridge is a ridge of sculpted earth like any other, so the brush can
-  undo it, and followers standing in its path are lifted with the ground.
-- The cast is instant. There is no casting animation, cooldown or
-  line-of-sight rule.
+- Enemy shaman AI, reincarnation, spell unlocks and the vault. Only the
+  player's tribe starts with a shaman; the other tribes bank mana with
+  nothing to spend it on.
+- Lightning, swarm, earthquake, erode, volcano, hypnotise, angel of death.
+  Lightning wants the damage path; it comes once warriors can die from
+  something other than a warrior.
+- Spells are sculpted earth like any other, so the brush can undo them, and
+  followers standing on a bridge's path are lifted with the ground. Blast
+  moves the people it throws in one step, not along an arc; there are no
+  particles — the height change is the effect.
+- Swamp does not spare huts: one standing in the disc keeps its footprint
+  blocked on ground that is now water.
+- No line-of-sight rule.
 
 ## Design notes
 

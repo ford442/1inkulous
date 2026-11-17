@@ -70,6 +70,12 @@ body {
   text-align: right;
 }
 
+/* The spell row while the aimed spell would be refused: the ghost disc's red. */
+#hud .hint.refused {
+  color: #ff8a7a;
+  opacity: 0.9;
+}
+
 /* A failure the game cannot continue past: replaces the HUD. */
 #hud .fatal {
   max-width: 34rem;

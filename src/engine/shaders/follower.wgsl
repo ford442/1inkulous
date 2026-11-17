@@ -16,6 +16,8 @@ struct Uniforms {
 
 const FLAG_SELECTED: u32 = 1u;
 const FLAG_SHAMAN: u32 = 4u;
+// kFlagCasting in followers.hpp: a shaman standing to cast.
+const FLAG_CASTING: u32 = 64u;
 // The role sits above the flags: kRoleShift / kRoleMask in followers.hpp.
 const ROLE_SHIFT: u32 = 3u;
 const ROLE_MASK: u32 = 7u;
@@ -60,6 +62,7 @@ fn vs_main(
   let flags = u32(instanceFlags);
   let selected = f32((flags & FLAG_SELECTED) != 0u);
   let shaman = f32((flags & FLAG_SHAMAN) != 0u);
+  let casting = f32((flags & FLAG_CASTING) != 0u);
   let warrior = f32(((flags >> ROLE_SHIFT) & ROLE_MASK) == ROLE_WARRIOR);
   let gear = part == PART_BAND || part == PART_CLUB;
 
@@ -106,6 +109,8 @@ fn vs_main(
   // A pale robe over the tribe colour: still her tribe's, plainly not a brave.
   // A warrior's band is bone white and the club dark wood, whatever the tribe.
   var tint = mix(tribeColor(instanceTribe), vec3f(0.96, 0.92, 1.0), 0.45 * shaman);
+  // Casting, her robe takes the gold of the disc pulsing where it will land.
+  tint = mix(tint, vec3f(1.0, 0.82, 0.38), 0.6 * casting);
   if (part == PART_BAND) {
     tint = vec3f(0.95, 0.92, 0.84);
   } else if (part == PART_CLUB) {

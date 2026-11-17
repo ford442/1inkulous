@@ -70,6 +70,12 @@ class Terrain {
   // nodes it moved.
   NodeRange flatten(const double centre[3], double angular_radius, double target, double rate);
 
+  // Whether sculpt() or flatten() with these arguments would move any node.
+  // Nothing is written and nothing is marked dirty: this is how a spell's
+  // check tells "nothing to do" without touching the ground.
+  bool would_sculpt(const double centre[3], double angular_radius, double delta) const;
+  bool would_flatten(const double centre[3], double angular_radius, double target, double rate) const;
+
   // Height above sea level under a direction, read off the same triangle of
   // the nearest node's fan that walkers stand on. Need not be normalised. Zero
   // with no grid.
@@ -83,9 +89,18 @@ class Terrain {
  private:
   // Shared body of sculpt and flatten: visits each node inside the brush with
   // its falloff weight (1 at the centre, 0 at the rim) and its height, and
-  // stores whatever `next` returns.
+  // returns the nodes whose height `next` would change. With `commit` it
+  // stores them; without, it only reports.
   template <typename Step>
-  NodeRange brush(const double centre[3], double angular_radius, Step next);
+  NodeRange brush(const double centre[3], double angular_radius, bool commit, Step next) const;
+  // The per-node rule of each edit, shared by the edit and its dry run. The
+  // caller widens the dirty range.
+  NodeRange sculpt_impl(const double centre[3], double angular_radius, double delta, bool commit) const;
+  NodeRange flatten_impl(const double centre[3],
+                         double angular_radius,
+                         double target,
+                         double rate,
+                         bool commit) const;
 
   NavGrid* grid_ = nullptr;
   double max_height_ = 0.0;

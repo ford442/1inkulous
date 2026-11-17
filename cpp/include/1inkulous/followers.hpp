@@ -42,6 +42,9 @@ constexpr std::int32_t kFlagShaman = 1 << 2;
 // firewarriors that come later without another instance float.
 constexpr std::int32_t kRoleShift = 3;
 constexpr std::int32_t kRoleMask = 0x7 << kRoleShift;
+// A shaman standing to cast a spell, for as long as the cast lasts. Set and
+// cleared by Shamans; above the role bits so roles keep their room.
+constexpr std::int32_t kFlagCasting = 1 << 6;
 
 // What a follower is for. Everyone is born a brave; a training hut turns a
 // brave into a warrior. The shaman is not a role but a flag on a brave.
@@ -135,6 +138,24 @@ class FollowerSet {
   // by one, so callers walking the set remove from the top.
   void remove(std::int32_t id);
 
+  // Ground edits from inside the core — a spell — and what they do to the
+  // people standing on it. Each takes a disc: a unit-or-not direction and an
+  // angular radius.
+  //
+  // Everyone inside the disc is pushed out along the ground, away from its
+  // centre, to `beyond` radians past the rim: onto that point when it can be
+  // stood on, the nearest walkable node to it otherwise. Anyone walking is
+  // routed again from where they land. Returns how many moved.
+  std::int32_t shove(const double centre[3], double angular_radius, double beyond);
+  // Everyone near the disc whose ground can no longer hold them — water, a
+  // hut, a cliff — is set down on the nearest walkable node and stopped.
+  // Returns how many.
+  std::int32_t strand(const double centre[3], double angular_radius);
+  // Everyone walking a route that passes over the disc is routed again to
+  // their goal (or the nearest walkable node to it), and stopped if there is
+  // no longer a way.
+  void reroute_across(const double centre[3], double angular_radius);
+
   // Read access for the systems that act on followers from outside: huts.
   // `id` must be in range.
   const double* direction(std::int32_t id) const {
@@ -152,6 +173,19 @@ class FollowerSet {
   bool is_shaman(std::int32_t id) const {
     return followers_[static_cast<std::size_t>(id)].shaman;
   }
+  // Move orders this follower has been given, ever. Something waiting on a
+  // follower (a shaman's cast) notes it and treats any change as a new order.
+  std::uint32_t orders(std::int32_t id) const {
+    return followers_[static_cast<std::size_t>(id)].orders;
+  }
+  bool casting(std::int32_t id) const {
+    return followers_[static_cast<std::size_t>(id)].casting;
+  }
+  // Sets kFlagCasting. False for a bad id.
+  bool set_casting(std::int32_t id, bool casting);
+  // Stops follower `id` where it stands, dropping its route but not its hut
+  // or tree. Not an order: orders() does not change.
+  void halt(std::int32_t id);
   Role role(std::int32_t id) const { return followers_[static_cast<std::size_t>(id)].role; }
   bool is_brave(std::int32_t id) const { return role(id) == Role::kBrave; }
   double health(std::int32_t id) const {
@@ -208,6 +242,9 @@ class FollowerSet {
     std::int32_t tribe = 0;
     bool selected = false;
     bool shaman = false;
+    bool casting = false;
+    // Bumped by every move order; see orders().
+    std::uint32_t orders = 0;
     Role role = Role::kBrave;
     double health = kFollowerHealth;
 
@@ -284,6 +321,11 @@ class FollowerSet {
   }
 
   void stop(Follower& follower);
+  // Puts `follower` on node `node`, feet on the ground, facing along it.
+  void set_down(Follower& follower, std::int32_t node);
+  // Routes a walker again to its goal, moved to the nearest walkable node if
+  // the goal itself is no longer walkable. Stops it if there is no way.
+  void reroute(Follower& follower);
   // The node a follower's route leaves from: its own, or the nearest land.
   std::int32_t start_node(const Follower& follower) const;
   // Sets `follower` walking `nodes` (find_path's format, from `start`) to

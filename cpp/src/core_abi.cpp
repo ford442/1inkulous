@@ -42,6 +42,21 @@ int write_route(const std::vector<inkulous::NavPoint>& route) {
   return static_cast<int>(route.size());
 }
 
+const inkulous::SpellRules* rules_of(int spell) {
+  return inkulous::valid_spell(spell) ? &inkulous::kSpellRules[spell] : nullptr;
+}
+
+inkulous::SpellTarget spell_target(double x, double y, double z, double ox, double oy, double oz) {
+  inkulous::SpellTarget target;
+  target.at[0] = x;
+  target.at[1] = y;
+  target.at[2] = z;
+  target.from[0] = ox;
+  target.from[1] = oy;
+  target.from[2] = oz;
+  return target;
+}
+
 }  // namespace
 
 extern "C" {
@@ -387,7 +402,7 @@ INKULOUS_EXPORT int core_tree_wood(void) { return inkulous::kWoodPerTree; }
 
 INKULOUS_EXPORT double core_tree_chop_seconds(void) { return inkulous::kChopSeconds; }
 
-// --- shaman and Land Bridge ---------------------------------------------
+// --- shaman and spells ---------------------------------------------------
 
 INKULOUS_EXPORT int core_shaman_spawn(double x, double y, double z, int tribe) {
   return simulation().shamans().spawn(x, y, z, tribe);
@@ -412,32 +427,92 @@ INKULOUS_EXPORT void core_mana_set(int tribe, double mana) {
   simulation().shamans().set_mana(tribe, mana);
 }
 
-INKULOUS_EXPORT double core_land_bridge_cost(void) { return inkulous::kLandBridgeCost; }
+INKULOUS_EXPORT int core_spell_count(void) { return inkulous::kSpellCount; }
 
-INKULOUS_EXPORT double core_land_bridge_range(void) { return inkulous::kLandBridgeRange; }
-
-INKULOUS_EXPORT int core_land_bridge_check(int tribe,
-                                           double x0,
-                                           double y0,
-                                           double z0,
-                                           double x1,
-                                           double y1,
-                                           double z1) {
-  const double a[3] = {x0, y0, z0};
-  const double b[3] = {x1, y1, z1};
-  return static_cast<int>(simulation().shamans().check_land_bridge(tribe, a, b));
+INKULOUS_EXPORT double core_spell_cost(int spell) {
+  return rules_of(spell) ? rules_of(spell)->cost : 0.0;
 }
 
-INKULOUS_EXPORT int core_land_bridge_cast(int tribe,
-                                          double x0,
-                                          double y0,
-                                          double z0,
-                                          double x1,
-                                          double y1,
-                                          double z1) {
-  const double a[3] = {x0, y0, z0};
-  const double b[3] = {x1, y1, z1};
-  return static_cast<int>(simulation().shamans().cast_land_bridge(tribe, a, b));
+INKULOUS_EXPORT double core_spell_range(int spell) {
+  return rules_of(spell) ? rules_of(spell)->range : 0.0;
+}
+
+INKULOUS_EXPORT double core_spell_cast_seconds(int spell) {
+  return rules_of(spell) ? rules_of(spell)->cast_seconds : 0.0;
+}
+
+INKULOUS_EXPORT double core_spell_cooldown_seconds(int spell) {
+  return rules_of(spell) ? rules_of(spell)->cooldown_seconds : 0.0;
+}
+
+INKULOUS_EXPORT double core_spell_radius(int spell) {
+  return rules_of(spell) ? simulation().shamans().spell_angle(static_cast<inkulous::Spell>(spell))
+                         : 0.0;
+}
+
+INKULOUS_EXPORT int core_spell_check(int spell,
+                                     int tribe,
+                                     double x,
+                                     double y,
+                                     double z,
+                                     double ox,
+                                     double oy,
+                                     double oz) {
+  return static_cast<int>(simulation().shamans().check(
+      static_cast<inkulous::Spell>(spell), tribe, spell_target(x, y, z, ox, oy, oz)));
+}
+
+INKULOUS_EXPORT int core_spell_cast(int spell,
+                                    int tribe,
+                                    double x,
+                                    double y,
+                                    double z,
+                                    double ox,
+                                    double oy,
+                                    double oz) {
+  return static_cast<int>(simulation().shamans().cast(
+      static_cast<inkulous::Spell>(spell), tribe, spell_target(x, y, z, ox, oy, oz)));
+}
+
+INKULOUS_EXPORT void core_spell_cancel(int tribe) { simulation().shamans().cancel(tribe); }
+
+INKULOUS_EXPORT int core_spell_casting(int tribe) { return simulation().shamans().casting(tribe); }
+
+INKULOUS_EXPORT double core_spell_progress(int tribe) {
+  return simulation().shamans().cast_progress(tribe);
+}
+
+INKULOUS_EXPORT float* core_spell_target(int tribe) {
+  static float target[4];
+  double at[3];
+  double angle = 0.0;
+  if (simulation().shamans().cast_disc(tribe, at, angle)) {
+    target[0] = static_cast<float>(at[0]);
+    target[1] = static_cast<float>(at[1]);
+    target[2] = static_cast<float>(at[2]);
+    target[3] = static_cast<float>(angle);
+  } else {
+    target[0] = target[1] = target[2] = target[3] = 0.0f;
+  }
+  return target;
+}
+
+INKULOUS_EXPORT double core_spell_cooldown(int tribe, int spell) {
+  return inkulous::valid_spell(spell)
+             ? simulation().shamans().cooldown(tribe, static_cast<inkulous::Spell>(spell))
+             : 0.0;
+}
+
+INKULOUS_EXPORT int core_spell_ended(int tribe) {
+  return static_cast<int>(simulation().shamans().last_end(tribe).count);
+}
+
+INKULOUS_EXPORT int core_spell_ended_spell(int tribe) {
+  return static_cast<int>(simulation().shamans().last_end(tribe).spell);
+}
+
+INKULOUS_EXPORT int core_spell_ended_result(int tribe) {
+  return static_cast<int>(simulation().shamans().last_end(tribe).result);
 }
 
 INKULOUS_EXPORT int core_land_bridge_stamp_count(void) {
@@ -446,10 +521,6 @@ INKULOUS_EXPORT int core_land_bridge_stamp_count(void) {
 
 INKULOUS_EXPORT float* core_land_bridge_stamps(void) {
   return const_cast<float*>(simulation().shamans().stamps());
-}
-
-INKULOUS_EXPORT double core_land_bridge_stamp_radius(void) {
-  return simulation().shamans().stamp_angle();
 }
 
 INKULOUS_EXPORT double core_land_bridge_height(void) { return inkulous::kLandBridgeHeight; }

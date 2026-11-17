@@ -6,17 +6,24 @@
   "scripts": {
     "dev": "npm run build:wasm && vite",
     "dev:web": "vite",
+    "dev:debug": "npm run build:wasm:debug && CORE_WASM_DIR=cpp/build-wasm-debug/out vite",
     "build": "npm run build:wasm && tsc && vite build",
     "build:web": "tsc && vite build",
     "build:wasm": "bash scripts/build-wasm.sh",
-    "clean:wasm": "rm -rf cpp/build-wasm src/wasm/core.js src/wasm/core.wasm",
+    "build:wasm:debug": "bash scripts/build-wasm.sh debug",
+    "clean:wasm": "rm -rf cpp/build-wasm cpp/build-wasm-debug src/wasm/core.js src/wasm/core.wasm",
+    
     "preview": "vite preview",
     "deploy": "python3 deploy.py",
+    "test": "node scripts/run-tests.mjs",
+    "test:abi": "node scripts/test-abi.mjs",
     "test:core": "node scripts/test-core.mjs",
+    "test:gpu": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-gpu.ts",
     "test:select": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-rubber-band.ts",
     "test:huts": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-huts.ts",
     "test:shaman": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-shaman.ts",
-    "test:terrain": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-terrain.ts"
+    "test:terrain": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-terrain.ts",
+    "test:memory": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-memory.ts"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.71",

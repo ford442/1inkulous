@@ -57,6 +57,12 @@ export type FramePerf = {
 
 export type Hud = {
   setStatus: (message: string) => void
+  /**
+   * Replaces the whole HUD with one message and a reload button, for a failure
+   * the game cannot continue past. The HUD stays dead afterwards: the readouts
+   * it was updating are gone.
+   */
+  showFatal: (message: string) => void
   setPerf: (perf: FramePerf) => void
   setBrush: (brush: BrushReadout) => void
   setSimulation: (simulation: SimulationReadout) => void
@@ -124,6 +130,35 @@ export function selectionBandLayout(
   }
 }
 
+/**
+ * Puts `message` where the HUD was, with a button to start over. Built from
+ * text nodes, never markup: the message can carry an error's own words.
+ */
+export function showFatal(root: HTMLElement, message: string): void {
+  const panel = document.createElement('div')
+  panel.className = 'fatal'
+  panel.setAttribute('role', 'alert')
+
+  const title = document.createElement('h1')
+  title.className = 'title'
+  title.textContent = '1inkulous'
+
+  const text = document.createElement('p')
+  text.className = 'fatal-message'
+  text.textContent = message
+
+  const reload = document.createElement('button')
+  reload.type = 'button'
+  reload.className = 'fatal-reload'
+  reload.textContent = 'Reload'
+  reload.addEventListener('click', () => location.reload())
+
+  panel.append(title, text, reload)
+  root.replaceChildren(panel)
+  // A selection box left mid-drag would hang over the message.
+  document.querySelector('#select-band')?.setAttribute('hidden', '')
+}
+
 export function createHud(): Hud {
   const root = document.querySelector<HTMLDivElement>('#hud')
   if (!root) {
@@ -166,6 +201,9 @@ export function createHud(): Hud {
       if (statusEl) {
         statusEl.textContent = message
       }
+    },
+    showFatal(message: string) {
+      showFatal(root, message)
     },
     setPerf(perf: FramePerf) {
       if (fpsEl) {

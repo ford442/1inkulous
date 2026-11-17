@@ -90,6 +90,9 @@ INKULOUS_EXPORT int* core_nav_neighbors(void) { return simulation().nav().neighb
 
 INKULOUS_EXPORT void core_nav_commit(double planet_radius, double max_slope) {
   simulation().nav().commit(planet_radius, max_slope);
+  // The heights written before commit are the seed, and the mesh was built
+  // from the same field: nothing for it to copy back yet.
+  simulation().terrain().clear_dirty();
 }
 
 INKULOUS_EXPORT int core_nav_node_count(void) {
@@ -148,6 +151,53 @@ INKULOUS_EXPORT int core_nav_route(double x0,
   nav.smooth_path(start, nodes, goal, route);
   return write_route(route);
 }
+
+// --- terrain --------------------------------------------------------------
+
+INKULOUS_EXPORT void core_terrain_set_max_height(double max_height) {
+  simulation().terrain().set_max_height(max_height);
+}
+
+INKULOUS_EXPORT double core_terrain_max_height(void) {
+  return simulation().terrain().max_height();
+}
+
+INKULOUS_EXPORT double core_terrain_height_at(double x, double y, double z) {
+  const double dir[3] = {x, y, z};
+  return simulation().terrain().height_at(dir);
+}
+
+INKULOUS_EXPORT int core_terrain_sculpt(double x,
+                                        double y,
+                                        double z,
+                                        double angular_radius,
+                                        double delta) {
+  const double centre[3] = {x, y, z};
+  const inkulous::NodeRange moved = simulation().terrain().sculpt(centre, angular_radius, delta);
+  return moved.empty() ? 0 : 1;
+}
+
+INKULOUS_EXPORT int core_terrain_flatten(double x,
+                                         double y,
+                                         double z,
+                                         double angular_radius,
+                                         double target_height,
+                                         double rate) {
+  const double centre[3] = {x, y, z};
+  const inkulous::NodeRange moved =
+      simulation().terrain().flatten(centre, angular_radius, target_height, rate);
+  return moved.empty() ? 0 : 1;
+}
+
+INKULOUS_EXPORT int core_terrain_dirty_first(void) {
+  return simulation().terrain().dirty().first;
+}
+
+INKULOUS_EXPORT int core_terrain_dirty_last(void) {
+  return simulation().terrain().dirty().last;
+}
+
+INKULOUS_EXPORT void core_terrain_clear_dirty(void) { simulation().terrain().clear_dirty(); }
 
 // --- followers ------------------------------------------------------------
 

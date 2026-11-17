@@ -31,6 +31,31 @@ export type CoreModule = {
   _core_nav_node_count: () => number
   _core_nav_ready: () => number
   _core_nav_nearest_walkable: (x: number, y: number, z: number) => number
+
+  /**
+   * Terrain: the core's height per node is the walkable surface and the one
+   * the mesh draws. Seeded through `_core_nav_heights` before commit; edited
+   * only through these afterwards.
+   */
+  _core_terrain_set_max_height: (maxHeight: number) => void
+  _core_terrain_max_height: () => number
+  /** Height under a direction, on the triangle a walker there stands on. */
+  _core_terrain_height_at: (x: number, y: number, z: number) => number
+  /** 1 if any node moved. */
+  _core_terrain_sculpt: (x: number, y: number, z: number, angularRadius: number, delta: number) => number
+  /** 1 if any node moved. */
+  _core_terrain_flatten: (
+    x: number,
+    y: number,
+    z: number,
+    angularRadius: number,
+    targetHeight: number,
+    rate: number,
+  ) => number
+  /** Inclusive node range edited since the last clear; first > last when clean. */
+  _core_terrain_dirty_first: () => number
+  _core_terrain_dirty_last: () => number
+  _core_terrain_clear_dirty: () => void
   /**
    * Route between two directions into the route buffer: string-pulled legs, or
    * the raw A* nodes when `smooth` is 0. Returns the waypoint count, -1 if none.
@@ -113,7 +138,7 @@ export type CoreModule = {
     y1: number,
     z1: number,
   ) => number
-  /** As the check; on 0 the mana is spent and the stamp plan is written. */
+  /** As the check; on 0 the mana is spent and the land raised in the core. */
   _core_land_bridge_cast: (
     tribe: number,
     x0: number,
@@ -124,7 +149,7 @@ export type CoreModule = {
     z1: number,
   ) => number
   _core_land_bridge_stamp_count: () => number
-  /** Pointer to the plan: 3 floats (a unit direction) per stamp. */
+  /** Pointer to the stamps the last cast laid: 3 floats (a unit direction) each. */
   _core_land_bridge_stamps: () => number
   /** Angular radius of each stamp, in radians. */
   _core_land_bridge_stamp_radius: () => number

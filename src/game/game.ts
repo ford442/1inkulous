@@ -6,10 +6,13 @@ import { createHuts, type Huts } from './huts'
 import { createPlanet, type Planet } from './planet'
 import { createSculptor, isSculptModifierHeld, type Sculptor } from './sculpt'
 import { createShaman, type Shaman } from './shaman'
+import { createTerrain, type Terrain } from './terrain'
 
 export type Game = {
   clearColor: [number, number, number]
   planet: Planet
+  /** The ground, owned by the core; the planet mesh is redrawn from it. */
+  terrain: Terrain
   camera: Camera
   sculptor: Sculptor
   followers: Followers
@@ -24,21 +27,23 @@ export type Game = {
 
 /**
  * `simulation` is the C++ core, taken at construction rather than reached for
- * later: the world it owns — the navigation graph and every follower standing
- * on it — has to exist before the first frame.
+ * later: the world it owns — the terrain, the navigation graph over it and
+ * every follower standing on it — has to exist before the first frame.
  */
 export function createGame(simulation: Simulation): Game {
   const planet = createPlanet()
+  // The planet generated the land; from here on the core owns it.
+  const terrain = createTerrain(planet, simulation)
 
   const camera = createCamera({
     planetRadius: planet.radius,
     maxTerrainHeight: planet.maxHeight,
   })
 
-  const sculptor = createSculptor(planet)
-  const followers = createFollowers(planet, simulation)
+  const sculptor = createSculptor(terrain)
+  const followers = createFollowers(terrain, simulation)
   const huts = createHuts(planet, simulation)
-  const shaman = createShaman(planet, simulation, { syncTerrain: followers.syncTerrain })
+  const shaman = createShaman(planet, simulation)
 
   // Open on the tribe. The starting village is wherever the flattest land
   // turned out to be, which is as likely to be behind the planet as in front.
@@ -52,6 +57,7 @@ export function createGame(simulation: Simulation): Game {
 
   return {
     planet,
+    terrain,
     camera,
     sculptor,
     followers,
@@ -70,10 +76,9 @@ export function createGame(simulation: Simulation): Game {
       })
 
       // After the camera, so picking uses the view that is about to be drawn.
+      // The stroke edits the core directly, so a hut site judged or a path
+      // searched later this frame already sees it.
       sculptor.update(deltaMs, input, { camera, aspect })
-      // After the brush, so terrain edited this frame reaches the core's height
-      // buffer before a hut site is judged or anything paths over it.
-      followers.syncTerrain()
 
       // A spell being aimed sees the clicks first: a Land Bridge cast is not
       // also a hut, a selection or a move order. Then huts, which own the left
@@ -111,6 +116,10 @@ export function createGame(simulation: Simulation): Game {
       // sculpt stroke is filtered out on the gesture itself, not only by the
       // `sculpting` flag above.
       followers.update(deltaMs, forFollowers, { camera, aspect })
+
+      // Last: whatever moved the ground this frame — the brush, a spell, the
+      // core's own steps before this update — reaches the mesh before drawing.
+      terrain.syncMesh()
     },
   }
 }

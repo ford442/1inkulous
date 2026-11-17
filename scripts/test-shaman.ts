@@ -1,20 +1,29 @@
 /**
- * The shaman, mana and Land Bridge, end to end: the real WebAssembly core,
- * the real planet and nav graph, and the game module driven by synthetic
- * input. The village is cut off by a moat; a bridge cast through the UI has
- * to raise walkable land across it that the next order uses, with no graph
- * rebuild, while every refused cast leaves the terrain exactly as it was.
+ * The shaman, mana and Land Bridge.
+ *
+ * First on the core alone: the cube-sphere topology and a flat seed go in,
+ * and everything after that is a core call — the moat is dug with the
+ * core's sculpt, casts are refused, spent and walked, and no planet, mesh
+ * view or renderer exists. That is the path an enemy shaman's AI will take.
+ *
+ * Then through the game module, driven by synthetic input: L and a click or a
+ * drag cast the same spell, the core raises the land, and the planet mesh
+ * picks it up from the dirty range — while every refused cast leaves the
+ * ground, and the mesh, exactly as they were.
  *
  * Run: npm run test:shaman   (after npm run build:wasm)
  */
+import { createPlanetMesh } from '../src/engine/mesh/cubeSphere.ts'
 import { mat4LookAt, type Vec3 } from '../src/engine/math.ts'
 import { worldToNdc } from '../src/engine/picking.ts'
 import { createFollowers } from '../src/game/followers.ts'
+import { buildNavGraph } from '../src/game/navGraph.ts'
 import { createPlanet } from '../src/game/planet.ts'
 import { createShaman, PLAYER_TRIBE } from '../src/game/shaman.ts'
+import { createTerrain, MAX_WALKABLE_SLOPE } from '../src/game/terrain.ts'
 import type { InputSnapshot, PointerClick, PointerSnapshot } from '../src/input/input.ts'
 import { LandBridge } from '../src/sim/landBridge.ts'
-import { createSimulation } from '../src/sim/simulation.ts'
+import { createSimulation, type Simulation } from '../src/sim/simulation.ts'
 import { shamanLine } from '../src/ui/hud.ts'
 import { CANVAS_ASPECT } from '../src/viewport.ts'
 
@@ -50,10 +59,136 @@ const along = (from: Vec3, toward: Vec3, distance: number): Vec3 =>
     from[2] * Math.cos(distance) + toward[2] * Math.sin(distance),
   ])
 
+
+/** A tangent frame at `home`: two unit directions along the ground. */
+function frameAt(home: Vec3): { east: Vec3; north: Vec3 } {
+  const helper: Vec3 = Math.abs(home[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]
+  const east = normalize([
+    helper[0] - home[0] * dot(helper, home),
+    helper[1] - home[1] * dot(helper, home),
+    helper[2] - home[2] * dot(helper, home),
+  ])
+  const north = normalize([
+    home[1] * east[2] - home[2] * east[1],
+    home[2] * east[0] - home[0] * east[2],
+    home[0] * east[1] - home[1] * east[0],
+  ])
+  return { east, north }
+}
+
+const MOAT = 0.18
+
+/** Rings `home` with water MOAT radians out, using the core's own sculpt. */
+function digMoat(sim: Simulation, home: Vec3, east: Vec3, north: Vec3): void {
+  for (let k = 0; k < 64; k += 1) {
+    const theta = (k / 64) * Math.PI * 2
+    const tangent = normalize([
+      east[0] * Math.cos(theta) + north[0] * Math.sin(theta),
+      east[1] * Math.cos(theta) + north[1] * Math.sin(theta),
+      east[2] * Math.cos(theta) + north[2] * Math.sin(theta),
+    ])
+    sim.sculptTerrain(along(home, tangent, MOAT), 0.07, -1)
+  }
+}
+
+const shamanAtIn = (sim: Simulation): Vec3 => {
+  const data = sim.followerInstances()
+  const base = sim.shamanId(PLAYER_TRIBE) * sim.followerInstanceFloats
+  return normalize([data[base], data[base + 1], data[base + 2]])
+}
+
+// --- on the core alone -------------------------------------------------------
+
+{
+  const RADIUS = 1
+  const MAX_HEIGHT = 0.06
+  const LAND = MAX_HEIGHT / 3
+  const core = await createSimulation()
+  // The topology only: welded vertex ids and their links. Nothing here draws.
+  const graph = buildNavGraph(createPlanetMesh({ resolution: 24, radius: RADIUS }))
+  core.uploadNavGraph(graph, new Float32Array(graph.nodeCount).fill(LAND), {
+    planetRadius: RADIUS,
+    maxSlope: MAX_WALKABLE_SLOPE,
+    maxHeight: MAX_HEIGHT,
+  })
+  check('core: the seed is the terrain, with nothing dirty', core.navReady &&
+    core.takeTerrainDirty() === null && core.terrainHeightAt([0.3, 0.2, 0.9]) === Math.fround(LAND))
+
+  const home: Vec3 = [0, 0, 1]
+  const { east, north } = frameAt(home)
+  const shamanId = core.spawnShaman(home, PLAYER_TRIBE)
+  core.spawnFollower(along(home, east, 0.05), PLAYER_TRIBE)
+  core.spawnFollower(along(home, north, 0.05), PLAYER_TRIBE)
+  check('core: a shaman and two of her people', shamanId >= 0 && core.followerCount === 3)
+  for (let i = 0; i < 20; i += 1) core.tick(50)
+  check('core: a second of prayer is three mana', Math.abs(core.mana(PLAYER_TRIBE) - 3) < 1e-9,
+    `${core.mana(PLAYER_TRIBE)}`)
+
+  const farShore = along(home, east, 0.28)
+  check('core: before the moat, the far shore is a walk away',
+    core.module._core_nav_route(...home, ...farShore, 0) > 0)
+  digMoat(core, home, east, north)
+  check('core: the moat is water and the far shore land',
+    core.terrainHeightAt(along(home, east, MOAT)) <= 0 && core.terrainHeightAt(farShore) > 0 &&
+      core.terrainHeightAt(home) > 0)
+  check('core: and no route crosses it', core.module._core_nav_route(...home, ...farShore, 0) === -1)
+  check('core: digging it left a dirty range for the mesh, had there been one',
+    core.takeTerrainDirty() !== null && core.takeTerrainDirty() === null)
+
+  const snapshot = Float32Array.from(core.navHeights())
+  const untouched = () =>
+    core.takeTerrainDirty() === null && core.navHeights().every((h, i) => h === snapshot[i])
+
+  core.setMana(PLAYER_TRIBE, 0)
+  const poor = core.castLandBridge(PLAYER_TRIBE, home, farShore)
+  check('core: a cast with no mana is refused', poor.result === LandBridge.noMana && poor.plan === null)
+  check('core: and changes nothing', untouched() && core.mana(PLAYER_TRIBE) === 0)
+
+  core.setMana(PLAYER_TRIBE, core.manaMax)
+  const dry = core.castLandBridge(PLAYER_TRIBE, home, along(home, north, 0.08))
+  const far = core.castLandBridge(PLAYER_TRIBE, home, along(home, east, 0.45))
+  check('core: so is one over dry ground, and one out of her reach',
+    dry.result === LandBridge.dry && far.result === LandBridge.outOfRange)
+  check('core: neither touches the ground or the mana',
+    untouched() && core.mana(PLAYER_TRIBE) === core.manaMax)
+
+  const homeHeight = core.terrainHeightAt(home)
+  const spent = core.castLandBridge(PLAYER_TRIBE, home, farShore)
+  check('core: with mana in hand the cast goes ahead and is paid for',
+    spent.result === LandBridge.ok && core.mana(PLAYER_TRIBE) === core.manaMax - core.landBridgeCost,
+    `${core.mana(PLAYER_TRIBE)} left`)
+  check('core: the core raised the land itself', core.terrainHeightAt(along(home, east, MOAT)) > 0,
+    `${core.terrainHeightAt(along(home, east, MOAT)).toFixed(4)} at the old moat`)
+  check('core: and left the higher ground at her feet alone', core.terrainHeightAt(home) === homeHeight)
+  const changed: number[] = []
+  core.navHeights().forEach((h, node) => {
+    if (h !== snapshot[node]) changed.push(node)
+  })
+  const raised = core.takeTerrainDirty()
+  check('core: the dirty range holds every node it raised', raised !== null && changed.length > 0 &&
+    raised.first <= Math.min(...changed) && raised.last >= Math.max(...changed),
+    raised ? `${changed.length} nodes in ${raised.first}..${raised.last}` : 'clean')
+  check('core: the stamps it laid are still there to draw',
+    spent.plan !== null && spent.plan.stamps.length >= 3 &&
+      angle(spent.plan.stamps[0], home) < 1e-5, `${spent.plan?.stamps.length} stamps`)
+
+  check('core: a route crosses where the moat was',
+    core.module._core_nav_route(...shamanAtIn(core), ...farShore, 1) > 0)
+  core.clearFollowerSelection()
+  core.setFollowerSelected(core.shamanId(PLAYER_TRIBE), true)
+  check('core: the next order takes her over it', core.orderFollowerMove(farShore) === 1)
+  for (let i = 0; i < 30 * 20; i += 1) core.tick(50)
+  check('core: and she gets there', angle(shamanAtIn(core), farShore) < 0.04,
+    `${(angle(shamanAtIn(core), farShore) * RADIUS).toFixed(3)} from the far shore`)
+}
+
+// --- through the game module ---------------------------------------------
+
 const simulation = await createSimulation()
 const planet = createPlanet()
+const terrain = createTerrain(planet, simulation)
 // A small village, so the moat below can ring it without drowning anyone.
-const followers = createFollowers(planet, simulation, { spawnCount: 8 })
+const followers = createFollowers(terrain, simulation, { spawnCount: 8 })
 
 let uploads = 0
 const upload = simulation.uploadNavGraph
@@ -61,8 +196,6 @@ simulation.uploadNavGraph = (...args) => {
   uploads += 1
   upload(...args)
 }
-
-// --- the shaman ------------------------------------------------------------
 
 const shamanId = simulation.shamanId(PLAYER_TRIBE)
 check('the player has a shaman', shamanId >= 0, `follower ${shamanId}`)
@@ -82,13 +215,7 @@ check('she alone carries the shaman flag', flagged().length === 1 && flagged()[0
 check('a tribe gets one shaman, not two', simulation.spawnShaman(followers.homeDirection!, PLAYER_TRIBE) === -1)
 check('the other tribes have none', [1, 2, 3].every((tribe) => simulation.shamanId(tribe) === -1))
 
-const shamanAt = (): Vec3 => {
-  const data = simulation.followerInstances()
-  const base = simulation.shamanId(PLAYER_TRIBE) * simulation.followerInstanceFloats
-  return normalize([data[base], data[base + 1], data[base + 2]])
-}
-
-// --- mana --------------------------------------------------------------------
+const shamanAt = () => shamanAtIn(simulation)
 
 check('mana starts empty', simulation.mana(PLAYER_TRIBE) === 0)
 for (let i = 0; i < 20; i += 1) simulation.tick(50)
@@ -98,45 +225,35 @@ check('a second of play pays each blue a second of mana',
   `${simulation.mana(PLAYER_TRIBE)} mana, +${simulation.manaIncome(PLAYER_TRIBE)}/s`)
 check('and the other tribes theirs', Math.abs(simulation.mana(1) - 2) < 1e-9, `${simulation.mana(1)}`)
 
-// --- a moat round the village -------------------------------------------
-
 const home = shamanAt()
-const helper: Vec3 = Math.abs(home[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]
-const east = normalize([
-  helper[0] - home[0] * dot(helper, home),
-  helper[1] - home[1] * dot(helper, home),
-  helper[2] - home[2] * dot(helper, home),
-])
-const north = normalize([
-  home[1] * east[2] - home[2] * east[1],
-  home[2] * east[0] - home[0] * east[2],
-  home[0] * east[1] - home[1] * east[0],
-])
+const { east, north } = frameAt(home)
+
+/** Every mesh vertex carries its node's height in the core. */
+const meshMatchesCore = () => {
+  const heights = simulation.navHeights()
+  const { mesh } = planet
+  for (let v = 0; v < mesh.vertexCount; v += 1) {
+    if (mesh.heights[v] !== heights[mesh.weldIds[v]]) return false
+  }
+  return true
+}
 
 // Level land well past the moat, so there is a far shore all the way round.
-for (let i = 0; i < 20; i += 1) planet.flatten(home, 0.5, planet.maxHeight / 3, 1)
-followers.syncTerrain()
+for (let i = 0; i < 20; i += 1) terrain.flatten(home, 0.5, planet.maxHeight / 3, 1)
+terrain.syncMesh()
 const farShore = along(home, east, 0.28)
 check('before the moat, the far shore is a walk away',
   simulation.module._core_nav_route(...home, ...farShore, 0) > 0)
 
-const MOAT = 0.18
-for (let k = 0; k < 64; k += 1) {
-  const theta = (k / 64) * Math.PI * 2
-  const tangent = normalize([
-    east[0] * Math.cos(theta) + north[0] * Math.sin(theta),
-    east[1] * Math.cos(theta) + north[1] * Math.sin(theta),
-    east[2] * Math.cos(theta) + north[2] * Math.sin(theta),
-  ])
-  planet.sculpt(along(home, tangent, MOAT), 0.07, -1)
-}
-followers.syncTerrain()
+digMoat(simulation, home, east, north)
+terrain.syncMesh()
 for (let i = 0; i < 10; i += 1) simulation.tick(50)
 
 check('the far shore is land', !planet.isWaterAt(farShore) && !planet.isWaterAt(home))
 check('the moat between is water', planet.isWaterAt(along(home, east, MOAT)))
 check('and no route crosses it',
   simulation.module._core_nav_route(...shamanAt(), ...farShore, 0) === -1)
+check('the mesh drew the moat the core dug', meshMatchesCore())
 
 // --- casting through the game module -------------------------------------
 
@@ -153,13 +270,7 @@ const camera = {
 const view = { camera, aspect: CANVAS_ASPECT }
 const ndcOf = (direction: Vec3) => worldToNdc(camera, planet.surfacePointAt(direction), CANVAS_ASPECT)!
 
-let synced = 0
-const shaman = createShaman(planet, simulation, {
-  syncTerrain: () => {
-    synced += 1
-    followers.syncTerrain()
-  },
-})
+const shaman = createShaman(planet, simulation)
 
 function pointer(partial: Partial<PointerSnapshot> = {}): PointerSnapshot {
   return {
@@ -196,17 +307,19 @@ check('L aims a Land Bridge from her to the cursor',
 check('which the core turns down for want of mana', shaman.preview?.result === LandBridge.noMana)
 check('and the HUD says so', shamanLine(shaman).includes('not enough mana'), shamanLine(shaman))
 
-const heights = Float32Array.from(planet.mesh.heights)
+const heights = Float32Array.from(simulation.navHeights())
 const revision = planet.mesh.revision
+// Nothing for the mesh to copy, and the core's ground as it was.
 const unchanged = () =>
-  planet.mesh.revision === revision && planet.mesh.heights.every((h, i) => h === heights[i])
+  terrain.syncMesh() === 0 && planet.mesh.revision === revision &&
+  simulation.navHeights().every((h, i) => h === heights[i])
 
 const manaBefore = simulation.mana(PLAYER_TRIBE)
 const poor = click('left', farShore)
 const poorResult = frame([], { clicks: [poor] })
 check('a cast with no mana is still a cast, not an order', poorResult.consumed.has(poor) && shaman.targeting)
 check('but deforms nothing and spends nothing',
-  unchanged() && synced === 0 && simulation.mana(PLAYER_TRIBE) === manaBefore,
+  unchanged() && simulation.mana(PLAYER_TRIBE) === manaBefore,
   `${simulation.mana(PLAYER_TRIBE)} mana`)
 
 simulation.setMana(PLAYER_TRIBE, simulation.manaMax)
@@ -227,12 +340,19 @@ check('a click casts it and stops aiming', cast.consumed.has(good) && !shaman.ta
 check('the mana is spent',
   simulation.mana(PLAYER_TRIBE) === simulation.manaMax - simulation.landBridgeCost,
   `${simulation.mana(PLAYER_TRIBE)} left`)
-check('the land rose', planet.mesh.revision > revision && !planet.isWaterAt(along(home, east, MOAT)),
+check('the core raised it before the mesh knew',
+  !planet.isWaterAt(along(home, east, MOAT)) && planet.mesh.revision === revision,
   `${planet.heightAt(along(home, east, MOAT)).toFixed(4)} at the old moat`)
+check('the frame-end sync draws it', terrain.syncMesh() > 0 && planet.mesh.revision > revision &&
+  meshMatchesCore())
+// The end stamps lift nothing, but the last stamp out in the water spills a
+// little of its falloff up the far beach: a fraction of the crest, not a hill.
+const crest = simulation.module._core_land_bridge_height()
 check('the higher ground at its ends was left alone',
-  planet.heightAt(home) === homeHeight && Math.abs(planet.heightAt(farShore) - farHeight) < 1e-3,
-  `${homeHeight.toFixed(4)} -> ${planet.heightAt(home).toFixed(4)} at her feet`)
-check('the nav heights went to the core at once', synced === 1)
+  planet.heightAt(home) === homeHeight &&
+    Math.abs(planet.heightAt(farShore) - farHeight) < crest * 0.2,
+  `${homeHeight.toFixed(4)} -> ${planet.heightAt(home).toFixed(4)} at her feet, ` +
+    `${farHeight.toFixed(4)} -> ${planet.heightAt(farShore).toFixed(4)} on the far shore`)
 
 // --- shore to shore, by dragging ---------------------------------------------
 
@@ -258,8 +378,10 @@ check('a drag previews the bridge from where it began',
     shaman.preview.result === LandBridge.ok)
 const dragged = frame([], { ndc: drag.currentNdc, drags: [drag] })
 const direct = simulation.module._core_nav_route(...nearSide, ...farSide, 0)
-check('releasing it casts across', dragged.targeting && !shaman.targeting && synced === 2 &&
+check('releasing it casts across', dragged.targeting && !shaman.targeting &&
   !planet.isWaterAt(along(home, north, MOAT)))
+terrain.syncMesh()
+check('and the mesh follows again', meshMatchesCore())
 check('and the walk north is straight over it', direct > 0 && direct * 2 < detour,
   `${detour} nodes -> ${direct}`)
 

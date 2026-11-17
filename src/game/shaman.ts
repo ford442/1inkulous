@@ -2,7 +2,7 @@ import type { Vec3 } from '../engine/math'
 import { screenRay, type RayCamera } from '../engine/picking'
 import type { DragRect, InputSnapshot, PointerClick } from '../input/input'
 import { LandBridge } from '../sim/landBridge'
-import type { LandBridgePlan, Simulation } from '../sim/simulation'
+import type { Simulation } from '../sim/simulation'
 import type { Planet } from './planet'
 import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
 
@@ -14,10 +14,11 @@ import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
  * is what only she has: F to find her, mana on the HUD, and L to raise a
  * strip of land across water.
  *
- * The core judges a cast and charges for it; the terrain belongs to the
- * planet, so the stamps are laid here with the brush's own sculpt primitive
- * and the new heights pushed straight into the nav buffer. The next order
- * walks over the bridge with no graph rebuild.
+ * The core judges a cast, charges for it and raises the land, all in one
+ * call, so a shaman the player does not control casts exactly the same way.
+ * Nothing here touches the ground: the mesh picks the new land up from the
+ * core's dirty range at the end of the frame, and the next order walks over
+ * the bridge with no graph rebuild.
  */
 
 /** The player's tribe: blue, the one the shaman belongs to. */
@@ -57,14 +58,6 @@ export type ShamanUpdate = {
   targeting: boolean
 }
 
-export type ShamanOptions = {
-  /**
-   * Pushes the planet's heights into the core's nav buffer. Called right after
-   * a bridge is laid, so an order given in the same frame already walks it.
-   */
-  syncTerrain: () => void
-}
-
 export type Shaman = {
   readonly tribe: number
   /** Her follower id right now, or -1. Ids shift as others go into huts. */
@@ -83,11 +76,7 @@ export type Shaman = {
   update: (deltaMs: number, input: InputSnapshot, view: ShamanViewContext) => ShamanUpdate
 }
 
-export function createShaman(
-  planet: Planet,
-  simulation: Simulation,
-  options: ShamanOptions,
-): Shaman {
+export function createShaman(planet: Planet, simulation: Simulation): Shaman {
   const tribe = PLAYER_TRIBE
   let targeting = false
   let preview: BridgePreview | null = null
@@ -131,8 +120,6 @@ export function createShaman(
       say(bridgeProblem(result, simulation.landBridgeCost))
       return false
     }
-    layLandBridge(planet, plan)
-    options.syncTerrain()
     say('the land rises')
     return true
   }
@@ -239,23 +226,6 @@ export function createShaman(
       return { consumed, targeting: true }
     },
   }
-}
-
-/**
- * Carries out a cast's plan on the terrain: one sculpt stamp per centre, each
- * lifting its centre to the crest height and nothing where the ground is
- * already that high, so a bridge raises the strait and leaves the hills at its
- * ends alone. Returns true if any ground moved.
- */
-export function layLandBridge(planet: Planet, plan: LandBridgePlan): boolean {
-  let moved = false
-  for (const stamp of plan.stamps) {
-    const lift = plan.height - planet.heightAt(stamp)
-    if (lift > 0 && planet.sculpt(stamp, plan.stampRadius, lift)) {
-      moved = true
-    }
-  }
-  return moved
 }
 
 /** What the HUD says about a bridge the core turned down. */

@@ -55,14 +55,17 @@ void core_reset(void);
 //   fill core_nav_directions / _neighbor_offsets / _neighbors / _heights
 //   core_nav_commit(radius, max_slope)
 //
-// and after that only the heights buffer is ever touched again — terrain
-// deformation overwrites it in place and the next path search sees the change.
+// The heights written before commit seed the terrain from the generated
+// field. After that the core owns them: only the core_terrain_* edits below
+// change walkable height, and TypeScript reads the buffer back to draw it.
 
 // Sizes the graph. `link_count` is the sum of every node's degree. Returns 1 on
 // success, 0 on nonsense sizes.
 int core_nav_alloc(int node_count, int link_count);
 
-// Pointers into linear memory, valid until the next core_nav_alloc. Lengths:
+// Pointers into linear memory, valid until the next core_nav_alloc or memory
+// growth. Write all four before commit; after it, treat heights as read-only.
+// Lengths:
 // directions 3*N floats (unit vectors), heights N floats, offsets N+1 ints
 // (CSR), neighbours link_count ints.
 float* core_nav_directions(void);
@@ -87,6 +90,40 @@ int core_nav_nearest_walkable(double x, double y, double z);
 // many, or -1 if there is no way. For tests and debug drawing; orders do their
 // own routing.
 int core_nav_route(double x0, double y0, double z0, double x1, double y1, double z1, int smooth);
+
+// --- terrain --------------------------------------------------------------
+//
+// One height per nav node, which is the walkable surface and the one the mesh
+// draws. Edits go through here so a cast an AI makes is applied exactly like
+// the player's brush. Each edit widens a dirty node range; the renderer copies
+// that range onto the mesh vertices sharing those weld ids and clears it.
+
+// Highest ground in world units above sea level; edits snap to it. 0 leaves
+// it unbounded.
+void core_terrain_set_max_height(double max_height);
+double core_terrain_max_height(void);
+
+// Height under a direction, read off the triangle a walker standing there
+// would use. Need not be normalised. 0 with no grid.
+double core_terrain_height_at(double x, double y, double z);
+
+// Raises (positive delta) or lowers every node within `angular_radius` radians
+// of the direction, by `delta` at the centre and smoothly less to the rim.
+// Snaps to sea level and the ceiling. Returns 1 if any node moved.
+int core_terrain_sculpt(double x, double y, double z, double angular_radius, double delta);
+// Pulls the same disc towards `target_height`, at most `rate` at the centre;
+// a node within reach lands on it exactly. Returns 1 if any node moved.
+int core_terrain_flatten(double x,
+                         double y,
+                         double z,
+                         double angular_radius,
+                         double target_height,
+                         double rate);
+
+// Inclusive node range moved since the last clear, first > last when clean.
+int core_terrain_dirty_first(void);
+int core_terrain_dirty_last(void);
+void core_terrain_clear_dirty(void);
 
 // --- followers ------------------------------------------------------------
 //
@@ -184,11 +221,11 @@ int core_hut_capacity(void);
 // through the follower calls. Mana is one number per tribe (0..3), filled
 // every fixed step by the tribe's population.
 //
-// A cast is decided here and carried out in TypeScript, which owns the
-// terrain: on success the core has charged the mana and written a plan — a
-// row of stamp directions, a crest height and a stamp radius — that the game
-// lays with the sculpt primitive before writing the new heights into
-// core_nav_heights. A refused cast writes no plan.
+// A cast is decided and carried out here: on success the core charges the
+// mana and raises the land through the terrain edits above, so the dirty range
+// covers it. The stamps it laid — directions, a crest height and a stamp
+// radius — stay readable for the ghost and for tests. A refused cast raises
+// nothing and keeps no stamps.
 
 // Spawns `tribe`'s shaman on the walkable node nearest the direction. Returns
 // her follower id, or -1 if the tribe already has one or there is no land.
@@ -215,11 +252,11 @@ double core_land_bridge_range(void);
 // range, 4 neither end near land, 5 already dry, 6 not enough mana. Mirrors
 // inkulous::LandBridge. Charges nothing.
 int core_land_bridge_check(int tribe, double x0, double y0, double z0, double x1, double y1, double z1);
-// The same check; on 0 the mana is spent and the plan below is written. Any
-// other result empties the plan.
+// The same check; on 0 the mana is spent and the land is raised. Any other
+// result changes nothing and empties the stamps.
 int core_land_bridge_cast(int tribe, double x0, double y0, double z0, double x1, double y1, double z1);
 
-// The last cast's plan: core_land_bridge_stamp_count() stamps of 3 floats (a
+// What the last cast laid: core_land_bridge_stamp_count() stamps of 3 floats (a
 // unit direction) each; every stamp's angular radius in radians; and the
 // height above sea level the stamps raise the centre line to.
 int core_land_bridge_stamp_count(void);

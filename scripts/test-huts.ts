@@ -1,10 +1,13 @@
 /**
- * Huts, headless. The planet's flatten primitive; hut picking; build mode and
+ * Huts, headless. Hut picking; build mode and
  * enter orders through createHuts against a fake core; and then the real
  * WebAssembly core on the real planet and nav graph: B places a hut through
  * the UI, routes and walkers go round its footprint, anyone standing on the
  * pad is moved off, and the hut takes people in and breeds them out of the
  * door.
+ *
+ * The flatten brush that makes a pad is the core's, and is covered by
+ * test:terrain.
  *
  * Run: npm run test:huts   (after npm run build:wasm)
  */
@@ -12,8 +15,8 @@ import { mat4LookAt, type Vec3 } from '../src/engine/math.ts'
 import { screenRay, worldToNdc, type RayCamera } from '../src/engine/picking.ts'
 import { createFollowers } from '../src/game/followers.ts'
 import { createHuts, doorTowards, hutIdUnderRay, siteProblem } from '../src/game/huts.ts'
-import { buildNavGraph } from '../src/game/navGraph.ts'
 import { createPlanet } from '../src/game/planet.ts'
+import { createTerrain } from '../src/game/terrain.ts'
 import { HutSite } from '../src/sim/hutSite.ts'
 import { hutLine } from '../src/ui/hud.ts'
 import type { InputSnapshot, PointerClick, PointerSnapshot } from '../src/input/input.ts'
@@ -30,63 +33,6 @@ function check(name: string, condition: boolean, detail = ''): void {
   const message = detail ? `${name} — ${detail}` : name
   failures.push(message)
   console.error(`FAIL ${message}`)
-}
-
-// --- flatten ---------------------------------------------------------------
-
-{
-  const planet = createPlanet({ resolution: 24, terrain: 'placeholder', seed: 1 })
-  const { mesh } = planet
-  // Somewhere on land with some relief to level out.
-  let centre: Vec3 = [0, 0, 1]
-  for (let i = 0; i < mesh.vertexCount; i += 1) {
-    const h = mesh.heights[i]
-    if (h > planet.maxHeight * 0.3 && h < planet.maxHeight * 0.7) {
-      centre = [mesh.directions[i * 3], mesh.directions[i * 3 + 1], mesh.directions[i * 3 + 2]]
-      break
-    }
-  }
-  const radius = 0.15
-  const target = planet.heightAt(centre)
-  const before = Float32Array.from(mesh.heights)
-  const revision = mesh.revision
-
-  const inside: number[] = []
-  const outside: number[] = []
-  const cosRadius = Math.cos(radius)
-  for (let i = 0; i < mesh.vertexCount; i += 1) {
-    const dot =
-      mesh.directions[i * 3] * centre[0] +
-      mesh.directions[i * 3 + 1] * centre[1] +
-      mesh.directions[i * 3 + 2] * centre[2]
-    if (dot > cosRadius) inside.push(i)
-    else outside.push(i)
-  }
-
-  const moved = planet.flatten(centre, radius, target, planet.maxHeight * 0.05)
-  check('a flatten stroke moves the ground', moved && mesh.revision > revision)
-  check('and never past the target', inside.every((i) =>
-    Math.abs(mesh.heights[i] - target) <= Math.abs(before[i] - target) + 1e-7))
-  check('nor outside the brush', outside.every((i) => mesh.heights[i] === before[i]))
-
-  // Held on the spot, the core of the brush lands exactly on the target.
-  for (let frame = 0; frame < 400; frame += 1) {
-    planet.flatten(centre, radius, target, planet.maxHeight * 0.05)
-  }
-  const core = inside.filter((i) => {
-    const dot =
-      mesh.directions[i * 3] * centre[0] +
-      mesh.directions[i * 3 + 1] * centre[1] +
-      mesh.directions[i * 3 + 2] * centre[2]
-    return Math.acos(Math.min(1, dot)) < radius * 0.7
-  })
-  check('held long enough, the pad is exactly level',
-    core.length > 0 && core.every((i) => mesh.heights[i] === Math.fround(target)),
-    `${core.length} vertices in the pad`)
-  const settled = mesh.revision
-  check('and a level pad stops re-uploading',
-    !planet.flatten(centre, radius * 0.7, target, planet.maxHeight * 0.05) && mesh.revision === settled)
-  check('a zero-rate stroke does nothing', !planet.flatten(centre, radius, 0, 0))
 }
 
 // --- picking ---------------------------------------------------------------
@@ -303,16 +249,17 @@ async function realCore(): Promise<void> {
   const real = await createSimulation()
   const m = real.module
   const world = createPlanet()
-  const people = createFollowers(world, real, { spawnCount: 4, tribe: 0, shamanTribe: 0 })
-  const graph = buildNavGraph(world.mesh)
+  const ground = createTerrain(world, real)
+  const people = createFollowers(ground, real, { spawnCount: 4, tribe: 0, shamanTribe: 0 })
+  const { graph } = ground
   const nodeDirection = (node: number): Vec3 =>
     [graph.directions[node * 3], graph.directions[node * 3 + 1], graph.directions[node * 3 + 2]]
 
   // A wide level pad round the village, then nobody standing on it but the
   // people this section puts there.
   const home = people.homeDirection!
-  for (let i = 0; i < 40; i += 1) world.flatten(home, 0.45, world.maxHeight / 3, 1)
-  people.syncTerrain()
+  for (let i = 0; i < 40; i += 1) ground.flatten(home, 0.45, world.maxHeight / 3, 1)
+  ground.syncMesh()
   m._core_followers_clear()
 
   const helper: Vec3 = Math.abs(home[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]
@@ -345,13 +292,12 @@ async function realCore(): Promise<void> {
     ghost !== null && ghost.site === HutSite.ok && ghost.footprint > 0.03 && ghost.footprint < 0.15 &&
       graph.directions.length > 0,
     ghost ? `site ${ghost.site}, footprint ${ghost.footprint.toFixed(4)} rad` : 'no ghost')
-  const heightsBefore = Float32Array.from(world.mesh.heights)
-  const revisionBefore = world.mesh.revision
+  const heightsBefore = Float32Array.from(ground.heights())
   press([click('left')])
   check('B and a click place a hut through the real core', real.hutCount === 1 && m._core_hut_tribe(0) === 0,
     `${real.hutCount} huts`)
-  check('placing does not sculpt', world.mesh.revision === revisionBefore &&
-    heightsBefore.every((h, i) => h === world.mesh.heights[i]))
+  check('placing does not sculpt', real.takeTerrainDirty() === null &&
+    heightsBefore.every((h, i) => h === ground.heights()[i]))
 
   const centre = ghost!.direction
   const extent = ghost!.footprint
@@ -489,8 +435,7 @@ async function realCore(): Promise<void> {
 
   {
     const before = Math.hypot(real.hutInstances()[0], real.hutInstances()[1], real.hutInstances()[2])
-    world.sculpt(centre, extent * 2, world.maxHeight * 0.05)
-    people.syncTerrain()
+    ground.sculpt(centre, extent * 2, world.maxHeight * 0.05)
     real.tick(50)
     const after = Math.hypot(real.hutInstances()[0], real.hutInstances()[1], real.hutInstances()[2])
     check('a sculpt stroke under a standing hut lifts it with the ground', after > before + 1e-4,

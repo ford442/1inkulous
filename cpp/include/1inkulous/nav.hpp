@@ -12,10 +12,11 @@
 // directions and the adjacency once, and writes them straight into the buffers
 // this class hands out — nothing is marshalled through call arguments.
 //
-// Heights are the one part that keeps changing: terrain deformation rewrites
-// them, and the same buffer is simply overwritten in place, so a raised
-// mountain blocks a path on the very next search. The nearest-node index is
-// built from directions only, so those in-place height writes do not rebuild it.
+// Heights are the one part that keeps changing. TypeScript seeds them once,
+// before commit; after that the core owns them, and Terrain (terrain.hpp) edits
+// them in place, so a raised mountain blocks a path on the very next search.
+// The nearest-node index is built from directions only, so height edits do
+// not rebuild it.
 
 namespace inkulous {
 

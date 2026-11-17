@@ -7,6 +7,7 @@
 #include "1inkulous/followers.hpp"
 #include "1inkulous/huts.hpp"
 #include "1inkulous/nav.hpp"
+#include "1inkulous/terrain.hpp"
 
 // Shamans: one special follower per tribe, the mana her people pray up, and
 // the one spell she knows so far — Land Bridge.
@@ -17,13 +18,13 @@
 // cast.
 //
 // Land Bridge raises a strip of land along the great circle between two
-// points. The terrain is TypeScript's — the planet mesh owns the heights — so
-// the core does not deform anything itself. It decides whether the cast may
-// go ahead, charges for it, and hands back a plan: a row of stamp centres, the
-// crest height and the stamp radius. TypeScript lays the stamps with the same
-// sculpt primitive the brush uses and writes the new heights into the nav
-// buffer, so the very next order walks over the new land with no graph
-// rebuild. A refused cast hands back no plan, so nothing moves.
+// points. The core decides whether the cast may go ahead, charges for it, and
+// raises the land itself: a row of stamps through Terrain::sculpt, each
+// lifting its centre to the crest height and leaving ground that is already
+// that high alone. The very next order walks over the new land with no graph
+// rebuild, and the mesh picks the change up from the terrain's dirty range.
+// The stamp centres are kept for the ghost and for tests. A refused cast
+// raises nothing and keeps no stamps.
 
 namespace inkulous {
 
@@ -71,8 +72,9 @@ enum class LandBridge : std::int32_t {
 class Shamans {
  public:
   // None is owned; all must outlive the set.
-  void attach(NavGrid* grid, FollowerSet* followers, HutSet* huts) {
+  void attach(NavGrid* grid, Terrain* terrain, FollowerSet* followers, HutSet* huts) {
     grid_ = grid;
+    terrain_ = terrain;
     followers_ = followers;
     huts_ = huts;
   }
@@ -94,8 +96,9 @@ class Shamans {
   // Whether `tribe`'s shaman could raise a bridge from `a` to `b`, and if not,
   // why. Charges nothing and leaves the plan alone.
   LandBridge check_land_bridge(std::int32_t tribe, const double a[3], const double b[3]);
-  // The same check; on kOk the mana is spent and the plan is written. On any
-  // refusal the plan is emptied and no mana moves.
+  // The same check; on kOk the mana is spent, the land is raised and the
+  // stamps are kept. On any refusal the stamps are emptied, no mana moves and
+  // no ground does.
   LandBridge cast_land_bridge(std::int32_t tribe, const double a[3], const double b[3]);
 
   // The last successful cast's stamps: 3 floats (a unit direction) each.
@@ -119,7 +122,11 @@ class Shamans {
   bool shore_near(const double dir[3], double out[3]) const;
   void count_population();
 
+  // Lays the stamps on the terrain, in order.
+  void raise_land();
+
   NavGrid* grid_ = nullptr;
+  Terrain* terrain_ = nullptr;
   FollowerSet* followers_ = nullptr;
   HutSet* huts_ = nullptr;
   std::array<double, kMaxTribes> mana_{};

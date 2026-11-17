@@ -1,7 +1,7 @@
 import { screenRay, type RayCamera } from '../engine/picking'
 import type { Vec3 } from '../engine/math'
 import type { InputSnapshot } from '../input/input'
-import type { Planet } from './planet'
+import type { Terrain } from './terrain'
 
 /**
  * Terrain brush. Holding the sculpt modifier arms it: left button raises the
@@ -10,6 +10,9 @@ import type { Planet } from './planet'
  * mouse to move. Shift with the left button flattens instead: the ground under
  * the brush is pulled level with wherever the stroke began, which is how a hut
  * site gets made.
+ *
+ * Every stroke is a call into the core, which owns the ground; the mesh catches
+ * up when the frame's `syncMesh` copies the moved nodes back.
  */
 
 export type SculptMode = 'idle' | 'raise' | 'lower' | 'flatten'
@@ -61,7 +64,8 @@ export function isSculptModifierIn(codes: ReadonlySet<string>): boolean {
   return SCULPT_KEYS.some((code) => codes.has(code))
 }
 
-export function createSculptor(planet: Planet): Sculptor {
+export function createSculptor(terrain: Terrain): Sculptor {
+  const { planet } = terrain
   let brushRadius = DEFAULT_RADIUS
   let strengthFraction = DEFAULT_STRENGTH_FRACTION
   let hoverDirection: Vec3 | null = null
@@ -134,11 +138,11 @@ export function createSculptor(planet: Planet): Sculptor {
       const dt = Math.min(deltaMs, 100) / 1000
       const delta = strengthFraction * planet.maxHeight * dt
       if (mode === 'flatten') {
-        flattenTarget ??= planet.heightAt(hoverDirection)
-        planet.flatten(hoverDirection, brushRadius, flattenTarget, delta)
+        flattenTarget ??= terrain.heightAt(hoverDirection)
+        terrain.flatten(hoverDirection, brushRadius, flattenTarget, delta)
         return
       }
-      planet.sculpt(hoverDirection, brushRadius, mode === 'raise' ? delta : -delta)
+      terrain.sculpt(hoverDirection, brushRadius, mode === 'raise' ? delta : -delta)
     },
   }
 }

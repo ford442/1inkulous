@@ -1,7 +1,8 @@
 import './style.css'
 import { createRenderer } from './engine/renderer'
+import { deviceLossMessage, WebGpuUnavailableError } from './engine/webgpu'
 import { createGame } from './game/game'
-import { createHud } from './ui/hud'
+import { createHud, showFatal } from './ui/hud'
 import { createInput } from './input/input'
 import { createSimulation } from './sim/simulation'
 import { CANVAS_ASPECT } from './viewport'
@@ -33,6 +34,22 @@ async function main() {
   const renderer = await createRenderer(canvas, game)
   hud.setStatus(`${renderer.statusMessage} · core ${simulation.version}`)
 
+  // One way out of the frame loop, whatever the reason: the loop stops, the
+  // HUD says why and offers a reload. Without it a failure either spins an
+  // exception every frame or freezes the picture with nothing on screen.
+  let running = true
+  let frameHandle = 0
+  function halt(message: string) {
+    if (!running) {
+      return
+    }
+    running = false
+    cancelAnimationFrame(frameHandle)
+    hud.showFatal(message)
+  }
+  // Attached straight away, so a loss during the first frames is not missed.
+  void renderer.lost.then((loss) => halt(deviceLossMessage(loss)))
+
   let lastTime = performance.now()
   // Average over half a second so the HUD is readable rather than twitching
   // with every vsync hiccup.
@@ -44,60 +61,75 @@ async function main() {
   let perfDrawMs = 0
 
   function frame(now: number) {
-    const deltaMs = now - lastTime
-    lastTime = now
-
-    // Simulation first: the C++ core consumes whole fixed steps, and rendering
-    // then draws whatever state they left behind.
-    let mark = performance.now()
-    simulation.tick(deltaMs)
-    const simMs = performance.now() - mark
-
-    mark = performance.now()
-    game.update(deltaMs, input.snapshot(), CANVAS_ASPECT)
-    const gameMs = performance.now() - mark
-
-    mark = performance.now()
-    renderer.render(game)
-    const drawMs = performance.now() - mark
-
-    perfFrames += 1
-    perfSimMs += simMs
-    perfGameMs += gameMs
-    perfDrawMs += drawMs
-    const windowMs = now - perfWindowStart
-    if (windowMs >= PERF_WINDOW_MS && perfFrames > 0) {
-      hud.setPerf({
-        fps: (perfFrames * 1000) / windowMs,
-        simMs: perfSimMs / perfFrames,
-        gameMs: perfGameMs / perfFrames,
-        drawMs: perfDrawMs / perfFrames,
-      })
-      perfWindowStart = now
-      perfFrames = 0
-      perfSimMs = 0
-      perfGameMs = 0
-      perfDrawMs = 0
+    if (!running) {
+      return
     }
+    try {
+      const deltaMs = now - lastTime
+      lastTime = now
 
-    hud.setBrush(game.sculptor)
-    hud.setSimulation(simulation)
-    hud.setFollowers(game.followers)
-    hud.setHuts(game.huts)
-    hud.setShaman(game.shaman)
-    hud.setSelectionBand(game.followers.selectionBand)
+      // Simulation first: the C++ core consumes whole fixed steps, and rendering
+      // then draws whatever state they left behind.
+      let mark = performance.now()
+      simulation.tick(deltaMs)
+      const simMs = performance.now() - mark
 
-    input.endFrame()
-    requestAnimationFrame(frame)
+      mark = performance.now()
+      game.update(deltaMs, input.snapshot(), CANVAS_ASPECT)
+      const gameMs = performance.now() - mark
+
+      mark = performance.now()
+      renderer.render(game)
+      const drawMs = performance.now() - mark
+
+      perfFrames += 1
+      perfSimMs += simMs
+      perfGameMs += gameMs
+      perfDrawMs += drawMs
+      const windowMs = now - perfWindowStart
+      if (windowMs >= PERF_WINDOW_MS && perfFrames > 0) {
+        hud.setPerf({
+          fps: (perfFrames * 1000) / windowMs,
+          simMs: perfSimMs / perfFrames,
+          gameMs: perfGameMs / perfFrames,
+          drawMs: perfDrawMs / perfFrames,
+        })
+        perfWindowStart = now
+        perfFrames = 0
+        perfSimMs = 0
+        perfGameMs = 0
+        perfDrawMs = 0
+      }
+
+      hud.setBrush(game.sculptor)
+      hud.setSimulation(simulation)
+      hud.setFollowers(game.followers)
+      hud.setHuts(game.huts)
+      hud.setShaman(game.shaman)
+      hud.setSelectionBand(game.followers.selectionBand)
+
+      input.endFrame()
+    } catch (error) {
+      console.error(error)
+      halt(`The game stopped after an unexpected error: ${String(error)}`)
+      return
+    }
+    frameHandle = requestAnimationFrame(frame)
   }
 
-  requestAnimationFrame(frame)
+  frameHandle = requestAnimationFrame(frame)
 }
 
 main().catch((error: unknown) => {
   console.error(error)
-  const hud = document.querySelector<HTMLDivElement>('#hud')
-  if (hud) {
-    hud.innerHTML = `<p class="status">Failed to start: ${String(error)}</p>`
+  // WebGpuUnavailableError's message is already a sentence for the player;
+  // anything else is a bug, shown as it came.
+  const message =
+    error instanceof WebGpuUnavailableError
+      ? error.message
+      : `The game failed to start: ${String(error)}`
+  const root = document.querySelector<HTMLElement>('#hud')
+  if (root) {
+    showFatal(root, message)
   }
 })

@@ -7,6 +7,7 @@ the JS main thread.
 
 ```
 src/engine/   WebGPU device, planet + follower meshes, renderer, picking, math
+src/engine/shaders/   the WGSL, one file per pipeline, imported as source
 src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers, huts
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
@@ -45,23 +46,101 @@ emcc -v   # confirm
 | --- | --- |
 | `npm run dev` | Builds the WASM core, then starts the Vite dev server |
 | `npm run dev:web` | Dev server only — fast path when `src/wasm/` is already current |
+| `npm run dev:debug` | Builds the debug core, then serves it (see [Debug build](#debug-build)) |
 | `npm run build` | WASM core, then `tsc`, then the production bundle |
 | `npm run build:web` | Skips the WASM step; fails if `src/wasm/core.js` is absent |
-| `npm run build:wasm` | Compiles `cpp/` into `src/wasm/core.js` + `core.wasm` |
+| `npm run build:wasm` | Compiles `cpp/` into `src/wasm/core.js` + `core.wasm` (release) |
+| `npm run build:wasm:debug` | Opt-in `-O0 -g -sASSERTIONS=2` core, in its own directory |
+| `npm test` | Every `test:*` script below, one after another, with a summary. This is what CI runs |
+| `npm run test:abi` | `core_abi.h`, `core.d.ts` and the exports in `core_abi.cpp` agree; needs no build |
 | `npm run test:core` | Headless checks of the core in Node (no browser needed) |
+| `npm run test:select` | Rubber-band selection and the pointer gestures behind it |
 | `npm run test:huts` | Hut picking and build mode against a fake core; then placing, entering, breeding and routing round a hut on the real core and planet |
 | `npm run test:shaman` | Shaman, mana and Land Bridge: first on the core alone (no planet module), then cast through the game module |
 | `npm run test:terrain` | The core owns the ground: the brush moves core, graph, feet and mesh together, and a pick agrees with a path |
-| `npm run clean:wasm` | Removes the CMake build directory and generated artifacts |
+| `npm run test:memory` | The core's heap holds the opening village and a full tribe without growing, and the module declares a ceiling |
+| `npm run test:gpu` | Drawing-buffer sizing, limit planning, GPU error reporting and loss messages, and what the renderer's source must keep true |
+| `npm run clean:wasm` | Removes the CMake build directories and generated artifacts |
+
+`npm test` finds the `test:*` scripts in `package.json` itself, so a new one is
+run — locally and in CI — without being listed anywhere else. `npm test -- core
+huts` runs just those.
 
 `src/wasm/core.js` and `core.wasm` are generated and git-ignored;
 `src/wasm/core.d.ts` is hand-written and tracked, so a change to the C ABI in
-`cpp/include/1inkulous/core_abi.h` must be mirrored there.
+`cpp/include/1inkulous/core_abi.h` must be mirrored there. `npm run test:abi`
+is what notices when it is not: it fails on a function declared in one and
+missing from the other, on a different argument count or `void`-ness, and on a
+declaration `core_abi.cpp` does not export.
 
 The Emscripten glue targets `web,worker,node` — the Node environment is what lets
 `npm run test:core` run in CI. That is why a production build prints one
 informational notice about `node:module` being externalised for the browser; the
 branch that would use it never executes there.
+
+### The release core
+
+`npm run build:wasm` links `-O3 -flto`, with `-fno-rtti -fno-exceptions` (nothing
+in `cpp/` uses either, so a stray `throw` is a build error). Linear memory is
+sized rather than left to grow: 32 MB to start, 128 MB at most. The build prints
+what the binary declares, read back out of the `.wasm`:
+
+```
+wasm core (Release) written to src/wasm/  (96K core.wasm, memory 32MB initial, 128MB maximum)
+```
+
+A full tribe (`kMaxFollowers`) all sent across the default planet, huts and all,
+peaks around 3 MB; `npm run test:memory` watches that it never grows the heap.
+Growth stays enabled so a bigger planet still loads, but the ceiling means a
+leak — or a planet raised past what the numbers were sized for — aborts at a
+stack trace instead of swelling the tab. The footprint scales with the planet's
+node count (resolution 48 is about 8 MB, 96 about 29 MB, 160 about 80 MB), so
+raise `CORE_INITIAL_MEMORY` and `CORE_MAXIMUM_MEMORY` in `cpp/CMakeLists.txt` on
+purpose when the planet grows. Pthreads are off, so no COOP/COEP headers are
+needed. `-msimd128` was tried and left off: it did not move route or step times
+on the 3600-node graph outside noise.
+
+### Debug build
+
+`npm run build:wasm:debug` compiles `-O0 -g -sASSERTIONS=2` into
+`cpp/build-wasm-debug/out/`: its own build directory and its own output, so it
+can neither overwrite the release core in `src/wasm/` nor be picked up by
+`npm run dev`. Point the tools at it with `CORE_WASM_DIR`:
+
+```sh
+npm run dev:debug                                  # build it, then serve it
+CORE_WASM_DIR=cpp/build-wasm-debug/out npm test    # or run the tests against it
+```
+
+The time budgets in `test:core` (a mass order inside a frame, and so on) are
+claims about the release build; against a core loaded this way they are printed
+but not enforced.
+
+## Rendering
+
+The frame is drawn into 4x multisampled colour and depth targets and resolved to
+the canvas, so the planet's limb and the instanced pawns do not shimmer as the
+camera moves. Around that:
+
+- **Device.** `src/engine/webgpu.ts` asks for the high-performance adapter and
+  falls back to the default one. When neither exists, or the browser has no
+  WebGPU at all, the page says so in a sentence instead of a stack trace. The
+  adapter and its limits are logged at startup. Limits are requested only where
+  the frame needs more than WebGPU guarantees (today it does not, so none are),
+  and no optional features are. If the GPU cannot meet a need, startup says
+  which.
+- **Canvas.** Opaque: the canvas is the whole frame. Its tone mapping is left
+  alone, because the shaders apply their own exposure curve
+  (`1 - exp(-1.35 * color)`) and a second one on top would wash it out.
+- **Resolution.** The canvas is laid out at 1024x768 CSS pixels and its drawing
+  buffer follows `devicePixelRatio`, capped at 2: 2048x1536 on a 2x display. It
+  is checked every frame, so zooming the page or moving the window to another
+  monitor resizes it. Input and picking never leave CSS pixels.
+- **Failure.** If the GPU device is lost the frame loop stops and the HUD is
+  replaced with what happened and a Reload button. A GPU validation error is
+  logged once per distinct message rather than every frame.
+- **Shaders** are plain `.wgsl` files in `src/engine/shaders/`, imported with
+  Vite's `?raw`. The renderer keeps pipeline creation.
 
 ## The JS/WASM boundary
 

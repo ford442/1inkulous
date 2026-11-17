@@ -17,10 +17,21 @@ import {
   normalize,
   type Vec3,
 } from './math'
-import { initWebGpu } from './webgpu'
-import { CANVAS_ASPECT, CANVAS_HEIGHT, CANVAS_WIDTH } from '../viewport'
+import followerShader from './shaders/follower.wgsl?raw'
+import hutShader from './shaders/hut.wgsl?raw'
+import planetShader from './shaders/planet.wgsl?raw'
+import { type DeviceLoss, initWebGpu } from './webgpu'
+import { CANVAS_ASPECT, drawingBufferSize, effectivePixelRatio } from '../viewport'
 
 const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus'
+
+/**
+ * 4x is the one multisample count WebGPU guarantees for every renderable
+ * format, so there is nothing to probe for. The planet's limb and the instanced
+ * pawns are what shimmer as the camera orbits; the shading inside them does not
+ * need it.
+ */
+const SAMPLE_COUNT = 4
 
 /**
  * Near plane is close enough for the tightest zoom, far plane loose enough for
@@ -63,379 +74,14 @@ function sunDirection(eye: Vec3): Vec3 {
   ])
 }
 
-const planetShader = /* wgsl */ `
-struct Uniforms {
-  viewProj: mat4x4f,
-  model: mat4x4f,
-  lightDir: vec4f,
-  cameraPos: vec4f,
-  // x: planet radius, y: max land height, z: brush mode, w: hut site
-  params: vec4f,
-  // xyz: unit direction under the cursor, w: brush angular radius (0 = hidden)
-  brush: vec4f,
-}
-
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-
-struct VertexOutput {
-  @builtin(position) clipPosition: vec4f,
-  @location(0) worldPosition: vec3f,
-  @location(1) worldNormal: vec3f,
-  @location(2) elevation: f32,
-}
-
-@vertex
-fn vs_main(
-  @location(0) position: vec3f,
-  @location(1) normal: vec3f,
-  @location(2) uv: vec2f,
-) -> VertexOutput {
-  let world = uniforms.model * vec4f(position, 1.0);
-  // The model matrix is a pure rotation, so its upper 3x3 also rotates normals.
-  let rotation = mat3x3f(
-    uniforms.model[0].xyz,
-    uniforms.model[1].xyz,
-    uniforms.model[2].xyz,
-  );
-
-  var output: VertexOutput;
-  output.clipPosition = uniforms.viewProj * world;
-  output.worldPosition = world.xyz;
-  output.worldNormal = normalize(rotation * normal);
-  // 0 at sea level, 1 at the highest peaks. uv is unused for now, but stays in
-  // the vertex layout for terrain patch texturing later.
-  let height = length(position) - uniforms.params.x;
-  output.elevation = clamp(height / max(uniforms.params.y, 1e-5), 0.0, 1.0);
-  return output;
-}
-
-fn terrainColor(elevation: f32) -> vec3f {
-  let shore = vec3f(0.76, 0.70, 0.48);
-  let grass = vec3f(0.24, 0.46, 0.20);
-  let forest = vec3f(0.16, 0.33, 0.16);
-  let rock = vec3f(0.38, 0.35, 0.32);
-  let snow = vec3f(0.92, 0.94, 0.96);
-
-  var color = mix(shore, grass, smoothstep(0.0, 0.14, elevation));
-  color = mix(color, forest, smoothstep(0.12, 0.45, elevation));
-  color = mix(color, rock, smoothstep(0.45, 0.78, elevation));
-  color = mix(color, snow, smoothstep(0.82, 1.0, elevation));
-  return color;
-}
-
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let normal = normalize(input.worldNormal);
-  let lightDir = normalize(uniforms.lightDir.xyz);
-  let viewDir = normalize(uniforms.cameraPos.xyz - input.worldPosition);
-
-  let isWater = input.elevation <= 0.0005;
-  let albedo = select(terrainColor(input.elevation), vec3f(0.07, 0.20, 0.38), isWater);
-
-  let diffuse = max(dot(normal, lightDir), 0.0);
-  // Cheap hemisphere ambient: sky above, ground bounce below.
-  let skyMix = normal.y * 0.5 + 0.5;
-  let ambient = mix(vec3f(0.10, 0.11, 0.16), vec3f(0.26, 0.30, 0.38), skyMix);
-
-  let specularPower = select(24.0, 96.0, isWater);
-  let specularStrength = select(0.06, 0.45, isWater);
-  let halfway = normalize(lightDir + viewDir);
-  let specular =
-    pow(max(dot(normal, halfway), 0.0), specularPower) * specularStrength * step(0.0, diffuse);
-
-  // Brush cursor: a filled disc with a bright rim, drawn in angular distance from
-  // the picked direction so it wraps over terrain instead of floating above it.
-  var brushTint = vec3f(0.0);
-  let brushRadius = uniforms.brush.w;
-  if (brushRadius > 0.0) {
-    let surface = normalize(input.worldPosition);
-    let angle = acos(clamp(dot(surface, uniforms.brush.xyz), -1.0, 1.0));
-    // params.z carries the mode: +1 raising, -1 lowering, 2 flattening, 0
-    // hovering. params.w replaces it while placing a hut: +1 the site is good,
-    // -1 it is not.
-    let mode = uniforms.params.z;
-    var cursorColor = vec3f(0.85, 0.90, 1.00);
-    if (mode > 1.5) {
-      cursorColor = vec3f(0.80, 0.62, 1.00);
-    } else if (mode > 0.0) {
-      cursorColor = vec3f(1.00, 0.80, 0.35);
-    } else if (mode < 0.0) {
-      cursorColor = vec3f(0.30, 0.75, 1.00);
-    }
-    let site = uniforms.params.w;
-    if (site > 0.5) {
-      cursorColor = vec3f(0.35, 0.95, 0.45);
-    } else if (site < -0.5) {
-      cursorColor = vec3f(1.00, 0.32, 0.25);
-    }
-    let fill = 1.0 - smoothstep(brushRadius * 0.75, brushRadius, angle);
-    let ring = 1.0 - smoothstep(0.0, brushRadius * 0.18, abs(angle - brushRadius * 0.88));
-    brushTint = cursorColor * (fill * 0.22 + ring * 0.55);
-  }
-
-  // Rim term: makes the silhouette read as a sphere rather than a flat disc.
-  let rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
-  let atmosphere = vec3f(0.28, 0.45, 0.72) * rim * 0.6 * (0.25 + 0.75 * diffuse);
-
-  var color = albedo * (ambient + vec3f(1.0, 0.97, 0.90) * diffuse);
-  color += vec3f(specular) + atmosphere + brushTint;
-
-  // Exposure curve: lifts the shadowed limb without blowing out the lit side.
-  color = vec3f(1.0) - exp(-1.35 * color);
-
-  return vec4f(color, 1.0);
-}
-`
-
-/**
- * Followers are drawn with one instanced call: the core keeps a packed instance
- * buffer in linear memory, this uploads it whole and the vertex shader turns
- * each instance into a frame on the sphere. Whether there are five units or a
- * thousand, it stays one draw.
- */
-const followerShader = /* wgsl */ `
-struct Uniforms {
-  viewProj: mat4x4f,
-  model: mat4x4f,
-  lightDir: vec4f,
-  cameraPos: vec4f,
-  params: vec4f,
-  brush: vec4f,
-}
-
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-
-const FLAG_SELECTED: u32 = 1u;
-const FLAG_SHAMAN: u32 = 4u;
-const PART_RING: f32 = 1.0;
-
-struct VertexOutput {
-  @builtin(position) clipPosition: vec4f,
-  @location(0) worldPosition: vec3f,
-  @location(1) worldNormal: vec3f,
-  // Per-instance, so interpolating them would only risk rounding an exact
-  // comparison in the fragment stage.
-  @location(2) @interpolate(flat) tint: vec3f,
-  @location(3) @interpolate(flat) selected: f32,
-  @location(4) @interpolate(flat) part: f32,
-}
-
-// Placeholder tribe colours, in the spirit of the four warring tribes. Real art
-// replaces these later.
-fn tribeColor(tribe: f32) -> vec3f {
-  let index = i32(round(tribe)) % 4;
-  if (index == 1) { return vec3f(0.78, 0.20, 0.18); }
-  if (index == 2) { return vec3f(0.86, 0.74, 0.20); }
-  if (index == 3) { return vec3f(0.24, 0.62, 0.28); }
-  return vec3f(0.24, 0.44, 0.82);
-}
-
-@vertex
-fn vs_main(
-  @location(0) position: vec3f,
-  @location(1) normal: vec3f,
-  @location(2) part: f32,
-  @location(3) instancePosition: vec3f,
-  @location(4) instanceHeading: vec3f,
-  @location(5) instanceTribe: f32,
-  @location(6) instanceFlags: f32,
-) -> VertexOutput {
-  var output: VertexOutput;
-
-  let flags = u32(instanceFlags);
-  let selected = f32((flags & FLAG_SELECTED) != 0u);
-  let shaman = f32((flags & FLAG_SHAMAN) != 0u);
-
-  // The selection ring only exists while the follower is selected. Collapsing
-  // its triangles to a point costs one vertex shader invocation and rasterises
-  // nothing — cheaper than a second pipeline or a discard in the fragment stage.
-  if (part == PART_RING && selected < 0.5) {
-    output.clipPosition = uniforms.viewProj * vec4f(instancePosition, 1.0);
-    output.worldPosition = instancePosition;
-    output.worldNormal = vec3f(0.0, 1.0, 0.0);
-    output.tint = vec3f(0.0);
-    output.selected = 0.0;
-    output.part = part;
-    return output;
-  }
-
-  // Stand the model up on the sphere: y out of the surface, z along the heading.
-  let up = normalize(instancePosition);
-  var forward = instanceHeading - up * dot(up, instanceHeading);
-  if (length(forward) < 1e-5) {
-    // Heading parallel to up should not happen, but a degenerate frame would
-    // collapse the model, so fall back to any tangent.
-    forward = normalize(cross(up, vec3f(0.0, 0.0, 1.0)) + vec3f(1e-4, 0.0, 0.0));
-  }
-  forward = normalize(forward);
-  let right = cross(up, forward);
-
-  // The shaman is the same pawn, taller and a little broader, so she reads
-  // apart from her people at any zoom. Normals are left alone: the stretch is
-  // mild enough that the faceting still lights right.
-  let girth = mix(1.0, 1.25, shaman);
-  // The ring widens with her but stays on the ground.
-  let stature = select(mix(1.0, 1.7, shaman), 1.0, part == PART_RING);
-  let scaled = vec3f(position.x * girth, position.y * stature, position.z * girth);
-  let world = instancePosition + right * scaled.x + up * scaled.y + forward * scaled.z;
-  let worldNormal = right * normal.x + up * normal.y + forward * normal.z;
-
-  output.clipPosition = uniforms.viewProj * vec4f(world, 1.0);
-  output.worldPosition = world;
-  output.worldNormal = worldNormal;
-  // A pale robe over the tribe colour: still her tribe's, plainly not a brave.
-  output.tint = mix(tribeColor(instanceTribe), vec3f(0.96, 0.92, 1.0), 0.45 * shaman);
-  output.selected = selected;
-  output.part = part;
-  return output;
-}
-
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let normal = normalize(input.worldNormal);
-  let lightDir = normalize(uniforms.lightDir.xyz);
-  let viewDir = normalize(uniforms.cameraPos.xyz - input.worldPosition);
-
-  if (input.part == PART_RING) {
-    // Flat, bright and unlit, so a selection reads at a glance against any
-    // terrain colour underneath it.
-    return vec4f(mix(input.tint, vec3f(1.0), 0.65), 1.0);
-  }
-
-  let diffuse = max(dot(normal, lightDir), 0.0);
-  let skyMix = normal.y * 0.5 + 0.5;
-  let ambient = mix(vec3f(0.12, 0.13, 0.18), vec3f(0.30, 0.34, 0.42), skyMix);
-
-  // Selected followers are lifted towards white so they stand out from their
-  // tribe-mates without changing the tribe colour's meaning.
-  let albedo = mix(input.tint, mix(input.tint, vec3f(1.0), 0.45), input.selected);
-
-  let halfway = normalize(lightDir + viewDir);
-  let specular = pow(max(dot(normal, halfway), 0.0), 32.0) * 0.12 * step(0.0, diffuse);
-
-  // A rim keeps a follower legible against terrain of a similar tone when the
-  // camera is pulled back and the unit is only a few pixels across.
-  let rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.5) * (0.18 + 0.5 * input.selected);
-
-  var color = albedo * (ambient + vec3f(1.0, 0.97, 0.90) * diffuse);
-  color += vec3f(specular) + albedo * rim;
-  color = vec3f(1.0) - exp(-1.35 * color);
-
-  return vec4f(color, 1.0);
-}
-`
-
-/**
- * Huts, the same way as followers: one placeholder mesh, one instance per hut
- * straight out of the core's buffer. The build ghost is one more instance on
- * the end, drawn by a second, blended pipeline over the same shader.
- */
-const hutShader = /* wgsl */ `
-struct Uniforms {
-  viewProj: mat4x4f,
-  model: mat4x4f,
-  lightDir: vec4f,
-  cameraPos: vec4f,
-  params: vec4f,
-  brush: vec4f,
-}
-
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-
-const PART_DOOR: f32 = 1.0;
-const PART_ROOF: f32 = 2.0;
-
-struct VertexOutput {
-  @builtin(position) clipPosition: vec4f,
-  @location(0) worldPosition: vec3f,
-  @location(1) worldNormal: vec3f,
-  @location(2) @interpolate(flat) tribe: f32,
-  // Occupants, or a negative ghost code: -1 a good site, -2 a bad one.
-  @location(3) @interpolate(flat) occupants: f32,
-  @location(4) @interpolate(flat) part: f32,
-}
-
-fn tribeColor(tribe: f32) -> vec3f {
-  let index = i32(round(tribe)) % 4;
-  if (index == 1) { return vec3f(0.78, 0.20, 0.18); }
-  if (index == 2) { return vec3f(0.86, 0.74, 0.20); }
-  if (index == 3) { return vec3f(0.24, 0.62, 0.28); }
-  return vec3f(0.24, 0.44, 0.82);
-}
-
-@vertex
-fn vs_main(
-  @location(0) position: vec3f,
-  @location(1) normal: vec3f,
-  @location(2) part: f32,
-  @location(3) instancePosition: vec3f,
-  @location(4) instanceHeading: vec3f,
-  @location(5) instanceTribe: f32,
-  @location(6) instanceOccupants: f32,
-) -> VertexOutput {
-  let up = normalize(instancePosition);
-  var forward = instanceHeading - up * dot(up, instanceHeading);
-  if (length(forward) < 1e-5) {
-    forward = normalize(cross(up, vec3f(0.0, 0.0, 1.0)) + vec3f(1e-4, 0.0, 0.0));
-  }
-  forward = normalize(forward);
-  let right = cross(up, forward);
-
-  let world = instancePosition + right * position.x + up * position.y + forward * position.z;
-
-  var output: VertexOutput;
-  output.clipPosition = uniforms.viewProj * vec4f(world, 1.0);
-  output.worldPosition = world;
-  output.worldNormal = right * normal.x + up * normal.y + forward * normal.z;
-  output.tribe = instanceTribe;
-  output.occupants = instanceOccupants;
-  output.part = part;
-  return output;
-}
-
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let normal = normalize(input.worldNormal);
-  let lightDir = normalize(uniforms.lightDir.xyz);
-  let viewDir = normalize(uniforms.cameraPos.xyz - input.worldPosition);
-  let diffuse = max(dot(normal, lightDir), 0.0);
-  let skyMix = normal.y * 0.5 + 0.5;
-  let ambient = mix(vec3f(0.12, 0.13, 0.18), vec3f(0.30, 0.34, 0.42), skyMix);
-
-  if (input.occupants < -0.5) {
-    // Build ghost: green where the core would build, red where it would not.
-    let tint = select(vec3f(1.00, 0.32, 0.25), vec3f(0.35, 0.95, 0.45), input.occupants > -1.5);
-    let lit = tint * (0.55 + 0.45 * diffuse);
-    return vec4f(lit, 0.5);
-  }
-
-  // Mud walls and straw thatch; a claimed hut's roof takes its tribe colour.
-  var albedo = vec3f(0.56, 0.42, 0.28);
-  if (input.part == PART_ROOF) {
-    let thatch = vec3f(0.66, 0.55, 0.30);
-    albedo = select(thatch, mix(thatch, tribeColor(input.tribe), 0.55), input.tribe > -0.5);
-  }
-
-  var color = albedo * (ambient + vec3f(1.0, 0.97, 0.90) * diffuse);
-  if (input.part == PART_DOOR) {
-    // Dark while empty; firelight inside once someone lives there, brighter
-    // with each occupant, so a working hut reads from orbit.
-    let glow = clamp(input.occupants / 3.0, 0.0, 1.0);
-    color = select(vec3f(0.05, 0.035, 0.025),
-                   vec3f(1.00, 0.68, 0.30) * (0.55 + 0.6 * glow),
-                   input.occupants > 0.5);
-  }
-
-  let rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.5) * 0.15;
-  color += albedo * rim;
-  color = vec3f(1.0) - exp(-1.35 * color);
-  return vec4f(color, 1.0);
-}
-`
-
 export type Renderer = {
   statusMessage: string
   render: (game: Game) => void
+  /**
+   * Settles once, when the GPU device is lost. After that every call to
+   * `render` is wasted work, so the caller should stop its frame loop.
+   */
+  lost: Promise<DeviceLoss>
 }
 
 type PlanetBuffers = {
@@ -470,10 +116,32 @@ export async function createRenderer(
   canvas: HTMLCanvasElement,
   game: Game,
 ): Promise<Renderer> {
-  canvas.width = CANVAS_WIDTH
-  canvas.height = CANVAS_HEIGHT
+  // What the frame asks of the device, worked out from the buffers it will
+  // make: the planet mesh and the two instance buffers are sized for the cores'
+  // ceilings, and one uniform block is shared by every pipeline.
+  const hutInstanceStride = game.huts.instanceFloats * 4
+  const { device, context, format, lost } = await initWebGpu(canvas, {
+    maxBufferSize: Math.max(
+      game.planet.mesh.vertexData.byteLength,
+      game.planet.mesh.indices.byteLength,
+      MAX_FOLLOWER_INSTANCES * game.followers.instanceFloats * 4,
+      (MAX_HUT_INSTANCES + 1) * hutInstanceStride,
+    ),
+    maxUniformBufferBindingSize: UNIFORM_BYTES,
+  })
 
-  const { device, context, format } = await initWebGpu(canvas)
+  // The drawing buffer is in device pixels; everything else is in CSS pixels.
+  // Checked every frame rather than on a resize event: dragging the window to a
+  // second monitor or zooming the page changes devicePixelRatio without
+  // resizing the canvas's CSS box, and comparing two integers costs nothing.
+  const sizeDrawingBuffer = () => {
+    const { width, height } = drawingBufferSize(window.devicePixelRatio)
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width
+      canvas.height = height
+    }
+  }
+  sizeDrawingBuffer()
 
   const shaderModule = device.createShaderModule({
     label: 'planet-shader',
@@ -512,6 +180,7 @@ export async function createRenderer(
       depthWriteEnabled: true,
       depthCompare: 'less',
     },
+    multisample: { count: SAMPLE_COUNT },
   })
 
   const uniformBuffer = device.createBuffer({
@@ -576,6 +245,7 @@ export async function createRenderer(
       depthWriteEnabled: true,
       depthCompare: 'less',
     },
+    multisample: { count: SAMPLE_COUNT },
   })
 
   // `layout: 'auto'` gives each pipeline its own bind group layout, so the two
@@ -640,6 +310,7 @@ export async function createRenderer(
     fragment: { module: hutShaderModule, entryPoint: 'fs_main', targets: [{ format }] },
     primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
     depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
+    multisample: { count: SAMPLE_COUNT },
   })
 
   // The ghost is see-through, so it is blended and leaves depth alone: the
@@ -663,6 +334,7 @@ export async function createRenderer(
     },
     primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
     depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
+    multisample: { count: SAMPLE_COUNT },
   })
 
   const hutBindGroup = device.createBindGroup({
@@ -685,31 +357,44 @@ export async function createRenderer(
   })
   device.queue.writeBuffer(hutVertexBuffer, 0, hutMesh.vertexData)
 
-  const hutInstanceBytes = game.huts.instanceFloats * 4
+  const hutInstanceBytes = hutInstanceStride
   const hutInstanceBuffer = device.createBuffer({
     label: 'hut-instances',
     size: (MAX_HUT_INSTANCES + 1) * hutInstanceBytes,
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
   })
 
+  // The frame is drawn into multisampled colour and depth targets and resolved
+  // to the canvas, so both follow the drawing buffer. Neither is read after the
+  // pass, so neither is kept: `discard` saves writing them back out.
+  type Targets = { colorView: GPUTextureView; depthView: GPUTextureView }
+  let colorTexture: GPUTexture | null = null
   let depthTexture: GPUTexture | null = null
-  const ensureDepthTexture = (): GPUTexture => {
-    if (
-      depthTexture &&
-      depthTexture.width === canvas.width &&
-      depthTexture.height === canvas.height
-    ) {
-      return depthTexture
+  let targets: Targets | null = null
+  const ensureTargets = (): Targets => {
+    const { width, height } = canvas
+    if (targets && colorTexture?.width === width && colorTexture.height === height) {
+      return targets
     }
 
+    colorTexture?.destroy()
     depthTexture?.destroy()
-    depthTexture = device.createTexture({
-      label: 'depth',
-      size: { width: canvas.width, height: canvas.height },
-      format: DEPTH_FORMAT,
+    colorTexture = device.createTexture({
+      label: 'color-msaa',
+      size: { width, height },
+      format,
+      sampleCount: SAMPLE_COUNT,
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     })
-    return depthTexture
+    depthTexture = device.createTexture({
+      label: 'depth-msaa',
+      size: { width, height },
+      format: DEPTH_FORMAT,
+      sampleCount: SAMPLE_COUNT,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    })
+    targets = { colorView: colorTexture.createView(), depthView: depthTexture.createView() }
+    return targets
   }
 
   const uniformData = new Float32Array(UNIFORM_BYTES / 4)
@@ -725,8 +410,12 @@ export async function createRenderer(
     statusMessage:
       `WebGPU ready — cube-sphere planet (${triangleCount} triangles), ` +
       `followers instanced (${followerMesh.triangleCount} triangles each), ` +
-      `huts instanced (${hutMesh.triangleCount} each)`,
+      `huts instanced (${hutMesh.triangleCount} each) — ` +
+      `${canvas.width}×${canvas.height} at ${effectivePixelRatio(window.devicePixelRatio)}×, ` +
+      `${SAMPLE_COUNT}× MSAA`,
+    lost,
     render(currentGame: Game) {
+      sizeDrawingBuffer()
       const { camera, planet } = currentGame
       const mesh = planet.mesh
 
@@ -743,7 +432,10 @@ export async function createRenderer(
         )
       }
 
-      // Projection uses the fixed viewport aspect ratio.
+      // The CSS viewport's aspect ratio, the same one picking is given. The
+      // drawing buffer rounds to whole pixels, so its own ratio can differ in
+      // the fourth decimal place; sharing one value keeps a click on the pixel
+      // it was drawn at.
       const aspect = CANVAS_ASPECT
       const eye = camera.eye
 
@@ -840,11 +532,13 @@ export async function createRenderer(
         device.queue.writeBuffer(hutInstanceBuffer, hutCount * hutInstanceBytes, ghostInstance)
       }
 
+      const { colorView, depthView } = ensureTargets()
       const encoder = device.createCommandEncoder()
       const pass = encoder.beginRenderPass({
         colorAttachments: [
           {
-            view: context.getCurrentTexture().createView(),
+            view: colorView,
+            resolveTarget: context.getCurrentTexture().createView(),
             clearValue: {
               r: currentGame.clearColor[0],
               g: currentGame.clearColor[1],
@@ -852,14 +546,14 @@ export async function createRenderer(
               a: 1,
             },
             loadOp: 'clear',
-            storeOp: 'store',
+            storeOp: 'discard',
           },
         ],
         depthStencilAttachment: {
-          view: ensureDepthTexture().createView(),
+          view: depthView,
           depthClearValue: 1,
           depthLoadOp: 'clear',
-          depthStoreOp: 'store',
+          depthStoreOp: 'discard',
         },
       })
 

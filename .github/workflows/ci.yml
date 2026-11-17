@@ -24,7 +24,8 @@ jobs:
 
       - run: npm ci
       - run: npm run build:wasm
-      - run: npm run test:core
-      - run: npm run test:huts
-      - run: npm run test:shaman
+      # Every `test:*` script in package.json, so a new one is picked up without
+      # touching this file. Includes `test:abi`, which fails when core_abi.h and
+      # src/wasm/core.d.ts disagree.
+      - run: npm test
       - run: npm run build

@@ -8,10 +8,13 @@
 // rather than in the game loop. Exits non-zero on failure, for CI.
 
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { coreDir, coreRedirected } from './core-dir.mjs'
 
-const GLUE = new URL('../src/wasm/core.js', import.meta.url)
+const GLUE = pathToFileURL(join(coreDir(), 'core.js'))
 if (!existsSync(GLUE)) {
-  console.error('error: src/wasm/core.js is missing. Run `npm run build:wasm` first.')
+  console.error(`error: ${GLUE.pathname} is missing. Run \`npm run build:wasm\` first.`)
   process.exit(1)
 }
 
@@ -19,6 +22,11 @@ const { default: createCoreModule } = await import(GLUE.href)
 
 const out = []
 const ok = (name, pass, detail = '') => out.push(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`)
+// A time budget is a claim about the release build. A core loaded from
+// CORE_WASM_DIR is usually the -O0 debug one, many times slower by design: the
+// figure is still printed, but being over budget is not a failure there.
+const budget = (name, pass, detail = '') =>
+  ok(name, pass || coreRedirected(), pass ? detail : `${detail} (over budget; not enforced on a redirected core)`)
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
@@ -431,7 +439,7 @@ ok('whole crowd routes at once', m._core_follower_order_move(...far) === 64)
 const started = Date.now()
 simulate(30)
 const elapsed = Date.now() - started
-ok('30s of 64 followers simulates in well under real time', elapsed < 3000, `${elapsed}ms`)
+budget('30s of 64 followers simulates in well under real time', elapsed < 3000, `${elapsed}ms`)
 // Not just "stopped walking": a follower that gave up halfway would also have a
 // clear flag, so check where each of them actually ended up. The group gathers
 // round the point rather than on it, a spot each.
@@ -1267,7 +1275,7 @@ const orderStarted = process.hrtime.bigint()
 const routed = m._core_follower_order_move(...opposite)
 const orderMs = Number(process.hrtime.bigint() - orderStarted) / 1e6
 ok('60 followers path across a 3600-node graph', routed === 60, `${orderMs.toFixed(1)}ms`)
-ok('a mass order fits inside one frame', orderMs < 16, `${orderMs.toFixed(1)}ms for 60 followers`)
+budget('a mass order fits inside one frame', orderMs < 16, `${orderMs.toFixed(1)}ms for 60 followers`)
 
 const orderedLegs = Array.from({ length: 60 }, (_, f) => m._core_follower_route(f))
 const mostLegs = Math.max(...orderedLegs)
@@ -1280,7 +1288,7 @@ for (let i = 0; i < 200; i += 1) m._core_tick(50)
 const stepMs = Number(process.hrtime.bigint() - stepStarted) / 1e6
 // Steering, avoidance and separation run every step for everyone; a fifth of a
 // millisecond per step for a crowd this size is half a percent of the step.
-ok('200 steps of 60 walking followers stay cheap',
+budget('200 steps of 60 walking followers stay cheap',
    stepMs < 50, `${stepMs.toFixed(1)}ms total, ${(stepMs / 200 * 1000).toFixed(0)}us per step`)
 
 // ---------------------------------------------------------------------------

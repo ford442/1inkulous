@@ -29,6 +29,7 @@ emsdk/
 # Generated WebAssembly core (build with `npm run build:wasm`).
 # src/wasm/core.d.ts is hand-written and tracked.
 cpp/build-wasm
+cpp/build-wasm-debug
 src/wasm/core.js
 src/wasm/core.wasm
 src/wasm/core.wasm.map

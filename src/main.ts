@@ -84,7 +84,6 @@ async function main() {
     hud.setSimulation(simulation)
     hud.setFollowers(game.followers)
     hud.setHuts(game.huts)
-    hud.setBuildings(game.buildings)
     hud.setShaman(game.shaman)
     hud.setSelectionBand(game.followers.selectionBand)
 

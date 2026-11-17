@@ -22,8 +22,8 @@ const ok = (name, pass, detail = '') => out.push(`${pass ? 'PASS' : 'FAIL'}  ${n
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
-ok('version string', version === '0.5.0', version)
-ok('encoded version matches', m._core_version() === 500, String(m._core_version()))
+ok('version string', version === '0.6.0', version)
+ok('encoded version matches', m._core_version() === 600, String(m._core_version()))
 
 // default step
 m._core_init(0)
@@ -797,113 +797,181 @@ ok('the blocked follower repaths or stops short of the body in the way',
 writeHeights(grid.heights)
 
 // ---------------------------------------------------------------------------
-// Buildings: a hut claims a flat land node. Water, a cliff, and a taken pad
-// are refused. Placing does not sculpt; a later stroke lifts the hut with the
-// anchor node's height.
+// A hut's footprint is blocked: the anchor node and its neighbours stop being
+// ground, so searches, string-pulled legs and each step a walker takes go
+// round it the way they go round water.
 
-/** Mirrors BuildingSite / kBuildingKindHut / kBuildingRadius in buildings.hpp. */
-const BUILDING_SITE = { ok: 0, noGrid: 1, water: 2, steep: 3, occupied: 4, full: 5 }
-const BUILDING_KIND_HUT = 0
-const BUILDING_RADIUS = 0.05
+/** Mirrors HutSite in cpp/include/1inkulous/huts.hpp. */
+const SITE = { ok: 0, noGrid: 1, water: 2, uneven: 3, occupied: 4, full: 5 }
+/** Mirrors kHutRadius: the mesh, which has to stay clear of every walker. */
+const HUT_RADIUS = 0.05
+const CELL = SPAN / (GRID - 1)
 
-function buildingInstance(id) {
-  const stride = m._core_building_instance_floats()
-  const start = (m._core_building_instances() >> 2) + id * stride
-  return Array.from(m.HEAPF32.subarray(start, start + stride))
+const sitePoint = () => {
+  const start = m._core_hut_site_point() >> 2
+  return Array.from(m.HEAPF32.subarray(start, start + 4))
 }
-
-m._core_followers_clear()
-m._core_buildings_clear()
-writeHeights(grid.heights)
-
-ok('building instance layout is position, tribe, kind, occupants, flags',
-   m._core_building_instance_floats() === 8 && Math.abs(m._core_building_radius() - BUILDING_RADIUS) < 1e-12)
-
-const pad = gridDirection(8, 8)
+const inBox = (node, ci, cj) => {
+  const i = node % GRID
+  const j = Math.floor(node / GRID)
+  return Math.abs(i - ci) <= 1 && Math.abs(j - cj) <= 1
+}
+const readPoints = (count) => {
+  const start = m._core_route_points() >> 2
+  return Array.from({ length: count }, (_, k) =>
+    Array.from(m.HEAPF32.subarray(start + k * 3, start + k * 3 + 3)))
+}
+/** Closest a polyline from `from` comes to `centre`, sampled finely. */
+const closestTo = (centre, from, points) => {
+  let best = Infinity
+  let previous = from
+  for (const point of points) {
+    for (let t = 0; t <= 1; t += 1 / 64) {
+      const p = previous.map((v, k) => v + (point[k] - v) * t)
+      best = Math.min(best, angleTo(p, centre))
+    }
+    previous = point
+  }
+  return best
+}
+const polylineLength = (from, points) => {
+  let total = 0
+  let previous = from
+  for (const point of points) {
+    total += angleTo(previous, point)
+    previous = point
+  }
+  return total
+}
 const coreHeights = () => {
   const start = m._core_nav_heights() >> 2
   return m.HEAPF32.slice(start, start + grid.nodeCount)
 }
-const heightsBefore = coreHeights()
-const hutId = m._core_building_place(...pad, 2, BUILDING_KIND_HUT)
-ok('flat land takes a hut', hutId === 0 && m._core_building_count() === 1 &&
-   m._core_building_site(...pad) === BUILDING_SITE.occupied, `id ${hutId}`)
-ok('placing does not sculpt', heightsBefore.every((h, i) => h === coreHeights()[i]))
-{
-  const [x, y, z, tribe, kind, occupants, flags] = buildingInstance(hutId)
-  const placed = Math.hypot(x, y, z)
-  const along = x * pad[0] + y * pad[1] + z * pad[2]
-  ok('the hut stands on the anchor node, tribe and kind packed',
-     Math.abs(placed - (RADIUS + LAND)) < 1e-4 && along > 0 &&
-     tribe === 2 && kind === BUILDING_KIND_HUT && occupants === 0 && flags === 0,
-     `r ${placed.toFixed(4)} tribe ${tribe} kind ${kind}`)
-}
-ok('a second hut on that pad is refused',
-   m._core_building_place(...pad, 0, BUILDING_KIND_HUT) === -1 && m._core_building_count() === 1)
-ok('a hut on the neighbouring cell is refused',
-   m._core_building_site(...gridDirection(8, 10)) === BUILDING_SITE.occupied &&
-   m._core_building_place(...gridDirection(8, 10), 0, BUILDING_KIND_HUT) === -1)
-const farHut = m._core_building_place(...gridDirection(8, 12), 0, BUILDING_KIND_HUT)
-ok('a hut clear of the footprint is accepted', farHut === 1 && m._core_building_count() === 2, `id ${farHut}`)
-ok('a negative kind is refused', m._core_building_place(...gridDirection(2, 2), 0, -1) === -1)
 
-{
-  const wet = Float32Array.from(grid.heights)
-  wet[nodeAt(4, 4)] = 0
-  writeHeights(wet)
-  ok('water refuses a hut',
-     m._core_building_site(...gridDirection(4, 4)) === BUILDING_SITE.water &&
-     m._core_building_place(...gridDirection(4, 4), 0, BUILDING_KIND_HUT) === -1)
-  wet[nodeAt(4, 4)] = LAND
-  wet[nodeAt(4, 5)] = 0
-  writeHeights(wet)
-  ok('water in the neighbourhood refuses a hut',
-     m._core_building_site(...gridDirection(4, 4)) === BUILDING_SITE.water &&
-     m._core_building_place(...gridDirection(4, 4), 0, BUILDING_KIND_HUT) === -1)
-}
-
-{
-  const cliff = Float32Array.from(grid.heights)
-  // One link up is far past the pad cap (0.15) and past the walk limit too.
-  cliff[nodeAt(4, 5)] = LAND + 0.05
-  writeHeights(cliff)
-  ok('a cliff refuses a hut',
-     m._core_building_site(...gridDirection(4, 4)) === BUILDING_SITE.steep &&
-     m._core_building_place(...gridDirection(4, 4), 0, BUILDING_KIND_HUT) === -1)
-  cliff[nodeAt(4, 5)] = LAND + 0.004
-  writeHeights(cliff)
-  const mild = m._core_building_place(...gridDirection(4, 4), 0, BUILDING_KIND_HUT)
-  ok('a gentle slope still reads as a pad', mild === 2 && m._core_building_site(...gridDirection(4, 4)) === BUILDING_SITE.occupied,
-     `id ${mild}, site ${m._core_building_site(...gridDirection(4, 4))}`)
-}
-
+m._core_followers_clear()
+m._core_huts_clear()
 writeHeights(grid.heights)
+
+const pad = gridDirection(8, 8)
+ok('before a hut, the anchor is ground like any other',
+   m._core_nav_nearest_walkable(...pad) === nodeAt(8, 8) && m._core_hut_site(...pad) === SITE.ok)
 {
-  const before = Math.hypot(...buildingInstance(hutId).slice(0, 3))
+  const [x, y, z, extent] = sitePoint()
+  ok('a site check reports the anchor and the reach of its footprint',
+     angleTo([x, y, z], pad) < 1e-6 && Math.abs(extent - Math.hypot(CELL, CELL)) < 1e-3,
+     `footprint ${extent.toFixed(4)} rad`)
+}
+const heightsBefore = coreHeights()
+// Off the node a little: the hut snaps to the nearest one.
+const blockHut = m._core_hut_place(...gridDirection(8.2, 7.9), 0, 1, 0, 2)
+ok('a hut goes up for the tribe that placed it', blockHut === 0 && m._core_hut_tribe(blockHut) === 2,
+   `id ${blockHut}`)
+ok('placing does not sculpt', heightsBefore.every((h, i) => h === coreHeights()[i]))
+ok('every footprint node is off the walkable graph',
+   [-1, 0, 1].every((di) => [-1, 0, 1].every((dj) =>
+     !inBox(m._core_nav_nearest_walkable(...gridDirection(8 + di, 8 + dj)), 8, 8))))
+ok('and the ring round it is not',
+   m._core_nav_nearest_walkable(...gridDirection(10, 8)) === nodeAt(10, 8) &&
+   m._core_nav_nearest_walkable(...gridDirection(10, 10)) === nodeAt(10, 10))
+
+for (const [name, a, b] of [
+  ['straight across', [4, 8], [12, 8]],
+  ['along the diagonal', [4, 4], [12, 12]],
+  ['across a corner', [5, 11], [11, 5]],
+]) {
+  const from = gridDirection(...a)
+  const to = gridDirection(...b)
+  const raw = m._core_nav_route(...from, ...to, 0)
+  const nodes = readPoints(raw).map((p) => m._core_nav_nearest_walkable(...p))
+  ok(`a node route ${name} takes no footprint node`, raw > 0 && nodes.every((n) => !inBox(n, 8, 8)),
+     `${raw} nodes`)
+  const legs = readPoints(m._core_nav_route(...from, ...to, 1))
+  const near = closestTo(pad, from, legs)
+  ok(`the string-pulled route ${name} keeps off the pad`,
+     legs.length > 1 && near >= CELL * 0.999 && polylineLength(from, legs) > angleTo(from, to) * 1.01,
+     `${legs.length} legs, closest ${near.toFixed(4)}, ` +
+     `${polylineLength(from, legs).toFixed(4)} vs ${angleTo(from, to).toFixed(4)}`)
+}
+
+{
+  // A walker sent straight through, and a walker already on its way when the
+  // hut goes up in front of it.
+  const through = m._core_follower_spawn(...gridDirection(4, 8), 0)
+  selectOnly([through])
+  m._core_follower_order_move(...gridDirection(12, 8))
+  let nearest = Infinity
+  for (let frame = 0; frame < 60; frame += 1) {
+    m._core_tick(200)
+    nearest = Math.min(nearest, angleTo(followerPosition(through), pad))
+  }
+  ok('a follower ordered across walks round the footprint',
+     nearest > HUT_RADIUS && nearest >= CELL * 0.85 && angleTo(followerPosition(through), gridDirection(12, 8)) < 0.01,
+     `closest ${nearest.toFixed(4)}, ${angleTo(followerPosition(through), gridDirection(12, 8)).toFixed(4)} from the goal`)
+  m._core_followers_clear()
+
+  const late = m._core_follower_spawn(...gridDirection(8, 3), 0)
+  selectOnly([late])
+  m._core_follower_order_move(...gridDirection(8, 14))
+  m._core_tick(200)
+  ok('a walker sets off before the next hut', isWalking(late))
+  m._core_huts_clear()
+  const second = m._core_hut_place(...gridDirection(8, 8), 0, 1, 0, 0)
+  let closest = Infinity
+  for (let frame = 0; frame < 80; frame += 1) {
+    m._core_tick(200)
+    closest = Math.min(closest, angleTo(followerPosition(late), pad))
+  }
+  ok('a hut raised across its path sends it round',
+     second === 0 && closest > HUT_RADIUS && closest >= CELL * 0.85 &&
+     angleTo(followerPosition(late), gridDirection(8, 14)) < 0.01,
+     `closest ${closest.toFixed(4)}, ${angleTo(followerPosition(late), gridDirection(8, 14)).toFixed(4)} from the goal`)
+  m._core_followers_clear()
+  m._core_huts_clear()
+}
+
+{
+  const stander = m._core_follower_spawn(...gridDirection(8, 8), 0)
+  const between = m._core_follower_spawn(...gridDirection(8.5, 9), 0)
+  const outside = m._core_follower_spawn(...gridDirection(8, 12), 0)
+  const before = followerPosition(outside)
+  m._core_hut_place(...gridDirection(8, 8), 0, 1, 0, 0)
+  const clear = (id) => [-1, 0, 1].every((di) => [-1, 0, 1].every((dj) =>
+    angleTo(followerPosition(id), gridDirection(8 + di, 8 + dj)) > CELL * 0.5))
+  ok('a follower standing on the anchor is set down off the pad', clear(stander) &&
+     angleTo(followerPosition(stander), pad) >= CELL * 1.999,
+     `${angleTo(followerPosition(stander), pad).toFixed(4)} from the centre`)
+  ok('so is one between footprint nodes', clear(between))
+  ok('one clear of it is left where it stood',
+     angleTo(followerPosition(outside), before) < 1e-7 && m._core_follower_count() === 3)
+  m._core_followers_clear()
+}
+
+{
+  const before = Math.hypot(...hutInstance(0).slice(0, 3))
   const raised = Float32Array.from(grid.heights)
-  raised[nodeAt(8, 8)] = LAND + 0.01
+  for (let dj = -1; dj <= 1; dj += 1) {
+    for (let di = -1; di <= 1; di += 1) raised[nodeAt(8 + di, 8 + dj)] = LAND + 0.01
+  }
   writeHeights(raised)
   m._core_tick(50)
-  const after = buildingInstance(hutId).slice(0, 3)
-  const radius = Math.hypot(...after)
-  ok('a sculpt under the hut lifts it with the anchor node',
-     Math.abs((radius - before) - 0.01) < 1e-4, `before ${before.toFixed(4)} after ${radius.toFixed(4)}`)
-  const along = after[0] * pad[0] + after[1] * pad[1] + after[2] * pad[2]
-  ok('and it stays anchored to that node', along / radius > 0.999)
+  const after = hutInstance(0).slice(0, 3)
+  ok('a sculpt under a standing hut lifts it with the ground',
+     Math.abs((Math.hypot(...after) - before) - 0.01) < 1e-4 && angleTo(after, pad) < 1e-6,
+     `${before.toFixed(4)} -> ${Math.hypot(...after).toFixed(4)}`)
+  ok('and the footprint stays blocked', !inBox(m._core_nav_nearest_walkable(...pad), 8, 8))
+  writeHeights(grid.heights)
 }
 
-m._core_buildings_clear()
-writeHeights(grid.heights)
-ok('clearing buildings frees the pad', m._core_building_count() === 0 &&
-   m._core_building_site(...pad) === BUILDING_SITE.ok)
+m._core_huts_clear()
+ok('clearing huts gives the pad back to walking',
+   m._core_hut_count() === 0 && m._core_nav_nearest_walkable(...pad) === nodeAt(8, 8) &&
+   m._core_hut_site(...pad) === SITE.ok)
 
 // ---------------------------------------------------------------------------
 // Huts: flatten a pad, build on it, send people in, watch them breed.
 
-/** Mirrors kHutCapacity / kHutRadius in cpp/include/1inkulous/huts.hpp. */
+/** Mirrors kHutCapacity in cpp/include/1inkulous/huts.hpp. */
 const HUT_CAPACITY = 3
-const HUT_RADIUS = 0.05
-const SITE = { ok: 0, noGrid: 1, water: 2, uneven: 3, crowded: 4, full: 5 }
 
 function hutInstance(id) {
   const stride = m._core_hut_instance_floats()
@@ -941,12 +1009,22 @@ ok('the edge of the map does not', m._core_hut_site(...gridDirection(0, 0)) === 
   writeHeights(bumpy)
   ok('a bump inside the footprint is too uneven', m._core_hut_site(...gridDirection(...hutSite)) === SITE.uneven,
      String(m._core_hut_site(...gridDirection(...hutSite))))
-  ok('and nothing is built there', m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0) === -1 &&
+  ok('and nothing is built there', m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0, -1) === -1 &&
      m._core_hut_count() === 0)
 
   bumpy[nodeAt(9, 8)] = LAND + 0.001
   writeHeights(bumpy)
   ok('a bump within tolerance is level enough', m._core_hut_site(...gridDirection(...hutSite)) === SITE.ok)
+
+  // A steady rise across the footprint: walkable, and gentle for a slope, but
+  // not a floor.
+  const sloped = grid.heights.slice()
+  for (let j = 0; j < GRID; j += 1) {
+    for (let i = 0; i < GRID; i += 1) sloped[nodeAt(i, j)] = LAND + i * 0.004
+  }
+  writeHeights(sloped)
+  ok('a walkable slope is still too uneven to build on',
+     m._core_hut_site(...gridDirection(...hutSite)) === SITE.uneven)
 
   // A hill a cell beyond the footprint is somebody else's problem.
   const hilly = grid.heights.slice()
@@ -957,7 +1035,7 @@ ok('the edge of the map does not', m._core_hut_site(...gridDirection(0, 0)) === 
   writeHeights(grid.heights)
 }
 
-const hut = m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0)
+const hut = m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0, -1)
 ok('a hut is built on the pad', hut === 0 && m._core_hut_count() === 1, `id ${hut}`)
 {
   const [x, y, z, hx, hy, hz, tribe, occupants] = hutInstance(hut)
@@ -970,9 +1048,12 @@ ok('a hut is built on the pad', hut === 0 && m._core_hut_count() === 1, `id ${hu
      `heading ${[hx, hy, hz].map((v) => v.toFixed(3))}`)
   ok('empty and unclaimed', tribe === -1 && occupants === 0 && m._core_hut_tribe(hut) === -1)
 }
-ok('a site overlapping it is refused', m._core_hut_site(...gridDirection(9, 8)) === SITE.crowded)
-ok('one a footprint and a gap away is not', m._core_hut_site(...gridDirection(11, 8)) === SITE.ok,
-   String(m._core_hut_site(...gridDirection(11, 8))))
+ok('a site overlapping it is refused', m._core_hut_site(...gridDirection(9, 8)) === SITE.occupied &&
+   m._core_hut_place(...gridDirection(9, 8), 0, 1, 0, -1) === -1)
+ok('so is one whose footprint would touch it, leaving no lane',
+   m._core_hut_site(...gridDirection(11, 8)) === SITE.occupied)
+ok('one a free node away is not', m._core_hut_site(...gridDirection(12, 8)) === SITE.ok,
+   String(m._core_hut_site(...gridDirection(12, 8))))
 
 // Four of tribe 0 and one of tribe 2, all west of the hut. The nearest is tribe
 // 0, so the hut goes to tribe 0, and only three fit.
@@ -1030,7 +1111,7 @@ selectOnly([0])
 ok('a full hut takes nobody', m._core_hut_order_enter(hut) === 0 && m._core_follower_hut(0) === -1)
 
 // The tribe-2 follower claims a second, empty hut, then thinks better of it.
-const second = m._core_hut_place(...gridDirection(12, 12), 1, 0, 0)
+const second = m._core_hut_place(...gridDirection(12, 12), 1, 0, 0, -1)
 ok('a second hut goes up', second === 1 && m._core_hut_count() === 2)
 selectOnly([1])
 ok('a lone follower of another tribe can claim it', m._core_hut_order_enter(second) === 1 &&
@@ -1277,7 +1358,7 @@ ok('a refused cast afterwards empties the plan', bridgeCast(westShore, gridDirec
    m._core_land_bridge_stamp_count() === 0)
 
 const shamanPad = gridDirection(4, 8)
-const shamanHut = m._core_hut_place(...shamanPad, 0, 1, 0)
+const shamanHut = m._core_hut_place(...shamanPad, 0, 1, 0, -1)
 const brave = m._core_follower_spawn(...gridDirection(5, 9), 0)
 m._core_follower_clear_selection()
 m._core_follower_set_selected(m._core_shaman(0), 1)

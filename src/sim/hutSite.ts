@@ -8,7 +8,7 @@ export const HutSite = {
   noGrid: 1,
   water: 2,
   uneven: 3,
-  crowded: 4,
+  occupied: 4,
   full: 5,
 } as const
 export type HutSite = (typeof HutSite)[keyof typeof HutSite]

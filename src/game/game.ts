@@ -1,6 +1,5 @@
 import type { InputSnapshot, PointerClick } from '../input/input'
 import type { Simulation } from '../sim/simulation'
-import { createBuildings, type Buildings } from './buildings'
 import { createCamera, type Camera } from './camera'
 import { createFollowers, type Followers } from './followers'
 import { createHuts, type Huts } from './huts'
@@ -15,7 +14,6 @@ export type Game = {
   sculptor: Sculptor
   followers: Followers
   huts: Huts
-  buildings: Buildings
   shaman: Shaman
   /**
    * `aspect` is the viewport's width / height, needed to turn the cursor into a
@@ -39,10 +37,7 @@ export function createGame(simulation: Simulation): Game {
 
   const sculptor = createSculptor(planet)
   const followers = createFollowers(planet, simulation)
-  // B places a land-claim hut. The breeding huts keep their enter order, but
-  // they no longer share the build key.
-  const buildings = createBuildings(planet, simulation)
-  const huts = createHuts(planet, simulation, { buildMode: false })
+  const huts = createHuts(planet, simulation)
   const shaman = createShaman(planet, simulation, { syncTerrain: followers.syncTerrain })
 
   // Open on the tribe. The starting village is wherever the flattest land
@@ -61,7 +56,6 @@ export function createGame(simulation: Simulation): Game {
     sculptor,
     followers,
     huts,
-    buildings,
     shaman,
     get clearColor() {
       return state.clearColor
@@ -82,9 +76,9 @@ export function createGame(simulation: Simulation): Game {
       followers.syncTerrain()
 
       // A spell being aimed sees the clicks first: a Land Bridge cast is not
-      // also a hut, a selection or a move order. Then buildings, which own the
-      // left button in build mode so no selection box starts while placing.
-      // Breeding huts still claim a right-click on one of their own.
+      // also a hut, a selection or a move order. Then huts, which own the left
+      // button in build mode so no selection box starts while placing, and a
+      // right-click on a hut as an enter order.
       const pointer = input.pointer
       const without = (taken: ReadonlySet<PointerClick>): InputSnapshot =>
         taken.size === 0
@@ -97,18 +91,9 @@ export function createGame(simulation: Simulation): Game {
               },
             }
       const aimed = shaman.update(deltaMs, input, { camera, aspect })
-      const placed = buildings.update(deltaMs, without(aimed.consumed), { camera, aspect })
-      const housed = huts.update(
-        deltaMs,
-        without(new Set([...aimed.consumed, ...placed.consumed])),
-        { camera, aspect },
-      )
-      const claimed = new Set<PointerClick>([
-        ...aimed.consumed,
-        ...placed.consumed,
-        ...housed.consumed,
-      ])
-      const placing = aimed.targeting || placed.building || housed.building
+      const housed = huts.update(deltaMs, without(aimed.consumed), { camera, aspect })
+      const claimed = new Set<PointerClick>([...aimed.consumed, ...housed.consumed])
+      const placing = aimed.targeting || housed.building
       const forFollowers: InputSnapshot =
         claimed.size === 0 && !placing
           ? input

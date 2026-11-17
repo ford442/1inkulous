@@ -1,6 +1,5 @@
 import type { Vec3 } from '../engine/math'
 import createCoreModule, { type CoreModule } from '../wasm/core.js'
-import type { BuildingSite } from './buildingSite'
 import type { HutSite } from './hutSite'
 import type { LandBridge } from './landBridge'
 
@@ -27,9 +26,17 @@ export type NavCommitOptions = {
   maxSlope?: number
 }
 
-export { BuildingSite } from './buildingSite'
 export { HutSite } from './hutSite'
 export { LandBridge } from './landBridge'
+
+/** A hut site as the core judged it. */
+export type HutSiteReport = {
+  readonly site: HutSite
+  /** The anchor node's unit direction, where the hut would stand; null with no node. */
+  readonly centre: Vec3 | null
+  /** Angle in radians from the centre to the furthest footprint node. */
+  readonly footprint: number
+}
 
 /** What a successful Land Bridge cast asks the terrain to do. */
 export type LandBridgePlan = {
@@ -84,10 +91,19 @@ export type Simulation = {
   followerInstances: () => Float32Array
   readonly followerInstanceFloats: number
 
-  /** Whether a hut could stand centred on a direction, and if not, why. */
-  hutSite: (direction: Vec3) => HutSite
-  /** Builds a hut there, door along `heading`. Returns its id, or -1 if refused. */
-  placeHut: (direction: Vec3, heading: Vec3) => number
+  /**
+   * Whether a hut could stand on the nav node nearest a direction, and if not,
+   * why — with that node's direction, where the hut would be centred, and the
+   * angle to the edge of the footprint it would block. Null centre when there
+   * is no node.
+   */
+  hutSite: (direction: Vec3) => HutSiteReport
+  /**
+   * Builds a hut there, door along `heading`, owned by `tribe` (negative:
+   * unclaimed until someone goes in). Blocks the footprint to walking. Returns
+   * its id, or -1 if refused. Does not sculpt.
+   */
+  placeHut: (direction: Vec3, heading: Vec3, tribe: number) => number
   readonly hutCount: number
   /** Followers inside every hut together. */
   readonly housedCount: number
@@ -100,24 +116,6 @@ export type Simulation = {
   /** Hut footprint radius in world units, as the core places them. */
   readonly hutRadius: number
   readonly hutCapacity: number
-
-  /** Whether a building could claim the nav node nearest a direction, and if not, why. */
-  buildingSite: (direction: Vec3) => BuildingSite
-  /**
-   * Claims that node for `tribe` and `kind` (0 is a hut). Returns its id, or
-   * -1 if the site is water, too steep, already taken, or otherwise refused.
-   * Does not sculpt.
-   */
-  placeBuilding: (direction: Vec3, tribe: number, kind: number) => number
-  readonly buildingCount: number
-  /**
-   * Live view of the building instance buffer — position, tribe, kind,
-   * occupants, flags. Re-read it every frame.
-   */
-  buildingInstances: () => Float32Array
-  readonly buildingInstanceFloats: number
-  /** Placeholder radius in world units, for the mesh and the build cursor. */
-  readonly buildingRadius: number
 
   /** Spawns a tribe's shaman. Returns her follower id, or -1 if refused. */
   spawnShaman: (direction: Vec3, tribe: number) => number
@@ -187,7 +185,6 @@ export async function createSimulation(
 
   const instanceFloats = module._core_follower_instance_floats()
   const hutInstanceFloats = module._core_hut_instance_floats()
-  const buildingInstanceFloats = module._core_building_instance_floats()
   // Cached only to spot a stale build; the pointer itself is re-read per call.
   let navNodeCount = 0
 
@@ -301,10 +298,17 @@ export async function createSimulation(
     followerInstanceFloats: instanceFloats,
 
     hutSite(direction: Vec3) {
-      return module._core_hut_site(direction[0], direction[1], direction[2]) as HutSite
+      const site = module._core_hut_site(direction[0], direction[1], direction[2]) as HutSite
+      const at = module._core_hut_site_point() >> 2
+      const heap = module.HEAPF32
+      const centre: Vec3 | null =
+        heap[at] === 0 && heap[at + 1] === 0 && heap[at + 2] === 0
+          ? null
+          : [heap[at], heap[at + 1], heap[at + 2]]
+      return { site, centre, footprint: heap[at + 3] }
     },
 
-    placeHut(direction: Vec3, heading: Vec3) {
+    placeHut(direction: Vec3, heading: Vec3, tribe: number) {
       return module._core_hut_place(
         direction[0],
         direction[1],
@@ -312,6 +316,7 @@ export async function createSimulation(
         heading[0],
         heading[1],
         heading[2],
+        tribe,
       )
     },
 
@@ -343,30 +348,6 @@ export async function createSimulation(
     hutInstanceFloats,
     hutRadius: module._core_hut_radius(),
     hutCapacity: module._core_hut_capacity(),
-
-    buildingSite(direction: Vec3) {
-      return module._core_building_site(direction[0], direction[1], direction[2]) as BuildingSite
-    },
-
-    placeBuilding(direction: Vec3, tribe: number, kind: number) {
-      return module._core_building_place(direction[0], direction[1], direction[2], tribe, kind)
-    },
-
-    get buildingCount() {
-      return module._core_building_count()
-    },
-
-    buildingInstances() {
-      const count = module._core_building_count()
-      if (count === 0) {
-        return new Float32Array(0)
-      }
-      const start = module._core_building_instances() >> 2
-      return module.HEAPF32.subarray(start, start + count * buildingInstanceFloats)
-    },
-
-    buildingInstanceFloats,
-    buildingRadius: module._core_building_radius(),
 
     spawnShaman(direction: Vec3, tribe: number) {
       return module._core_shaman_spawn(direction[0], direction[1], direction[2], tribe)

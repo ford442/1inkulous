@@ -78,6 +78,12 @@ class FollowerSet {
   // it, and on the nearest walkable node otherwise. Same result as spawn().
   std::int32_t spawn_at(const double dir[3], std::int32_t tribe);
 
+  // Called once a building has claimed nodes. Anyone whose ground now leans
+  // on a blocked node is set down on the nearest free node, and anyone
+  // walking is routed again, so nobody is left inside a hut or bound for a
+  // spot under one.
+  void step_off_blocked();
+
   // Takes a follower out of the world — into a hut. Ids above it shift down
   // by one, so callers walking the set remove from the top.
   void remove(std::int32_t id);

@@ -105,7 +105,7 @@ bool Shamans::wet(const double dir[3]) const {
   // route standing here is a corner the bridge has to cover.
   for (int corner = 0; corner < 3; ++corner) {
     if (ground.nodes[corner] >= 0 && ground.weights[corner] > kRouteSupport &&
-        !grid_->walkable(ground.nodes[corner])) {
+        !grid_->dry(ground.nodes[corner])) {
       return true;
     }
   }

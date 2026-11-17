@@ -7,17 +7,21 @@ import type { Planet } from './planet'
 import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
 
 /**
- * Huts — the first buildings, and the loop they start: flatten a pad, drop a
- * hut, send followers in, and the hut breeds more.
+ * Huts — the one kind of building, and the loop it starts: flatten a pad,
+ * drop a hut, send followers in, and the hut breeds more.
  *
  * As with followers, the huts themselves live in the C++ core: it decides
- * where one may stand, who goes inside, and when a hut breeds. This module is
- * the player's side of it — build mode and its ghost, picking a hut under the
- * cursor, and turning a right-click on one into an enter order.
+ * where one may stand, which nav nodes it blocks, who goes inside, and when a
+ * hut breeds. This module is the player's side of it — build mode (B) and its
+ * ghost, picking a hut under the cursor, and turning a right-click on one into
+ * an enter order. Placing does not sculpt; the flatten brush makes the pad.
  */
 
 /** Overall height of the placeholder hut, as a multiple of its footprint radius. */
 export const HUT_HEIGHT_RATIO = 1.0
+
+/** The player's tribe. Huts it builds are its own from the start. */
+const PLAYER_TRIBE = 0
 
 /** Instance layout, in floats: position(3), heading(3), tribe, occupants. */
 const OFFSET_POSITION = 0
@@ -40,9 +44,12 @@ export type HutViewContext = {
 
 /** Where build mode would put a hut, and whether the core would allow it. */
 export type HutGhost = {
+  /** The anchor node the hut would stand on — the cursor, snapped. */
   readonly direction: Vec3
   readonly heading: Vec3
   readonly site: HutSite
+  /** Angle in radians to the edge of the footprint the hut would block. */
+  readonly footprint: number
 }
 
 export type HutUpdate = {
@@ -52,24 +59,14 @@ export type HutUpdate = {
   building: boolean
 }
 
-export type HutOptions = {
-  /**
-   * When false, B does not toggle build mode. Land-claim buildings own that
-   * key; a right-click on one of these huts is still an enter order.
-   */
-  buildMode?: boolean
-}
-
 export type Huts = {
-  /** False when another system owns the B key, so the HUD does not offer it here. */
-  readonly ownsBuildKey: boolean
   readonly building: boolean
   /** Null outside build mode, while sculpting, or with the cursor off the planet. */
   readonly ghost: HutGhost | null
   readonly count: number
   readonly housedCount: number
   readonly capacity: number
-  /** Footprint radius in world units. */
+  /** Radius of the placeholder mesh in world units. */
   readonly radius: number
   /** Everyone in the world: out walking and inside huts. */
   readonly population: number
@@ -83,8 +80,7 @@ export type Huts = {
   update: (deltaMs: number, input: InputSnapshot, view: HutViewContext) => HutUpdate
 }
 
-export function createHuts(planet: Planet, simulation: Simulation, options: HutOptions = {}): Huts {
-  const buildMode = options.buildMode !== false
+export function createHuts(planet: Planet, simulation: Simulation): Huts {
   const radius = simulation.hutRadius
   const height = radius * HUT_HEIGHT_RATIO
   const instanceFloats = simulation.hutInstanceFloats
@@ -105,15 +101,17 @@ export function createHuts(planet: Planet, simulation: Simulation, options: HutO
     if (!direction) {
       return null
     }
+    const report = simulation.hutSite(direction)
+    const centre = report.centre ?? direction
     return {
-      direction,
-      heading: doorTowards(direction, eye),
-      site: simulation.hutSite(direction),
+      direction: centre,
+      heading: doorTowards(centre, eye),
+      site: report.site,
+      footprint: report.footprint,
     }
   }
 
   return {
-    ownsBuildKey: buildMode,
     get building() {
       return building
     },
@@ -163,7 +161,7 @@ export function createHuts(planet: Planet, simulation: Simulation, options: HutO
         notice = null
       }
 
-      if (buildMode && BUILD_KEYS.some((code) => input.pressed.has(code))) {
+      if (BUILD_KEYS.some((code) => input.pressed.has(code))) {
         building = !building
       }
       if (CANCEL_KEYS.some((code) => input.pressed.has(code))) {
@@ -201,7 +199,9 @@ export function createHuts(planet: Planet, simulation: Simulation, options: HutO
             say(siteProblem(site.site))
             continue
           }
-          if (simulation.placeHut(site.direction, site.heading) >= 0) {
+          if (simulation.placeHut(site.direction, site.heading, PLAYER_TRIBE) >= 0) {
+            notice = null
+            noticeMs = 0
             // Shift keeps placing, the usual RTS binding for queued builds.
             building = click.shiftKey
           }
@@ -248,8 +248,8 @@ export function siteProblem(site: HutSite): string {
     case HutSite.water:
       return 'needs dry land all round'
     case HutSite.uneven:
-      return 'too uneven — flatten it (hold C, Shift + left-drag)'
-    case HutSite.crowded:
+      return 'too uneven — flatten a pad (hold C, Shift + left-drag)'
+    case HutSite.occupied:
       return 'too close to another hut'
     case HutSite.full:
       return 'no room for more huts'

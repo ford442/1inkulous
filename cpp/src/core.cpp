@@ -6,13 +6,13 @@
 namespace inkulous {
 namespace {
 
-// "0.5.0" — built by hand so the string is static storage with no allocation,
+// "0.6.0" — built by hand so the string is static storage with no allocation,
 // which keeps core_version_text() safe to hand across the WASM boundary.
 #define INKULOUS_STRINGIFY_(x) #x
 #define INKULOUS_STRINGIFY(x) INKULOUS_STRINGIFY_(x)
-constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(5) "." INKULOUS_STRINGIFY(0);
+constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(6) "." INKULOUS_STRINGIFY(0);
 
-static_assert(kVersionMajor == 0 && kVersionMinor == 5 && kVersionPatch == 0,
+static_assert(kVersionMajor == 0 && kVersionMinor == 6 && kVersionPatch == 0,
               "kVersionText must be kept in step with the version constants");
 
 }  // namespace
@@ -25,7 +25,6 @@ Simulation::Simulation(double step_ms)
     : step_ms_(step_ms > 0.0 ? step_ms : kDefaultStepMs) {
   followers_.set_grid(&nav_);
   huts_.attach(&nav_, &followers_);
-  buildings_.set_grid(&nav_);
   shamans_.attach(&nav_, &followers_, &huts_);
 }
 
@@ -65,7 +64,6 @@ std::int32_t Simulation::advance(double delta_ms) {
   if (steps > 0) {
     followers_.refresh_instances();
     huts_.refresh_instances();
-    buildings_.refresh_instances();
   }
 
   return steps;

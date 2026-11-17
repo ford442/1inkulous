@@ -24,18 +24,8 @@ export type FollowerReadout = {
   readonly walkingCount: number
 }
 
-/** The slice of the land-claim huts the HUD reports on. */
-export type BuildingReadout = {
-  readonly count: number
-  readonly building: boolean
-  readonly notice: string | null
-  readonly siteLabel: string | null
-}
-
 /** The slice of the huts the HUD reports on. */
 export type HutReadout = {
-  /** When false, B belongs to land-claim huts and this line does not mention it. */
-  readonly ownsBuildKey?: boolean
   readonly building: boolean
   readonly ghost: HutGhost | null
   readonly count: number
@@ -72,19 +62,9 @@ export type Hud = {
   setSimulation: (simulation: SimulationReadout) => void
   setFollowers: (followers: FollowerReadout) => void
   setHuts: (huts: HutReadout) => void
-  setBuildings: (buildings: BuildingReadout) => void
   setShaman: (shaman: ShamanReadout) => void
   /** Screen-space selection box, or null when there isn't one. */
   setSelectionBand: (band: DragRect | null) => void
-}
-
-/** The land-claim line. Always starts with `N huts`. */
-export function buildingLine(buildings: BuildingReadout): string {
-  const head = `${buildings.count} huts`
-  if (buildings.building) {
-    return `${head} · ${buildings.notice ?? buildings.siteLabel ?? 'point at the ground'}`
-  }
-  return buildings.notice ? `${head} · ${buildings.notice}` : head
 }
 
 /** The HUD's population and build line. Pure, so it can be checked without a DOM. */
@@ -99,9 +79,6 @@ export function hutLine(huts: HutReadout): string {
         : siteProblem(huts.ghost.site)
       : 'point at the ground'
     return `${head} · placing a hut: ${huts.notice ?? site}`
-  }
-  if (huts.ownsBuildKey === false) {
-    return huts.notice ? `${head} · ${huts.notice}` : head
   }
   return huts.notice ? `${head} · ${huts.notice}` : `${head} · B to build a hut`
 }
@@ -163,14 +140,13 @@ export function createHud(): Hud {
       <p class="hint" id="hud-brush">—</p>
       <p class="hint" id="hud-sim">—</p>
       <p class="hint" id="hud-followers">—</p>
-      <p class="hint" id="hud-buildings">—</p>
       <p class="hint" id="hud-huts">—</p>
       <p class="hint" id="hud-shaman">—</p>
       <p class="hint">Right-drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
       <p class="hint">Drag a box to select · Shift-drag adds · click ground clears · right-click sends them</p>
       <p class="hint">Hold C to sculpt: left raises, right lowers, Shift-left flattens · wheel sizes the brush · [ ] strength</p>
-      <p class="hint">B places a hut on a flat pad · water, cliffs, and occupied ground refuse it</p>
-      <p class="hint">Right-click a bred hut to send the selection inside</p>
+      <p class="hint">B places a hut on a flat pad · water, uneven, and occupied ground refuse it · huts block walking</p>
+      <p class="hint">Right-click a hut to send the selection inside</p>
       <p class="hint">F finds the shaman · L aims a Land Bridge: click across water from her, or drag shore to shore</p>
     </div>
   `
@@ -180,7 +156,6 @@ export function createHud(): Hud {
   const brushEl = root.querySelector<HTMLParagraphElement>('#hud-brush')
   const simEl = root.querySelector<HTMLParagraphElement>('#hud-sim')
   const followersEl = root.querySelector<HTMLParagraphElement>('#hud-followers')
-  const buildingsEl = root.querySelector<HTMLParagraphElement>('#hud-buildings')
   const hutsEl = root.querySelector<HTMLParagraphElement>('#hud-huts')
   const shamanEl = root.querySelector<HTMLParagraphElement>('#hud-shaman')
   const bandEl = document.querySelector<HTMLDivElement>('#select-band')
@@ -225,11 +200,6 @@ export function createHud(): Hud {
     setHuts(huts: HutReadout) {
       if (hutsEl) {
         hutsEl.textContent = hutLine(huts)
-      }
-    },
-    setBuildings(buildings: BuildingReadout) {
-      if (buildingsEl) {
-        buildingsEl.textContent = buildingLine(buildings)
       }
     },
     setShaman(shaman: ShamanReadout) {

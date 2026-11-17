@@ -6,17 +6,23 @@
 #include "1inkulous/followers.hpp"
 #include "1inkulous/nav.hpp"
 
-// Huts: the first buildings, and the first game loop.
+// Huts: the one kind of building, and the first game loop.
 //
 // The player flattens a pad, drops a hut on it, and sends followers in. A
-// follower that reaches the doorstep goes inside — it leaves the follower set
-// and becomes one of the hut's occupants — and a hut with people in it breeds:
+// follower that reaches the door goes inside — it leaves the follower set and
+// becomes one of the hut's occupants — and a hut with people in it breeds:
 // every so often a new follower of the hut's tribe steps out of the door. More
 // occupants, quicker births, up to the hut's capacity.
 //
-// This milestone's huts are free and all alike. They do not block walking,
-// and sculpting under one leaves it standing at whatever height the ground
-// has; both come with real buildings later.
+// A hut stands on a nav node. That node and every node linked to it are its
+// footprint: they have to be dry and level before it goes up, and once it
+// stands they are blocked in the NavGrid, so routes, line tests and every
+// step a follower takes go round the pad the way they go round water.
+// Placing does not sculpt; sculpting under a standing hut carries it with
+// the ground, and the footprint stays blocked whatever the heights do.
+//
+// Owned here the same way followers are: dense ids, one packed instance
+// buffer, nothing copied across the WASM boundary per frame.
 
 namespace inkulous {
 
@@ -31,21 +37,17 @@ constexpr std::int32_t kHutInstanceFloats = 8;
 // sizes its buffer once.
 constexpr std::int32_t kMaxHuts = 256;
 
-// Footprint radius, in world units on the unit planet. A hut is about two
-// grid cells across — the scale of a small hut against a brave in the
-// original — and three times a follower's height.
+// Radius of the placeholder mesh, in world units on the unit planet. The
+// footprint is the nav neighbourhood, which is always at least this wide on
+// the planet grid; the ring under the walls is sampled too, so the mesh never
+// overhangs water or the edge of an open patch.
 constexpr double kHutRadius = 0.05;
 
-// How far round the centre the ground must be flat, and how flat: the spread
-// of heights over every node and footprint sample in reach. Rolling country
-// mostly fails this, so a site is something the player makes with the
-// flatten brush; the odd naturally level spot passes.
-constexpr double kHutSiteRadius = 0.07;
+// Spread of heights allowed over the footprint nodes and the ground under the
+// walls. Rolling country mostly fails this, and so does a slope gentle
+// enough to walk: a site is something the player makes with the flatten
+// brush, with the odd naturally level spot.
 constexpr double kHutMaxUnevenness = 0.0025;
-
-// Closest two huts may stand, centre to centre: two footprints and a gap a
-// follower can walk through.
-constexpr double kHutMinSeparation = kHutRadius * 2.0 + kFollowerSpacing;
 
 // People a hut holds.
 constexpr std::int32_t kHutCapacity = 3;
@@ -54,24 +56,17 @@ constexpr std::int32_t kHutCapacity = 3;
 // hut three times as often.
 constexpr double kHutBreedSeconds = 30.0;
 
-// A follower ordered in goes inside once it is this close to the centre:
-// at the wall, give or take a body. Wide enough that a group sent in reaches
-// it from the spots the formation hands out round the hut.
-constexpr double kHutEntryReach = kHutRadius + kFollowerSpacing * 1.5;
-
-// Newborns appear this far out of the door, clear of the wall.
-constexpr double kHutDoorDistance = kHutRadius + kFollowerSpacing;
-
 // Why a site will or will not take a hut. Values cross the ABI as ints.
 enum class HutSite : std::int32_t {
   kOk = 0,
   kNoGrid = 1,
   // Some of the footprint is water, or off the edge of the map.
   kWater = 2,
-  // Not flat enough: flatten it first.
+  // Not level enough: flatten it first.
   kUneven = 3,
-  // Too close to another hut.
-  kCrowded = 4,
+  // The footprint overlaps or touches another hut's: two huts keep at least
+  // one free node between them, a lane a follower can walk.
+  kOccupied = 4,
   // kMaxHuts already stand.
   kFull = 5,
 };
@@ -84,14 +79,25 @@ class HutSet {
     followers_ = followers;
   }
 
-  // Whether a hut could stand centred on the direction, and if not, why.
-  HutSite check_site(double x, double y, double z) const;
+  // Whether a hut could stand on the nav node nearest the direction, and if
+  // not, why. Also records that node's direction and footprint radius; see
+  // site_point().
+  HutSite check_site(double x, double y, double z);
 
-  // Builds a hut centred on the direction, its door facing along `heading`
-  // (projected onto the surface; any tangent if it is degenerate). Returns its
-  // id, or -1 if check_site refuses the spot.
-  std::int32_t place(double x, double y, double z, double hx, double hy, double hz);
+  // The last check_site's footprint: the anchor's unit direction, which is
+  // where the hut would be centred, and the angle from it to the furthest
+  // footprint node. Zeros if that check found no node.
+  const float* site_point() const { return site_point_; }
 
+  // Builds a hut on the node nearest the direction, its door facing along
+  // `heading` (projected onto the surface; any tangent if it is degenerate),
+  // owned by `tribe` — or by nobody, claimed by the first tribe sent in, if
+  // it is negative. Blocks the footprint and moves anyone standing on it to
+  // free ground. Returns its id, or -1 if check_site refuses the spot.
+  std::int32_t place(double x, double y, double z, double hx, double hy, double hz,
+                     std::int32_t tribe);
+
+  // Removes every hut and frees their footprints.
   void clear();
 
   std::int32_t count() const { return static_cast<std::int32_t>(huts_.size()); }
@@ -104,7 +110,7 @@ class HutSet {
   // Sends selected followers into hut `id`: as many as it has room for once
   // those already on their way are counted, nearest first, and only of the
   // hut's tribe. An unclaimed hut takes the tribe of the nearest selected
-  // follower. Returns how many were sent.
+  // follower. The shaman never goes in. Returns how many were sent.
   std::int32_t order_enter_selected(std::int32_t id);
 
   // One fixed step: lets in whoever has reached the hut they were sent to,
@@ -122,12 +128,28 @@ class HutSet {
     std::int32_t occupants = 0;
     // Towards the next birth, in births: one is due at 1.
     double breeding = 0.0;
-    // Node nearest the centre, kept as a hint for reading the ground.
+    // The anchor node: `dir` is its direction, and the hut stands at its
+    // height, read live so a sculpt stroke carries the hut with it.
     std::int32_t node = -1;
+    // Anchor first, then its neighbours. Blocked for as long as it stands.
+    std::vector<std::int32_t> footprint;
+    // Angle from the centre to the door point, just clear of the footprint,
+    // and the angle within which someone sent in counts as at the door: the
+    // first free nodes round the pad, and a body's room past them.
+    double door = 0.0;
+    double reach = 0.0;
   };
 
+  // Fills `footprint_scratch_` with `node` and its neighbours.
+  void collect_footprint(std::int32_t node);
+  // Water, then uneven, then occupied, for the footprint in scratch.
+  HutSite judge(const double centre[3], std::int32_t node) const;
+  // Re-marks every footprint after the grid has been reallocated.
+  void sync_blocked();
+  void mark(const Hut& hut, bool blocked);
   // Followers already sent into hut `id` and not yet arrived.
   std::int32_t incoming(std::int32_t id) const;
+  void door_point(const Hut& hut, double out[3]) const;
   void admit_arrivals();
   void breed(double dt_seconds);
 
@@ -135,6 +157,11 @@ class HutSet {
   FollowerSet* followers_ = nullptr;
   std::vector<Hut> huts_;
   std::vector<float> instances_;
+  // The grid generation the footprints were last marked on.
+  std::uint32_t marked_generation_ = 0;
+  // Scratch for check_site / place, so a frame's ghost does not allocate.
+  std::vector<std::int32_t> footprint_scratch_;
+  float site_point_[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 }  // namespace inkulous

@@ -2,7 +2,6 @@
 
 #include <cstdint>
 
-#include "1inkulous/buildings.hpp"
 #include "1inkulous/followers.hpp"
 #include "1inkulous/huts.hpp"
 #include "1inkulous/nav.hpp"
@@ -15,7 +14,7 @@ namespace inkulous {
 
 // Semantic version of the core, so the loader can report what it got.
 constexpr int kVersionMajor = 0;
-constexpr int kVersionMinor = 5;
+constexpr int kVersionMinor = 6;
 constexpr int kVersionPatch = 0;
 
 // Encoded as MAJOR * 10000 + MINOR * 100 + PATCH: cheap to pass across the
@@ -60,7 +59,6 @@ class Simulation {
   NavGrid& nav() { return nav_; }
   FollowerSet& followers() { return followers_; }
   HutSet& huts() { return huts_; }
-  BuildingSet& buildings() { return buildings_; }
   Shamans& shamans() { return shamans_; }
 
   std::int64_t step_count() const { return step_count_; }
@@ -80,7 +78,6 @@ class Simulation {
   NavGrid nav_;
   FollowerSet followers_;
   HutSet huts_;
-  BuildingSet buildings_;
   Shamans shamans_;
 };
 

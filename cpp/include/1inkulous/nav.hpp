@@ -94,7 +94,22 @@ class NavGrid {
   const float* direction(std::int32_t node) const { return &directions_[node * 3]; }
   float height(std::int32_t node) const { return heights_[node]; }
 
-  bool walkable(std::int32_t node) const { return heights_[node] > kWaterHeight; }
+  // Above the water line: the terrain alone, whatever stands on it.
+  bool dry(std::int32_t node) const { return heights_[node] > kWaterHeight; }
+  // Ground a follower may stand on or route through: dry, and not under a
+  // building. Every search, line test and step reads this, so a hut's
+  // footprint is refused exactly the way water is.
+  bool walkable(std::int32_t node) const {
+    return heights_[node] > kWaterHeight && blocked_[node] == 0;
+  }
+
+  // Footprint nodes, set and cleared by the hut set. Cleared by allocate(),
+  // which also bumps topology_generation() so the owner knows to mark again.
+  bool blocked(std::int32_t node) const { return blocked_[node] != 0; }
+  void set_blocked(std::int32_t node, bool blocked) {
+    blocked_[node] = blocked ? 1 : 0;
+  }
+  std::uint32_t topology_generation() const { return topology_generation_; }
 
   // Whether a follower can step between two adjacent nodes: both on land, and
   // the ground between them no steeper than `max_slope`.
@@ -239,6 +254,9 @@ class NavGrid {
 
   std::vector<float> directions_;
   std::vector<float> heights_;
+  // 1 where a building stands. Sized with the nodes.
+  std::vector<std::uint8_t> blocked_;
+  std::uint32_t topology_generation_ = 0;
   std::vector<std::int32_t> neighbor_offsets_;
   std::vector<std::int32_t> neighbors_;
 

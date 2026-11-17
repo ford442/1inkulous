@@ -131,17 +131,29 @@ int core_follower_hut(int id);
 
 // --- huts -----------------------------------------------------------------
 //
+// The one kind of building. A hut stands on the nav node nearest the point
+// it is placed at, and that node with its neighbours is its footprint: dry,
+// level, and from then on blocked to every route and step, like water.
+//
 // Ids are dense indices into the hut instance buffer, like followers'. Huts
 // are never removed during a match, so an id stays good until core_huts_clear.
 
-// Whether a hut could stand centred on the direction: 0 yes, otherwise the
-// reason — 1 no grid, 2 water, 3 uneven, 4 too close to another hut, 5 the
-// hut ceiling is reached. Mirrors inkulous::HutSite.
+// Whether a hut could stand on the node nearest the direction: 0 yes,
+// otherwise the reason — 1 no grid, 2 water, 3 uneven, 4 the footprint
+// overlaps or touches another hut's, 5 the hut ceiling is reached. Mirrors
+// inkulous::HutSite.
 int core_hut_site(double x, double y, double z);
 
-// Builds a hut centred on (x, y, z) with its door along (hx, hy, hz). Returns
-// its id, or -1 if core_hut_site would refuse it.
-int core_hut_place(double x, double y, double z, double hx, double hy, double hz);
+// What the last core_hut_site (or core_hut_place) looked at: 4 floats, the
+// anchor node's unit direction — where the hut would be centred — and the
+// angle in radians to the furthest node of its footprint. Zeros if there was
+// no node. For drawing the build ghost on the patch the core will block.
+float* core_hut_site_point(void);
+
+// Builds a hut on that node with its door along (hx, hy, hz), owned by
+// `tribe`, or unclaimed until someone goes in if `tribe` is negative.
+// Returns its id, or -1 if core_hut_site would refuse it. Does not sculpt.
+int core_hut_place(double x, double y, double z, double hx, double hy, double hz, int tribe);
 
 int core_hut_count(void);
 void core_huts_clear(void);
@@ -162,38 +174,9 @@ int core_hut_tribe(int id);
 int core_hut_order_enter(int id);
 
 // Fixed rules, so TypeScript draws and picks huts at the size the core
-// places them: footprint radius in world units, and people per hut.
+// places them: the mesh's radius in world units, and people per hut.
 double core_hut_radius(void);
 int core_hut_capacity(void);
-
-// --- buildings ------------------------------------------------------------
-//
-// A building claims the nav node nearest the point and that node's
-// neighbourhood, when the patch is land and flatter than the walk limit.
-// Ids are dense indices into the building instance buffer. Buildings are not
-// removed during a match, so an id stays good until core_buildings_clear.
-
-// Whether a building could stand on the node nearest the direction: 0 yes,
-// otherwise the reason — 1 no grid, 2 water, 3 too steep, 4 footprint
-// overlaps a building, 5 the building ceiling is reached. Mirrors
-// inkulous::BuildingSite.
-int core_building_site(double x, double y, double z);
-
-// Claims that node. `kind` is 0 for a hut. Returns the id, or -1 if
-// core_building_site would refuse it or `kind` is negative. Does not sculpt.
-int core_building_place(double x, double y, double z, int tribe, int kind);
-
-int core_building_count(void);
-void core_buildings_clear(void);
-
-// Packed render instances: core_building_instance_floats() floats each, in id
-// order. Position, tribe, kind, occupant count, flags. Moves as buildings are
-// placed, so re-read it per frame.
-float* core_building_instances(void);
-int core_building_instance_floats(void);
-
-// Placeholder radius in world units, for the mesh and the build cursor.
-double core_building_radius(void);
 
 // --- shaman and Land Bridge ---------------------------------------------
 //

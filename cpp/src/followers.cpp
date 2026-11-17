@@ -247,6 +247,76 @@ std::int32_t FollowerSet::spawn_at(const double dir[3], std::int32_t tribe) {
   return id;
 }
 
+void FollowerSet::step_off_blocked() {
+  if (grid_ == nullptr || !grid_->ready()) {
+    return;
+  }
+  bool moved = false;
+  for (Follower& follower : followers_) {
+    const std::int32_t node = grid_->locate(follower.dir, follower.node);
+    if (node < 0) {
+      continue;
+    }
+    SurfacePoint ground;
+    grid_->sample(follower.dir, node, ground);
+    bool inside = false;
+    for (int corner = 0; corner < 3; ++corner) {
+      // The loose limit, the one each step is held to: a body this far onto
+      // the pad could not take another step.
+      if (ground.nodes[corner] >= 0 && ground.weights[corner] > kStepSupport &&
+          grid_->blocked(ground.nodes[corner])) {
+        inside = true;
+      }
+    }
+
+    if (inside) {
+      const std::int32_t free = grid_->nearest_walkable_node(follower.dir[0], follower.dir[1],
+                                                             follower.dir[2]);
+      if (free < 0) {
+        continue;
+      }
+      const float* d = grid_->direction(free);
+      follower.dir[0] = d[0];
+      follower.dir[1] = d[1];
+      follower.dir[2] = d[2];
+      normalize3(follower.dir);
+      follower.node = free;
+      follower.height = grid_->height(free);
+      follower.grounded = true;
+      flatten(follower.heading, follower.dir);
+      if (!normalize3(follower.heading)) {
+        double e2[3];
+        tangent_basis(follower.dir, follower.heading, e2);
+      }
+      moved = true;
+    }
+
+    if (!walking(follower)) {
+      continue;
+    }
+    // A goal under the pad moves to the nearest free node; either way the
+    // route is planned again, round the footprint rather than through it.
+    NavPoint goal = follower.goal;
+    if (goal.node < 0 || !grid_->walkable(goal.node)) {
+      goal.node = grid_->nearest_walkable_node(goal.dir[0], goal.dir[1], goal.dir[2]);
+      if (goal.node < 0) {
+        stop(follower);
+        continue;
+      }
+      const float* g = grid_->direction(goal.node);
+      goal.dir[0] = g[0];
+      goal.dir[1] = g[1];
+      goal.dir[2] = g[2];
+    }
+    if (!route_to(follower, goal)) {
+      stop(follower);
+    }
+  }
+  if (moved) {
+    refresh_instances();
+  }
+}
+
 void FollowerSet::remove(std::int32_t id) {
   if (id < 0 || id >= count()) {
     return;

@@ -214,13 +214,22 @@ INKULOUS_EXPORT int core_hut_site(double x, double y, double z) {
   return static_cast<int>(simulation().huts().check_site(x, y, z));
 }
 
+INKULOUS_EXPORT float* core_hut_site_point(void) {
+  return const_cast<float*>(simulation().huts().site_point());
+}
+
 INKULOUS_EXPORT int core_hut_place(double x,
                                    double y,
                                    double z,
                                    double hx,
                                    double hy,
-                                   double hz) {
-  return simulation().huts().place(x, y, z, hx, hy, hz);
+                                   double hz,
+                                   int tribe) {
+  const int id = simulation().huts().place(x, y, z, hx, hy, hz, tribe);
+  if (id >= 0) {
+    simulation().followers().refresh_instances();
+  }
+  return id;
 }
 
 INKULOUS_EXPORT int core_hut_count(void) { return simulation().huts().count(); }
@@ -248,30 +257,6 @@ INKULOUS_EXPORT int core_hut_order_enter(int id) {
 INKULOUS_EXPORT double core_hut_radius(void) { return inkulous::kHutRadius; }
 
 INKULOUS_EXPORT int core_hut_capacity(void) { return inkulous::kHutCapacity; }
-
-// --- buildings ------------------------------------------------------------
-
-INKULOUS_EXPORT int core_building_site(double x, double y, double z) {
-  return static_cast<int>(simulation().buildings().check_site(x, y, z));
-}
-
-INKULOUS_EXPORT int core_building_place(double x, double y, double z, int tribe, int kind) {
-  return simulation().buildings().place(x, y, z, tribe, kind);
-}
-
-INKULOUS_EXPORT int core_building_count(void) { return simulation().buildings().count(); }
-
-INKULOUS_EXPORT void core_buildings_clear(void) { simulation().buildings().clear(); }
-
-INKULOUS_EXPORT float* core_building_instances(void) {
-  return const_cast<float*>(simulation().buildings().instances());
-}
-
-INKULOUS_EXPORT int core_building_instance_floats(void) {
-  return inkulous::kBuildingInstanceFloats;
-}
-
-INKULOUS_EXPORT double core_building_radius(void) { return inkulous::kBuildingRadius; }
 
 // --- shaman and Land Bridge ---------------------------------------------
 

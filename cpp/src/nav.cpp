@@ -179,6 +179,8 @@ bool NavGrid::allocate(std::int32_t node_count, std::int32_t link_count) {
 
   directions_.assign(static_cast<std::size_t>(node_count) * 3, 0.0f);
   heights_.assign(static_cast<std::size_t>(node_count), 0.0f);
+  blocked_.assign(static_cast<std::size_t>(node_count), 0);
+  ++topology_generation_;
   neighbor_offsets_.assign(static_cast<std::size_t>(node_count) + 1, 0);
   neighbors_.assign(static_cast<std::size_t>(link_count), 0);
 

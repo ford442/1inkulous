@@ -49,7 +49,7 @@ emcc -v   # confirm
 | `npm run build:web` | Skips the WASM step; fails if `src/wasm/core.js` is absent |
 | `npm run build:wasm` | Compiles `cpp/` into `src/wasm/core.js` + `core.wasm` |
 | `npm run test:core` | Headless checks of the core in Node (no browser needed) |
-| `npm run test:huts` | Flatten brush, hut picking and build mode, against a fake core |
+| `npm run test:huts` | Flatten brush, hut picking and build mode against a fake core; then placing, entering, breeding and routing round a hut on the real core and planet |
 | `npm run test:shaman` | Shaman, mana and Land Bridge end to end, on the real core and planet |
 | `npm run clean:wasm` | Removes the CMake build directory and generated artifacts |
 
@@ -238,33 +238,52 @@ and reading the ground under each follower, both linear in the population.
 ## Huts
 
 The first game loop, as in the original: flatten a pad, drop a hut, send
-people in, and the hut breeds more. Huts live in the C++ core next to the
-followers (`cpp/src/huts.cpp`); TypeScript runs build mode, picks huts under
-the cursor and draws them (`src/game/huts.ts`).
+people in, and the hut breeds more. The hut is the one kind of building, and
+one structure owns all of it — placement, tribe, door, occupants, breeding and
+the nodes it stands on. It lives in the C++ core next to the followers
+(`cpp/src/huts.cpp`); TypeScript runs build mode, picks huts under the cursor
+and draws them (`src/game/huts.ts`).
 
-**A site has to be flat.** The core checks every graph node within 0.07 of the
-centre and sixteen samples of the ground under the footprint (on the wall and
-halfway in): all of it land, and no more than 0.0025 between the highest and
-lowest point — about 4% of the tallest terrain. Huts also keep a footprint and
-a follower's width apart. On the default planet about 3% of land passes as it
-is, so most huts start with the flatten brush: hold C and Shift and drag, and
+**A hut stands on a nav node, and its footprint is that node and its
+neighbours.** Placing snaps to the node nearest the click. Every footprint
+node has to be dry, and the footprint nodes plus sixteen samples of the
+ground under the walls (on the wall and halfway in) may differ by no more than
+0.0025 between highest and lowest — about 4% of the tallest terrain, so a
+slope gentle enough to walk is still not a floor. A footprint may not overlap
+or touch another hut's, which leaves at least one free node between two huts:
+a lane to walk. On the default planet little land passes as it is, so most
+huts start with the flatten brush: hold C and Shift and drag, and
 the ground under the brush is pulled level with wherever the stroke began. It
 goes through `planet.flatten`, the sibling of `sculpt`, so builders and spells
 can use it later. A pad levels in a fraction of a second at default strength.
 
-In build mode the brush disc becomes the hut's footprint, green where the core
-would build and red where it would not, with a see-through ghost of the hut on
-top and the reason on the HUD (water, too uneven, too close to another hut).
-The door faces the camera.
+In build mode the brush disc becomes the hut's footprint — it reaches the
+furthest footprint node, the same patch that has to be level and that the hut
+will block — green where the core would build and red where it would not, with
+a see-through ghost of the hut on the snapped node and the reason on the HUD
+(water, too uneven, too close to another hut). The door faces the camera.
+Placing never sculpts.
+
+**Huts block walking.** Once a hut stands, its footprint nodes are blocked in
+`NavGrid`, and `walkable()` — which path search, string-pulling (`clear_line`)
+and the loose ground test of every step all read — refuses them exactly as it
+refuses water. A route to the far side goes round, a diagonal does not cut
+the pad, and anyone walking when a hut goes up is routed again. A follower
+standing on the pad when the hut appears is set down on the nearest free node.
+Sculpting under a standing hut carries it with the ground; the footprint stays
+blocked.
 
 **Going in.** Right-click a hut with followers selected and the nearest of
 them walk to it, as many as it has room for (three) once anyone already on
-the way is counted. It is an ordinary group move to the hut's centre with the
-hut remembered on each follower, so formation and avoidance work as they do
-for any order. The hut belongs to the first tribe sent to it, and only that
-tribe goes in. A follower that comes within reach of the wall goes inside:
-it leaves the follower set and becomes one of the hut's occupants. One that
-stops short, or gets another order, drops the enter order.
+the way is counted. It is an ordinary group move to the hut's door, round the
+pad, with the hut remembered on each follower, so formation and avoidance work
+as they do for any order. A hut placed with B belongs to the player's tribe,
+and only that tribe goes in (one placed unclaimed through the core belongs to
+the first tribe sent to it). The shaman never goes in. A follower that comes
+within reach — the ring of free nodes round the pad, and a body's width more —
+goes inside: it leaves the follower set and becomes one of the hut's
+occupants. One that stops short, or gets another order, drops the enter
+order.
 
 **Breeding.** A hut with people in it breeds one follower per 30
 occupant-seconds — one birth every 30 seconds with one inside, every 10 with
@@ -279,9 +298,9 @@ ghost is one more instance on the end of that buffer, drawn blended.
 
 ### Not done yet
 
-- Huts do not block walking: a follower ordered past one walks through it.
-  Carving the footprint out of the graph comes with real buildings.
 - Sculpting under a hut moves it with the ground rather than damaging it.
+- Paths go round a pad corner to corner; there is no corner offset or
+  velocity-obstacle steering yet, so a crowd hugs the footprint.
 - Nobody comes back out except newborns; there is no eject order yet.
 - No wood, no training huts, no upgrades — first huts are free and all alike.
 

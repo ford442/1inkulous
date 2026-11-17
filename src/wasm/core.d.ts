@@ -64,8 +64,14 @@ export type CoreModule = {
   /** Hut a follower was ordered into, or -1. */
   _core_follower_hut: (id: number) => number
 
-  /** 0 when a hut fits centred on the direction, else a reason — see HutSite. */
+  /** 0 when a hut fits on the node nearest the direction, else a reason — see HutSite. */
   _core_hut_site: (x: number, y: number, z: number) => number
+  /**
+   * Pointer to 4 floats from the last site check: the anchor's unit direction
+   * and the angle to its furthest footprint node.
+   */
+  _core_hut_site_point: () => number
+  /** Builds a hut there. A negative tribe leaves it unclaimed. Returns the id, or -1. */
   _core_hut_place: (
     x: number,
     y: number,
@@ -73,6 +79,7 @@ export type CoreModule = {
     hx: number,
     hy: number,
     hz: number,
+    tribe: number,
   ) => number
   _core_hut_count: () => number
   _core_huts_clear: () => void
@@ -85,17 +92,6 @@ export type CoreModule = {
   _core_hut_order_enter: (id: number) => number
   _core_hut_radius: () => number
   _core_hut_capacity: () => number
-
-  /** 0 when a building fits on the node nearest the direction, else a reason — see BuildingSite. */
-  _core_building_site: (x: number, y: number, z: number) => number
-  /** Claims that node. Returns the id, or -1 if the site is refused. */
-  _core_building_place: (x: number, y: number, z: number, tribe: number, kind: number) => number
-  _core_building_count: () => number
-  _core_buildings_clear: () => void
-  /** Pointer to the packed building instance buffer; moves as buildings are placed. */
-  _core_building_instances: () => number
-  _core_building_instance_floats: () => number
-  _core_building_radius: () => number
 
   /** Spawns a tribe's shaman. Returns her follower id, or -1 if it has one already. */
   _core_shaman_spawn: (x: number, y: number, z: number, tribe: number) => number

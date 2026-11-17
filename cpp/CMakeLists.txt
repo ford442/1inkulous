@@ -29,6 +29,7 @@ set(CORE_SOURCES
   src/nav.cpp
   src/shaman.cpp
   src/terrain.cpp
+  src/trees.cpp
 )
 
 # Nothing in cpp/ uses RTTI or exceptions, so say so: a stray `dynamic_cast` or

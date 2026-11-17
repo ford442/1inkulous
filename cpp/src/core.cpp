@@ -6,13 +6,13 @@
 namespace inkulous {
 namespace {
 
-// "0.7.0" — built by hand so the string is static storage with no allocation,
+// "0.8.0" — built by hand so the string is static storage with no allocation,
 // which keeps core_version_text() safe to hand across the WASM boundary.
 #define INKULOUS_STRINGIFY_(x) #x
 #define INKULOUS_STRINGIFY(x) INKULOUS_STRINGIFY_(x)
-constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(7) "." INKULOUS_STRINGIFY(0);
+constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(8) "." INKULOUS_STRINGIFY(0);
 
-static_assert(kVersionMajor == 0 && kVersionMinor == 7 && kVersionPatch == 0,
+static_assert(kVersionMajor == 0 && kVersionMinor == 8 && kVersionPatch == 0,
               "kVersionText must be kept in step with the version constants");
 
 }  // namespace
@@ -25,7 +25,8 @@ Simulation::Simulation(double step_ms)
     : step_ms_(step_ms > 0.0 ? step_ms : kDefaultStepMs) {
   terrain_.attach(&nav_);
   followers_.set_grid(&nav_);
-  huts_.attach(&nav_, &followers_);
+  huts_.attach(&nav_, &followers_, &stores_);
+  trees_.attach(&nav_, &followers_, &stores_);
   shamans_.attach(&nav_, &terrain_, &followers_, &huts_);
 }
 
@@ -56,6 +57,9 @@ std::int32_t Simulation::advance(double delta_ms) {
     // After the followers have moved, so someone who reached a door this step
     // goes in on it.
     huts_.step(dt_seconds);
+    // After huts, so a tree a hut has just been raised over is cleared before
+    // anyone chops at it.
+    trees_.step(dt_seconds);
     // Last, so mana counts the tribe as this step left it: births and all.
     shamans_.step(dt_seconds);
   }
@@ -65,6 +69,7 @@ std::int32_t Simulation::advance(double delta_ms) {
   if (steps > 0) {
     followers_.refresh_instances();
     huts_.refresh_instances();
+    trees_.refresh_instances();
   }
 
   return steps;

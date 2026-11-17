@@ -106,6 +106,7 @@ async function main() {
       hud.setFollowers(game.followers)
       hud.setHuts(game.huts)
       hud.setShaman(game.shaman)
+      hud.setTrees(game.trees)
       hud.setSelectionBand(game.followers.selectionBand)
 
       input.endFrame()

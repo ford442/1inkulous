@@ -7,6 +7,8 @@
 #include "1inkulous/nav.hpp"
 #include "1inkulous/shaman.hpp"
 #include "1inkulous/terrain.hpp"
+#include "1inkulous/trees.hpp"
+#include "1inkulous/tribes.hpp"
 
 // Simulation core. Compiled to WebAssembly and driven from TypeScript through
 // the flat C ABI in `core_abi.hpp` — pathfinding, AI and sphere maths will grow
@@ -15,7 +17,7 @@ namespace inkulous {
 
 // Semantic version of the core, so the loader can report what it got.
 constexpr int kVersionMajor = 0;
-constexpr int kVersionMinor = 7;
+constexpr int kVersionMinor = 8;
 constexpr int kVersionPatch = 0;
 
 // Encoded as MAJOR * 10000 + MINOR * 100 + PATCH: cheap to pass across the
@@ -62,6 +64,8 @@ class Simulation {
   HutSet& huts() { return huts_; }
   Shamans& shamans() { return shamans_; }
   Terrain& terrain() { return terrain_; }
+  TreeSet& trees() { return trees_; }
+  Stockpile& stores() { return stores_; }
 
   std::int64_t step_count() const { return step_count_; }
   // Simulated time in milliseconds, i.e. whole steps only.
@@ -79,7 +83,9 @@ class Simulation {
 
   NavGrid nav_;
   Terrain terrain_;
+  Stockpile stores_;
   FollowerSet followers_;
+  TreeSet trees_;
   HutSet huts_;
   Shamans shamans_;
 };

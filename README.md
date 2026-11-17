@@ -8,11 +8,11 @@ the JS main thread.
 ```
 src/engine/   WebGPU device, planet + follower meshes, renderer, picking, math
 src/engine/shaders/   the WGSL, one file per pipeline, imported as source
-src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers, huts
+src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers, huts, trees
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
 src/wasm/     build output (generated) + core.d.ts, the checked-in ABI contract
-cpp/          simulation core: fixed-step clock, terrain, navigation graph, followers, huts
+cpp/          simulation core: fixed-step clock, terrain, navigation graph, followers, huts, trees, wood
 ```
 
 ## Prerequisites
@@ -58,6 +58,7 @@ emcc -v   # confirm
 | `npm run test:huts` | Hut picking and build mode against a fake core; then placing, entering, breeding and routing round a hut on the real core and planet |
 | `npm run test:shaman` | Shaman, mana and Land Bridge: first on the core alone (no planet module), then cast through the game module |
 | `npm run test:terrain` | The core owns the ground: the brush moves core, graph, feet and mesh together, and a pick agrees with a path |
+| `npm run test:economy` | Chopping, what huts cost, eject, training a warrior and a kill: on the core alone, then through the game modules |
 | `npm run test:memory` | The core's heap holds the opening village and a full tribe without growing, and the module declares a ceiling |
 | `npm run test:gpu` | Drawing-buffer sizing, limit planning, GPU error reporting and loss messages, and what the renderer's source must keep true |
 | `npm run clean:wasm` | Removes the CMake build directories and generated artifacts |
@@ -86,7 +87,7 @@ sized rather than left to grow: 32 MB to start, 128 MB at most. The build prints
 what the binary declares, read back out of the `.wasm`:
 
 ```
-wasm core (Release) written to src/wasm/  (96K core.wasm, memory 32MB initial, 128MB maximum)
+wasm core (Release) written to src/wasm/  (108K core.wasm, memory 32MB initial, 128MB maximum)
 ```
 
 A full tribe (`kMaxFollowers`) all sent across the default planet, huts and all,
@@ -179,8 +180,11 @@ the terrain heights come back out to the mesh.
 | Hold `C` + left / right drag | Raise / lower terrain |
 | Hold `C` + Shift + left drag | Flatten terrain to the height where the stroke began |
 | `B` | Build mode: place a hut (`B`, `Esc` or right-click cancels) |
-| Click, in build mode | Build a hut there, if the site is good (Shift keeps placing) |
-| Right-click a hut | Send the selected followers inside |
+| `T` | Build mode: place a training hut (`T`, `Esc` or right-click cancels; `B` switches) |
+| Click, in build mode | Build there, if the site is good and the tribe has the wood (Shift keeps placing) |
+| Right-click a hut | Send the selected braves inside |
+| Right-click your hut, nothing selected | Send everyone inside back out |
+| Right-click a tree | Send up to three of the selected braves to chop it |
 | Hold `C` + wheel, `[` `]` | Brush size, brush strength |
 | `F` | Select the shaman and centre the view on her |
 | `L` | Aim a Land Bridge (`L`, `Esc`, `B` or right-click cancels) |
@@ -282,7 +286,9 @@ keeps a packed instance buffer (position, heading, tribe, flags); the renderer
 copies it out of linear memory once per frame and draws the whole tribe in a
 single call. The selection ring is part of the same mesh and collapses to a
 degenerate point in the vertex shader when the follower is not selected, which
-is cheaper than a second pipeline.
+is cheaper than a second pipeline. A follower's role rides in the same flags
+word, from bit 3 up (`kRoleShift`), and a warrior's bone-white headband and
+club are two more parts of that mesh that collapse the same way on a brave.
 
 `core_nav_route` and `core_follower_route` copy a route — raw or smoothed, or
 what a follower has left to walk — into a scratch buffer, for tests and for a
@@ -322,15 +328,19 @@ and reading the ground under each follower, both linear in the population.
   planning, so two crowds crossing still jostle where they meet.
 - Followers are placeholder pawns. The opening village cycles the four
   placeholder tribe colours (blue, red, yellow, green); unique art comes later.
+  Because the tribes start mixed together, the first warrior the player
+  trains at home starts cutting down the other three straight away.
 
 ## Huts
 
 The first game loop, as in the original: flatten a pad, drop a hut, send
-people in, and the hut breeds more. The hut is the one kind of building, and
-one structure owns all of it — placement, tribe, door, occupants, breeding and
-the nodes it stands on. It lives in the C++ core next to the followers
+people in, and the hut breeds more. One structure owns every building —
+placement, kind, tribe, door, occupants, breeding, training and the nodes it
+stands on. It lives in the C++ core next to the followers
 (`cpp/src/huts.cpp`); TypeScript runs build mode, picks huts under the cursor
-and draws them (`src/game/huts.ts`).
+and draws them (`src/game/huts.ts`). There are two kinds, on the same site
+and footprint rules: the dwelling described here (B), and the training hut
+(T) in [Wood, trees and warriors](#wood-trees-and-warriors).
 
 **A hut stands on a nav node, and its footprint is that node and its
 neighbours.** Placing snaps to the node nearest the click. Every footprint
@@ -349,8 +359,16 @@ In build mode the brush disc becomes the hut's footprint — it reaches the
 furthest footprint node, the same patch that has to be level and that the hut
 will block — green where the core would build and red where it would not, with
 a see-through ghost of the hut on the snapped node and the reason on the HUD
-(water, too uneven, too close to another hut). The door faces the camera.
-Placing never sculpts.
+(water, too uneven, too close to another hut, not enough wood). The door
+faces the camera. Placing never sculpts.
+
+**Huts cost wood.** A tribe's first dwelling is free, so the opening village
+can build before anyone has felled a tree; every one after costs 10 wood,
+and a training hut 15. The core judges the price with the site: a site the
+ground would take but the stockpile cannot pay for is refused, nothing is
+spent, and the ghost shows red with the price on the HUD. A hut placed
+unclaimed through the core (no tribe) is free. `core_huts_clear` gives the
+free hut back.
 
 **Huts block walking.** Once a hut stands, its footprint nodes are blocked in
 `NavGrid`, and `walkable()` — which path search, string-pulling (`clear_line`)
@@ -361,13 +379,13 @@ standing on the pad when the hut appears is set down on the nearest free node.
 Sculpting under a standing hut carries it with the ground; the footprint stays
 blocked.
 
-**Going in.** Right-click a hut with followers selected and the nearest of
-them walk to it, as many as it has room for (three) once anyone already on
-the way is counted. It is an ordinary group move to the hut's door, round the
+**Going in.** Right-click a hut with followers selected and the nearest
+braves among them walk to it, as many as it has room for (three) once anyone
+already on the way is counted. It is an ordinary group move to the hut's door, round the
 pad, with the hut remembered on each follower, so formation and avoidance work
 as they do for any order. A hut placed with B belongs to the player's tribe,
 and only that tribe goes in (one placed unclaimed through the core belongs to
-the first tribe sent to it). The shaman never goes in. A follower that comes
+the first tribe sent to it). The shaman and warriors never go in. A follower that comes
 within reach — the ring of free nodes round the pad, and a body's width more —
 goes inside: it leaves the follower set and becomes one of the hut's
 occupants. One that stops short, or gets another order, drops the enter
@@ -379,18 +397,87 @@ three. Newborns step out of the door and stand there; separation spreads them
 out. The occupants stay inside. The HUD's population line counts everyone,
 outside and in.
 
+**Coming out.** Right-click one of your own huts with nobody selected and
+everyone inside steps back out of the door as braves (`core_hut_eject`),
+the reverse of going in. They rejoin the follower set, so they stop when it
+reaches `kMaxFollowers`; whoever does not fit stays inside. Emptying a
+training hut lets the trainee out a brave again and puts the wood back.
+
 **Rendering is one more instanced draw**: the core keeps a packed hut buffer
-(position, heading, tribe, occupants) beside the follower one. The roof takes
-the owning tribe's colour, and the door glows once someone lives there. The
-ghost is one more instance on the end of that buffer, drawn blended.
+(position, heading, tribe, occupants, kind) beside the follower one. The roof
+takes the owning tribe's colour, and the door glows once someone lives
+there. A training hut is the same mesh drawn taller and narrower, in dark
+timber under a slate roof. The ghost is one more instance on the end of that
+buffer, drawn blended, with the kind being placed.
 
 ### Not done yet
 
 - Sculpting under a hut moves it with the ground rather than damaging it.
 - Paths go round a pad corner to corner; there is no corner offset or
   velocity-obstacle steering yet, so a crowd hugs the footprint.
-- Nobody comes back out except newborns; there is no eject order yet.
-- No wood, no training huts, no upgrades — first huts are free and all alike.
+- No upgrades, and only the one training building.
+
+## Wood, trees and warriors
+
+The first match economy: a brave gathers, a hut breeds, a training hut
+spends wood and a person to make someone who can fight. All of it is in the
+core; TypeScript turns clicks into orders and draws the buffers.
+
+**Wood is one number per tribe**, in the core's `Stockpile`
+(`cpp/include/1inkulous/tribes.hpp`), shown on the HUD beside mana. It
+starts at nothing. Only buildings spend it.
+
+**Trees.** At match start the core scatters 140 trees over dry land above
+the shore — walkable nodes with no water next door — from the heights it
+already owns (`TreeSet::spawn`, `cpp/src/trees.cpp`), keeping a node clear
+round each, chosen by a seeded generator so a match starts the same way
+twice. A tree is a point, not an obstacle, with a packed instance buffer of
+its own (position, heading, size, chop progress) and one more instanced
+draw. A hut raised over a tree clears it, and ground sculpted under the sea
+drowns it; neither gives wood.
+
+**Chopping.** Right-click a tree with braves selected and up to three of the
+nearest walk to it, each to its own spot a spacing out round the trunk, with
+the tree remembered on them the way a hut is. Within 0.05 of the trunk a
+brave chops: four brave-seconds fell a tree, so three together take under
+two. The tree leans over as the chop goes on, then leaves the set, and its 5
+wood go to the tribe of whoever landed the last blow. Any other order drops
+the chop; one that stops short drops it too. Warriors and the shaman do not
+chop.
+
+**Roles.** Every follower has one (`Role` in `followers.hpp`): brave, the
+default, or warrior. The shaman stays a flag on a brave. A role changes
+only constants (`kRoleStats`): a warrior walks 25% faster and strikes; a
+brave does neither.
+
+**Training.** Send a brave into a training hut while the tribe has 5 wood.
+The wood is paid at the door, the brave is consumed, and eight seconds later
+a warrior steps out. It holds one at a time, and turns a brave away while
+the tribe cannot pay.
+
+**Combat** is the smallest thing that makes the role matter. Every fixed
+step, after everyone has moved, each warrior strikes the nearest enemy
+follower within 0.04 of it for 20 health a second — five seconds to cut down
+someone alone, whatever their role. All the blows of a step land together,
+and anyone at zero health is taken out of the set (`FollowerSet::fight`). No
+chasing, formations, ranged attacks or fire: move warriors next to an enemy
+and they fight.
+
+`npm run test:economy` checks all of it on the core alone — a forest planted
+and replanted from a seed, a tree chopped by one brave and by three, the free
+first hut and the refused second, an eject, a warrior trained and a kill —
+and then the same orders through the game modules with synthetic clicks.
+
+### Not done yet
+
+- A brave fells one tree and stops; nobody looks for the next one, and the
+  wood arrives without being carried home.
+- Warriors do not seek out enemies or answer an attack, and nobody fights
+  back but other warriors.
+- No preachers, firewarriors, spies, boats, balloons or guard towers; no
+  vault of knowledge.
+- No chopping or striking animation: a timer, a lean, and a removed
+  instance.
 
 ## The shaman and Land Bridge
 

@@ -1,7 +1,7 @@
 import type { DragRect } from '../input/input'
-import { siteProblem, type HutGhost } from '../game/huts'
+import { kindName, siteProblem, woodCost, type HutGhost } from '../game/huts'
 import { bridgeProblem, type BridgePreview } from '../game/shaman'
-import { HutSite } from '../sim/hutSite'
+import { HutKind, HutSite } from '../sim/hutSite'
 
 /** The slice of the terrain brush the HUD reports on. */
 export type BrushReadout = {
@@ -22,11 +22,16 @@ export type FollowerReadout = {
   readonly count: number
   readonly selectedCount: number
   readonly walkingCount: number
+  readonly warriorCount: number
 }
 
 /** The slice of the huts the HUD reports on. */
 export type HutReadout = {
   readonly building: boolean
+  readonly buildKind: HutKind | null
+  /** Wood the player's next dwelling and training hut cost. */
+  readonly dwellingCost: number
+  readonly trainingCost: number
   readonly ghost: HutGhost | null
   readonly count: number
   readonly housedCount: number
@@ -42,8 +47,15 @@ export type ShamanReadout = {
   readonly manaMax: number
   readonly income: number
   readonly cost: number
+  readonly wood: number
   readonly targeting: boolean
   readonly preview: BridgePreview | null
+  readonly notice: string | null
+}
+
+/** The slice of the trees the HUD reports on. */
+export type TreeReadout = {
+  readonly count: number
   readonly notice: string | null
 }
 
@@ -69,8 +81,21 @@ export type Hud = {
   setFollowers: (followers: FollowerReadout) => void
   setHuts: (huts: HutReadout) => void
   setShaman: (shaman: ShamanReadout) => void
+  setTrees: (trees: TreeReadout) => void
   /** Screen-space selection box, or null when there isn't one. */
   setSelectionBand: (band: DragRect | null) => void
+}
+
+/** The follower line: who is out, and what they are doing. Pure. */
+export function followerLine(followers: FollowerReadout): string {
+  const warriors =
+    followers.warriorCount > 0
+      ? ` (${followers.warriorCount} warrior${followers.warriorCount === 1 ? '' : 's'})`
+      : ''
+  return (
+    `${followers.count} followers${warriors} · ${followers.selectedCount} selected · ` +
+    `${followers.walkingCount} walking`
+  )
 }
 
 /** The HUD's population and build line. Pure, so it can be checked without a DOM. */
@@ -79,21 +104,31 @@ export function hutLine(huts: HutReadout): string {
     `population ${huts.population} · ${huts.count} hut${huts.count === 1 ? '' : 's'}, ` +
     `${huts.housedCount} inside`
   if (huts.building) {
+    const kind = huts.buildKind ?? HutKind.dwelling
+    const cost = kind === HutKind.training ? huts.trainingCost : huts.dwellingCost
     const site = huts.ghost
       ? huts.ghost.site === HutSite.ok
-        ? 'click to build (Shift keeps placing)'
-        : siteProblem(huts.ghost.site)
+        ? `click to build (${woodCost(cost)}; Shift keeps placing)`
+        : siteProblem(huts.ghost.site, cost)
       : 'point at the ground'
-    return `${head} · placing a hut: ${huts.notice ?? site}`
+    return `${head} · placing a ${kindName(kind)}: ${huts.notice ?? site}`
   }
-  return huts.notice ? `${head} · ${huts.notice}` : `${head} · B to build a hut`
+  return huts.notice
+    ? `${head} · ${huts.notice}`
+    : `${head} · B hut (${woodCost(huts.dwellingCost)}) · T training hut (${woodCost(huts.trainingCost)})`
+}
+
+/** The trees line. Pure. */
+export function treeLine(trees: TreeReadout): string {
+  const head = `${trees.count} tree${trees.count === 1 ? '' : 's'}`
+  return trees.notice ? `${head} · ${trees.notice}` : `${head} · right-click one to chop it`
 }
 
 /** The shaman's line: mana, and the Land Bridge while it is being aimed. Pure. */
 export function shamanLine(shaman: ShamanReadout): string {
   const head =
     `mana ${Math.floor(shaman.mana)}/${shaman.manaMax} ` +
-    `(+${shaman.income.toFixed(0)}/s) · Land Bridge ${shaman.cost}`
+    `(+${shaman.income.toFixed(0)}/s) · wood ${shaman.wood} · Land Bridge ${shaman.cost}`
   if (shaman.id < 0) {
     return `${head} · ${shaman.notice ?? 'no shaman'}`
   }
@@ -177,11 +212,13 @@ export function createHud(): Hud {
       <p class="hint" id="hud-followers">—</p>
       <p class="hint" id="hud-huts">—</p>
       <p class="hint" id="hud-shaman">—</p>
+      <p class="hint" id="hud-trees">—</p>
       <p class="hint">Right-drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
       <p class="hint">Drag a box to select · Shift-drag adds · click ground clears · right-click sends them</p>
       <p class="hint">Hold C to sculpt: left raises, right lowers, Shift-left flattens · wheel sizes the brush · [ ] strength</p>
-      <p class="hint">B places a hut on a flat pad · water, uneven, and occupied ground refuse it · huts block walking</p>
-      <p class="hint">Right-click a hut to send the selection inside</p>
+      <p class="hint">B places a hut on a flat pad, T a training hut · water, uneven, and occupied ground refuse it · huts block walking</p>
+      <p class="hint">Right-click a hut to send the selected braves inside, or with nobody selected to empty it · right-click a tree to chop it</p>
+      <p class="hint">A brave sent into a training hut, with wood to spare, comes out a warrior · warriors strike enemies next to them</p>
       <p class="hint">F finds the shaman · L aims a Land Bridge: click across water from her, or drag shore to shore</p>
     </div>
   `
@@ -193,6 +230,7 @@ export function createHud(): Hud {
   const followersEl = root.querySelector<HTMLParagraphElement>('#hud-followers')
   const hutsEl = root.querySelector<HTMLParagraphElement>('#hud-huts')
   const shamanEl = root.querySelector<HTMLParagraphElement>('#hud-shaman')
+  const treesEl = root.querySelector<HTMLParagraphElement>('#hud-trees')
   const bandEl = document.querySelector<HTMLDivElement>('#select-band')
   const canvasEl = document.querySelector<HTMLCanvasElement>('#game-canvas')
 
@@ -230,9 +268,7 @@ export function createHud(): Hud {
     },
     setFollowers(followers: FollowerReadout) {
       if (followersEl) {
-        followersEl.textContent =
-          `${followers.count} followers · ${followers.selectedCount} selected · ` +
-          `${followers.walkingCount} walking`
+        followersEl.textContent = followerLine(followers)
       }
     },
     setHuts(huts: HutReadout) {
@@ -243,6 +279,11 @@ export function createHud(): Hud {
     setShaman(shaman: ShamanReadout) {
       if (shamanEl) {
         shamanEl.textContent = shamanLine(shaman)
+      }
+    },
+    setTrees(trees: TreeReadout) {
+      if (treesEl) {
+        treesEl.textContent = treeLine(trees)
       }
     },
     setSelectionBand(band: DragRect | null) {

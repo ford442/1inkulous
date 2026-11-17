@@ -7,7 +7,9 @@ import type { PlanetMesh } from './mesh/cubeSphere'
 import { consumeDirtyRange, VERTEX_BYTES, VERTEX_FLOATS } from './mesh/cubeSphere'
 import { createFollowerMesh, FOLLOWER_VERTEX_BYTES } from './mesh/followerMesh'
 import { createHutMesh, HUT_VERTEX_BYTES } from './mesh/hutMesh'
+import { createTreeMesh, TREE_VERTEX_BYTES } from './mesh/treeMesh'
 import { HUT_HEIGHT_RATIO } from '../game/huts'
+import { MAX_TREES } from '../game/trees'
 import { HutSite } from '../sim/hutSite'
 import { LandBridge } from '../sim/landBridge'
 import {
@@ -20,6 +22,7 @@ import {
 import followerShader from './shaders/follower.wgsl?raw'
 import hutShader from './shaders/hut.wgsl?raw'
 import planetShader from './shaders/planet.wgsl?raw'
+import treeShader from './shaders/tree.wgsl?raw'
 import { type DeviceLoss, initWebGpu } from './webgpu'
 import { CANVAS_ASPECT, drawingBufferSize, effectivePixelRatio } from '../viewport'
 
@@ -48,6 +51,9 @@ const MAX_FOLLOWER_INSTANCES = 1024
 
 /** Mirrors kMaxHuts in cpp/include/1inkulous/huts.hpp; one more slot holds the build ghost. */
 const MAX_HUT_INSTANCES = 256
+
+/** Mirrors kMaxTrees in cpp/include/1inkulous/trees.hpp. */
+const MAX_TREE_INSTANCES = MAX_TREES
 
 
 /**
@@ -120,12 +126,14 @@ export async function createRenderer(
   // make: the planet mesh and the two instance buffers are sized for the cores'
   // ceilings, and one uniform block is shared by every pipeline.
   const hutInstanceStride = game.huts.instanceFloats * 4
+  const treeInstanceStride = game.trees.instanceFloats * 4
   const { device, context, format, lost } = await initWebGpu(canvas, {
     maxBufferSize: Math.max(
       game.planet.mesh.vertexData.byteLength,
       game.planet.mesh.indices.byteLength,
       MAX_FOLLOWER_INSTANCES * game.followers.instanceFloats * 4,
       (MAX_HUT_INSTANCES + 1) * hutInstanceStride,
+      MAX_TREE_INSTANCES * treeInstanceStride,
     ),
     maxUniformBufferBindingSize: UNIFORM_BYTES,
   })
@@ -291,7 +299,7 @@ export async function createRenderer(
     },
     {
       // Straight from the core's hut buffer: position(3), heading(3), tribe,
-      // occupants.
+      // occupants, kind.
       arrayStride: game.huts.instanceFloats * 4,
       stepMode: 'instance',
       attributes: [
@@ -299,6 +307,7 @@ export async function createRenderer(
         { shaderLocation: 4, offset: 12, format: 'float32x3' },
         { shaderLocation: 5, offset: 24, format: 'float32' },
         { shaderLocation: 6, offset: 28, format: 'float32' },
+        { shaderLocation: 7, offset: 32, format: 'float32' },
       ],
     },
   ]
@@ -364,6 +373,62 @@ export async function createRenderer(
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
   })
 
+  const treeShaderModule = device.createShaderModule({
+    label: 'tree-shader',
+    code: treeShader,
+  })
+  const treePipeline = device.createRenderPipeline({
+    label: 'tree-pipeline',
+    layout: 'auto',
+    vertex: {
+      module: treeShaderModule,
+      entryPoint: 'vs_main',
+      buffers: [
+        {
+          arrayStride: TREE_VERTEX_BYTES,
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: 'float32x3' },
+            { shaderLocation: 1, offset: 12, format: 'float32x3' },
+            { shaderLocation: 2, offset: 24, format: 'float32' },
+          ],
+        },
+        {
+          // Straight from the core's tree buffer: position(3), heading(3),
+          // size, chop progress.
+          arrayStride: treeInstanceStride,
+          stepMode: 'instance',
+          attributes: [
+            { shaderLocation: 3, offset: 0, format: 'float32x3' },
+            { shaderLocation: 4, offset: 12, format: 'float32x3' },
+            { shaderLocation: 5, offset: 24, format: 'float32' },
+            { shaderLocation: 6, offset: 28, format: 'float32' },
+          ],
+        },
+      ],
+    },
+    fragment: { module: treeShaderModule, entryPoint: 'fs_main', targets: [{ format }] },
+    primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+    depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
+    multisample: { count: SAMPLE_COUNT },
+  })
+  const treeBindGroup = device.createBindGroup({
+    layout: treePipeline.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+  })
+  const treeMesh = createTreeMesh({ height: game.trees.height, radius: game.trees.radius })
+  const treeVertexBuffer = device.createBuffer({
+    label: 'tree-vertices',
+    size: treeMesh.vertexData.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  })
+  device.queue.writeBuffer(treeVertexBuffer, 0, treeMesh.vertexData)
+  // Sized once for the core's ceiling; the forest only ever shrinks.
+  const treeInstanceBuffer = device.createBuffer({
+    label: 'tree-instances',
+    size: MAX_TREE_INSTANCES * treeInstanceStride,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  })
+
   // The frame is drawn into multisampled colour and depth targets and resolved
   // to the canvas, so both follow the drawing buffer. Neither is read after the
   // pass, so neither is kept: `discard` saves writing them back out.
@@ -410,7 +475,8 @@ export async function createRenderer(
     statusMessage:
       `WebGPU ready — cube-sphere planet (${triangleCount} triangles), ` +
       `followers instanced (${followerMesh.triangleCount} triangles each), ` +
-      `huts instanced (${hutMesh.triangleCount} each) — ` +
+      `huts instanced (${hutMesh.triangleCount} each), ` +
+      `trees instanced (${treeMesh.triangleCount} each) — ` +
       `${canvas.width}×${canvas.height} at ${effectivePixelRatio(window.devicePixelRatio)}×, ` +
       `${SAMPLE_COUNT}× MSAA`,
     lost,
@@ -527,6 +593,21 @@ export async function createRenderer(
           hutCount * huts.instanceFloats,
         )
       }
+      const treeInstances = currentGame.trees.instances()
+      const treeCount = Math.min(
+        treeInstances.length / currentGame.trees.instanceFloats,
+        MAX_TREE_INSTANCES,
+      )
+      if (treeCount > 0) {
+        device.queue.writeBuffer(
+          treeInstanceBuffer,
+          0,
+          treeInstances,
+          0,
+          treeCount * currentGame.trees.instanceFloats,
+        )
+      }
+
       const ghostInstance = huts.ghostInstance()
       if (ghostInstance) {
         device.queue.writeBuffer(hutInstanceBuffer, hutCount * hutInstanceBytes, ghostInstance)
@@ -569,6 +650,14 @@ export async function createRenderer(
         pass.setVertexBuffer(0, followerVertexBuffer)
         pass.setVertexBuffer(1, followerInstanceBuffer)
         pass.draw(followerMesh.vertexCount, followerInstanceCount)
+      }
+
+      if (treeCount > 0) {
+        pass.setPipeline(treePipeline)
+        pass.setBindGroup(0, treeBindGroup)
+        pass.setVertexBuffer(0, treeVertexBuffer)
+        pass.setVertexBuffer(1, treeInstanceBuffer)
+        pass.draw(treeMesh.vertexCount, treeCount)
       }
 
       if (hutCount > 0 || ghostInstance) {

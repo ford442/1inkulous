@@ -141,11 +141,30 @@ HutSite HutSet::judge(const double centre[3], std::int32_t node) const {
   return HutSite::kOk;
 }
 
-HutSite HutSet::check_site(double x, double y, double z) {
+namespace {
+
+bool known_kind(HutKind kind) {
+  const auto index = static_cast<std::int32_t>(kind);
+  return index >= 0 && index < kHutKindCount;
+}
+
+}  // namespace
+
+std::int32_t HutSet::cost(HutKind kind, std::int32_t tribe) const {
+  if (!valid_tribe(tribe) || stores_ == nullptr) {
+    return 0;
+  }
+  if (kind == HutKind::kTraining) {
+    return kTrainingHutWoodCost;
+  }
+  return free_dwelling_used_[static_cast<std::size_t>(tribe)] ? kHutWoodCost : 0;
+}
+
+HutSite HutSet::check_site(double x, double y, double z, HutKind kind, std::int32_t tribe) {
   for (float& v : site_point_) {
     v = 0.0f;
   }
-  if (grid_ == nullptr || !grid_->ready()) {
+  if (grid_ == nullptr || !grid_->ready() || !known_kind(kind)) {
     return HutSite::kNoGrid;
   }
   sync_blocked();
@@ -178,6 +197,10 @@ HutSite HutSet::check_site(double x, double y, double z) {
   if (count() >= kMaxHuts) {
     return HutSite::kFull;
   }
+  // Last, so a site the ground refuses says why the ground refuses it.
+  if (stores_ != nullptr && valid_tribe(tribe) && stores_->wood(tribe) < cost(kind, tribe)) {
+    return HutSite::kNoWood;
+  }
   return HutSite::kOk;
 }
 
@@ -187,12 +210,21 @@ std::int32_t HutSet::place(double x,
                            double hx,
                            double hy,
                            double hz,
-                           std::int32_t tribe) {
-  if (check_site(x, y, z) != HutSite::kOk) {
+                           std::int32_t tribe,
+                           HutKind kind) {
+  if (check_site(x, y, z, kind, tribe) != HutSite::kOk) {
     return -1;
+  }
+  // check_site has seen the wood is there.
+  if (stores_ != nullptr && valid_tribe(tribe)) {
+    stores_->spend_wood(tribe, cost(kind, tribe));
+    if (kind == HutKind::kDwelling) {
+      free_dwelling_used_[static_cast<std::size_t>(tribe)] = true;
+    }
   }
 
   Hut hut;
+  hut.kind = kind;
   hut.node = footprint_scratch_.front();
   hut.footprint = footprint_scratch_;
   const float* d = grid_->direction(hut.node);
@@ -262,6 +294,7 @@ void HutSet::clear() {
   }
   huts_.clear();
   instances_.clear();
+  free_dwelling_used_.fill(false);
   if (followers_ != nullptr) {
     followers_->clear_huts();
   }
@@ -279,6 +312,13 @@ std::int32_t HutSet::tribe(std::int32_t id) const {
     return -1;
   }
   return huts_[static_cast<std::size_t>(id)].tribe;
+}
+
+std::int32_t HutSet::kind(std::int32_t id) const {
+  if (id < 0 || id >= count()) {
+    return -1;
+  }
+  return static_cast<std::int32_t>(huts_[static_cast<std::size_t>(id)].kind);
 }
 
 std::int32_t HutSet::housed() const {
@@ -305,16 +345,18 @@ std::int32_t HutSet::order_enter_selected(std::int32_t id) {
   }
   Hut& hut = huts_[static_cast<std::size_t>(id)];
 
-  const std::int32_t room = kHutCapacity - hut.occupants - incoming(id);
+  const std::int32_t room = capacity(hut.kind) - hut.occupants - incoming(id);
   if (room <= 0) {
     return 0;
   }
 
-  // Selected followers not already on their way in, nearest first.
+  // Selected braves not already on their way in, nearest first.
   std::vector<std::pair<double, std::int32_t>> candidates;
   for (std::int32_t f = 0; f < followers_->count(); ++f) {
     // The shaman stays out: she has spells to cast, not children to raise.
-    if (!followers_->selected(f) || followers_->hut(f) == id || followers_->is_shaman(f)) {
+    // So do warriors, who are trained already.
+    if (!followers_->selected(f) || followers_->hut(f) == id || followers_->is_shaman(f) ||
+        !followers_->is_brave(f)) {
       continue;
     }
     candidates.emplace_back(angle_between(followers_->direction(f), hut.dir), f);
@@ -328,6 +370,12 @@ std::int32_t HutSet::order_enter_selected(std::int32_t id) {
   // still fills it with one tribe.
   if (hut.tribe < 0) {
     hut.tribe = followers_->tribe(candidates.front().second);
+  }
+  // Paid on the way in, not now; but nobody walks over to find the tribe
+  // cannot pay.
+  if (hut.kind == HutKind::kTraining && stores_ != nullptr &&
+      stores_->wood(hut.tribe) < kWarriorWoodCost) {
+    return 0;
   }
 
   std::vector<std::int32_t> chosen;
@@ -378,14 +426,24 @@ void HutSet::admit_arrivals() {
 
     Hut& hut = huts_[static_cast<std::size_t>(id)];
     if (angle_between(followers_->direction(f), hut.dir) <= hut.reach) {
-      if (hut.occupants < kHutCapacity &&
-          (hut.tribe < 0 || hut.tribe == followers_->tribe(f))) {
-        hut.tribe = followers_->tribe(f);
+      const std::int32_t tribe = followers_->tribe(f);
+      const bool room =
+          hut.occupants < capacity(hut.kind) && (hut.tribe < 0 || hut.tribe == tribe);
+      // A trainee pays for its kit at the door; a tribe that spent the wood
+      // while it walked leaves it outside.
+      const bool paid = room && (hut.kind != HutKind::kTraining || stores_ == nullptr ||
+                                 stores_->spend_wood(tribe, kWarriorWoodCost));
+      if (paid) {
+        hut.tribe = tribe;
         hut.occupants += 1;
+        if (hut.kind == HutKind::kTraining) {
+          hut.training = 0.0;
+        }
         followers_->remove(f);
         changed = true;
       } else {
-        // Filled up by someone else on the way. It stays at the door.
+        // Filled up by someone else on the way, or nothing to pay with. It
+        // stays at the door.
         followers_->set_hut(f, -1);
       }
       continue;
@@ -406,7 +464,7 @@ void HutSet::breed(double dt_seconds) {
   bool changed = false;
 
   for (Hut& hut : huts_) {
-    if (hut.occupants <= 0 || hut.tribe < 0) {
+    if (hut.kind != HutKind::kDwelling || hut.occupants <= 0 || hut.tribe < 0) {
       hut.breeding = 0.0;
       continue;
     }
@@ -431,6 +489,67 @@ void HutSet::breed(double dt_seconds) {
   }
 }
 
+void HutSet::train(double dt_seconds) {
+  bool changed = false;
+
+  for (Hut& hut : huts_) {
+    if (hut.kind != HutKind::kTraining || hut.occupants <= 0 || hut.tribe < 0) {
+      hut.training = 0.0;
+      continue;
+    }
+    hut.training += dt_seconds / kTrainSeconds;
+    if (hut.training < 1.0) {
+      continue;
+    }
+    double step_out[3];
+    door_point(hut, step_out);
+    const std::int32_t warrior = followers_->spawn_at(step_out, hut.tribe);
+    if (warrior < 0) {
+      // No room in the world: the trainee waits, trained, until there is.
+      hut.training = 1.0;
+      continue;
+    }
+    followers_->set_role(warrior, Role::kWarrior);
+    hut.occupants -= 1;
+    hut.training = 0.0;
+    changed = true;
+  }
+
+  if (changed) {
+    refresh_instances();
+  }
+}
+
+std::int32_t HutSet::eject(std::int32_t id) {
+  if (followers_ == nullptr || grid_ == nullptr || !grid_->ready() || id < 0 || id >= count()) {
+    return 0;
+  }
+  Hut& hut = huts_[static_cast<std::size_t>(id)];
+  std::int32_t out = 0;
+  while (hut.occupants > 0) {
+    double step_out[3];
+    door_point(hut, step_out);
+    // Out as braves, the way they went in; separation spreads them from the
+    // doorstep as it does a newborn.
+    if (followers_->spawn_at(step_out, hut.tribe) < 0) {
+      break;
+    }
+    hut.occupants -= 1;
+    out += 1;
+    if (hut.kind == HutKind::kTraining) {
+      // Training is abandoned and the kit goes back on the pile.
+      hut.training = 0.0;
+      if (stores_ != nullptr) {
+        stores_->add_wood(hut.tribe, kWarriorWoodCost);
+      }
+    }
+  }
+  if (out > 0) {
+    refresh_instances();
+  }
+  return out;
+}
+
 void HutSet::step(double dt_seconds) {
   if (grid_ == nullptr || followers_ == nullptr || !grid_->ready() || !(dt_seconds > 0.0)) {
     return;
@@ -438,6 +557,7 @@ void HutSet::step(double dt_seconds) {
   sync_blocked();
   admit_arrivals();
   breed(dt_seconds);
+  train(dt_seconds);
 }
 
 void HutSet::refresh_instances() {
@@ -467,6 +587,7 @@ void HutSet::refresh_instances() {
     out[5] = static_cast<float>(hut.heading[2]);
     out[6] = static_cast<float>(hut.tribe);
     out[7] = static_cast<float>(hut.occupants);
+    out[8] = static_cast<float>(static_cast<std::int32_t>(hut.kind));
   }
 }
 

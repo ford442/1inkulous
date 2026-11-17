@@ -16,7 +16,13 @@ struct Uniforms {
 
 const FLAG_SELECTED: u32 = 1u;
 const FLAG_SHAMAN: u32 = 4u;
+// The role sits above the flags: kRoleShift / kRoleMask in followers.hpp.
+const ROLE_SHIFT: u32 = 3u;
+const ROLE_MASK: u32 = 7u;
+const ROLE_WARRIOR: u32 = 1u;
 const PART_RING: f32 = 1.0;
+const PART_BAND: f32 = 2.0;
+const PART_CLUB: f32 = 3.0;
 
 struct VertexOutput {
   @builtin(position) clipPosition: vec4f,
@@ -54,11 +60,14 @@ fn vs_main(
   let flags = u32(instanceFlags);
   let selected = f32((flags & FLAG_SELECTED) != 0u);
   let shaman = f32((flags & FLAG_SHAMAN) != 0u);
+  let warrior = f32(((flags >> ROLE_SHIFT) & ROLE_MASK) == ROLE_WARRIOR);
+  let gear = part == PART_BAND || part == PART_CLUB;
 
-  // The selection ring only exists while the follower is selected. Collapsing
-  // its triangles to a point costs one vertex shader invocation and rasterises
-  // nothing — cheaper than a second pipeline or a discard in the fragment stage.
-  if (part == PART_RING && selected < 0.5) {
+  // The selection ring only exists while the follower is selected, and a
+  // warrior's band and club only on a warrior. Collapsing their triangles to
+  // a point costs one vertex shader invocation and rasterises nothing —
+  // cheaper than a second pipeline or a discard in the fragment stage.
+  if ((part == PART_RING && selected < 0.5) || (gear && warrior < 0.5)) {
     output.clipPosition = uniforms.viewProj * vec4f(instancePosition, 1.0);
     output.worldPosition = instancePosition;
     output.worldNormal = vec3f(0.0, 1.0, 0.0);
@@ -82,7 +91,9 @@ fn vs_main(
   // The shaman is the same pawn, taller and a little broader, so she reads
   // apart from her people at any zoom. Normals are left alone: the stretch is
   // mild enough that the faceting still lights right.
-  let girth = mix(1.0, 1.25, shaman);
+  // A warrior is a shade stockier as well as armed, so the two still read
+  // apart when the club is edge-on to the camera.
+  let girth = mix(mix(1.0, 1.12, warrior), 1.25, shaman);
   // The ring widens with her but stays on the ground.
   let stature = select(mix(1.0, 1.7, shaman), 1.0, part == PART_RING);
   let scaled = vec3f(position.x * girth, position.y * stature, position.z * girth);
@@ -93,7 +104,14 @@ fn vs_main(
   output.worldPosition = world;
   output.worldNormal = worldNormal;
   // A pale robe over the tribe colour: still her tribe's, plainly not a brave.
-  output.tint = mix(tribeColor(instanceTribe), vec3f(0.96, 0.92, 1.0), 0.45 * shaman);
+  // A warrior's band is bone white and the club dark wood, whatever the tribe.
+  var tint = mix(tribeColor(instanceTribe), vec3f(0.96, 0.92, 1.0), 0.45 * shaman);
+  if (part == PART_BAND) {
+    tint = vec3f(0.95, 0.92, 0.84);
+  } else if (part == PART_CLUB) {
+    tint = vec3f(0.30, 0.19, 0.10);
+  }
+  output.tint = tint;
   output.selected = selected;
   output.part = part;
   return output;

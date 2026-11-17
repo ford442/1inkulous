@@ -30,8 +30,8 @@ const budget = (name, pass, detail = '') =>
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
-ok('version string', version === '0.7.0', version)
-ok('encoded version matches', m._core_version() === 700, String(m._core_version()))
+ok('version string', version === '0.8.0', version)
+ok('encoded version matches', m._core_version() === 800, String(m._core_version()))
 
 // default step
 m._core_init(0)
@@ -865,7 +865,7 @@ writeHeights(grid.heights)
 
 const pad = gridDirection(8, 8)
 ok('before a hut, the anchor is ground like any other',
-   m._core_nav_nearest_walkable(...pad) === nodeAt(8, 8) && m._core_hut_site(...pad) === SITE.ok)
+   m._core_nav_nearest_walkable(...pad) === nodeAt(8, 8) && m._core_hut_site(...pad, 0, -1) === SITE.ok)
 {
   const [x, y, z, extent] = sitePoint()
   ok('a site check reports the anchor and the reach of its footprint',
@@ -874,7 +874,7 @@ ok('before a hut, the anchor is ground like any other',
 }
 const heightsBefore = coreHeights()
 // Off the node a little: the hut snaps to the nearest one.
-const blockHut = m._core_hut_place(...gridDirection(8.2, 7.9), 0, 1, 0, 2)
+const blockHut = m._core_hut_place(...gridDirection(8.2, 7.9), 0, 1, 0, 2, 0)
 ok('a hut goes up for the tribe that placed it', blockHut === 0 && m._core_hut_tribe(blockHut) === 2,
    `id ${blockHut}`)
 ok('placing does not sculpt', heightsBefore.every((h, i) => h === coreHeights()[i]))
@@ -926,7 +926,7 @@ for (const [name, a, b] of [
   m._core_tick(200)
   ok('a walker sets off before the next hut', isWalking(late))
   m._core_huts_clear()
-  const second = m._core_hut_place(...gridDirection(8, 8), 0, 1, 0, 0)
+  const second = m._core_hut_place(...gridDirection(8, 8), 0, 1, 0, 0, 0)
   let closest = Infinity
   for (let frame = 0; frame < 80; frame += 1) {
     m._core_tick(200)
@@ -945,7 +945,7 @@ for (const [name, a, b] of [
   const between = m._core_follower_spawn(...gridDirection(8.5, 9), 0)
   const outside = m._core_follower_spawn(...gridDirection(8, 12), 0)
   const before = followerPosition(outside)
-  m._core_hut_place(...gridDirection(8, 8), 0, 1, 0, 0)
+  m._core_hut_place(...gridDirection(8, 8), 0, 1, 0, 0, 0)
   const clear = (id) => [-1, 0, 1].every((di) => [-1, 0, 1].every((dj) =>
     angleTo(followerPosition(id), gridDirection(8 + di, 8 + dj)) > CELL * 0.5))
   ok('a follower standing on the anchor is set down off the pad', clear(stander) &&
@@ -976,7 +976,7 @@ for (const [name, a, b] of [
 m._core_huts_clear()
 ok('clearing huts gives the pad back to walking',
    m._core_hut_count() === 0 && m._core_nav_nearest_walkable(...pad) === nodeAt(8, 8) &&
-   m._core_hut_site(...pad) === SITE.ok)
+   m._core_hut_site(...pad, 0, -1) === SITE.ok)
 
 // ---------------------------------------------------------------------------
 // Huts: flatten a pad, build on it, send people in, watch them breed.
@@ -1000,32 +1000,32 @@ m._core_huts_clear()
 writeHeights(grid.heights)
 
 ok('the core reports the hut rules', m._core_hut_capacity() === HUT_CAPACITY &&
-   Math.abs(m._core_hut_radius() - HUT_RADIUS) < 1e-12 && m._core_hut_instance_floats() === 8)
+   Math.abs(m._core_hut_radius() - HUT_RADIUS) < 1e-12 && m._core_hut_instance_floats() === 9)
 
 const hutSite = [8, 8]
-ok('level ground takes a hut', m._core_hut_site(...gridDirection(...hutSite)) === SITE.ok,
-   String(m._core_hut_site(...gridDirection(...hutSite))))
-ok('the edge of the map does not', m._core_hut_site(...gridDirection(0, 0)) === SITE.water,
-   String(m._core_hut_site(...gridDirection(0, 0))))
+ok('level ground takes a hut', m._core_hut_site(...gridDirection(...hutSite), 0, -1) === SITE.ok,
+   String(m._core_hut_site(...gridDirection(...hutSite), 0, -1)))
+ok('the edge of the map does not', m._core_hut_site(...gridDirection(0, 0), 0, -1) === SITE.water,
+   String(m._core_hut_site(...gridDirection(0, 0), 0, -1)))
 
 {
   const wet = grid.heights.slice()
   wet[nodeAt(9, 8)] = 0
   writeHeights(wet)
-  ok('a pond inside the footprint refuses it', m._core_hut_site(...gridDirection(...hutSite)) === SITE.water,
-     String(m._core_hut_site(...gridDirection(...hutSite))))
+  ok('a pond inside the footprint refuses it', m._core_hut_site(...gridDirection(...hutSite), 0, -1) === SITE.water,
+     String(m._core_hut_site(...gridDirection(...hutSite), 0, -1)))
 
   const bumpy = grid.heights.slice()
   bumpy[nodeAt(9, 8)] = LAND + 0.004
   writeHeights(bumpy)
-  ok('a bump inside the footprint is too uneven', m._core_hut_site(...gridDirection(...hutSite)) === SITE.uneven,
-     String(m._core_hut_site(...gridDirection(...hutSite))))
-  ok('and nothing is built there', m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0, -1) === -1 &&
+  ok('a bump inside the footprint is too uneven', m._core_hut_site(...gridDirection(...hutSite), 0, -1) === SITE.uneven,
+     String(m._core_hut_site(...gridDirection(...hutSite), 0, -1)))
+  ok('and nothing is built there', m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0, -1, 0) === -1 &&
      m._core_hut_count() === 0)
 
   bumpy[nodeAt(9, 8)] = LAND + 0.001
   writeHeights(bumpy)
-  ok('a bump within tolerance is level enough', m._core_hut_site(...gridDirection(...hutSite)) === SITE.ok)
+  ok('a bump within tolerance is level enough', m._core_hut_site(...gridDirection(...hutSite), 0, -1) === SITE.ok)
 
   // A steady rise across the footprint: walkable, and gentle for a slope, but
   // not a floor.
@@ -1035,18 +1035,18 @@ ok('the edge of the map does not', m._core_hut_site(...gridDirection(0, 0)) === 
   }
   writeHeights(sloped)
   ok('a walkable slope is still too uneven to build on',
-     m._core_hut_site(...gridDirection(...hutSite)) === SITE.uneven)
+     m._core_hut_site(...gridDirection(...hutSite), 0, -1) === SITE.uneven)
 
   // A hill a cell beyond the footprint is somebody else's problem.
   const hilly = grid.heights.slice()
   hilly[nodeAt(11, 8)] = LAND + 0.03
   writeHeights(hilly)
-  ok('a hill outside the footprint does not count', m._core_hut_site(...gridDirection(...hutSite)) === SITE.ok,
-     String(m._core_hut_site(...gridDirection(...hutSite))))
+  ok('a hill outside the footprint does not count', m._core_hut_site(...gridDirection(...hutSite), 0, -1) === SITE.ok,
+     String(m._core_hut_site(...gridDirection(...hutSite), 0, -1)))
   writeHeights(grid.heights)
 }
 
-const hut = m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0, -1)
+const hut = m._core_hut_place(...gridDirection(...hutSite), 0, 1, 0, -1, 0)
 ok('a hut is built on the pad', hut === 0 && m._core_hut_count() === 1, `id ${hut}`)
 {
   const [x, y, z, hx, hy, hz, tribe, occupants] = hutInstance(hut)
@@ -1059,12 +1059,12 @@ ok('a hut is built on the pad', hut === 0 && m._core_hut_count() === 1, `id ${hu
      `heading ${[hx, hy, hz].map((v) => v.toFixed(3))}`)
   ok('empty and unclaimed', tribe === -1 && occupants === 0 && m._core_hut_tribe(hut) === -1)
 }
-ok('a site overlapping it is refused', m._core_hut_site(...gridDirection(9, 8)) === SITE.occupied &&
-   m._core_hut_place(...gridDirection(9, 8), 0, 1, 0, -1) === -1)
+ok('a site overlapping it is refused', m._core_hut_site(...gridDirection(9, 8), 0, -1) === SITE.occupied &&
+   m._core_hut_place(...gridDirection(9, 8), 0, 1, 0, -1, 0) === -1)
 ok('so is one whose footprint would touch it, leaving no lane',
-   m._core_hut_site(...gridDirection(11, 8)) === SITE.occupied)
-ok('one a free node away is not', m._core_hut_site(...gridDirection(12, 8)) === SITE.ok,
-   String(m._core_hut_site(...gridDirection(12, 8))))
+   m._core_hut_site(...gridDirection(11, 8), 0, -1) === SITE.occupied)
+ok('one a free node away is not', m._core_hut_site(...gridDirection(12, 8), 0, -1) === SITE.ok,
+   String(m._core_hut_site(...gridDirection(12, 8), 0, -1)))
 
 // Four of tribe 0 and one of tribe 2, all west of the hut. The nearest is tribe
 // 0, so the hut goes to tribe 0, and only three fit.
@@ -1122,7 +1122,7 @@ selectOnly([0])
 ok('a full hut takes nobody', m._core_hut_order_enter(hut) === 0 && m._core_follower_hut(0) === -1)
 
 // The tribe-2 follower claims a second, empty hut, then thinks better of it.
-const second = m._core_hut_place(...gridDirection(12, 12), 1, 0, 0, -1)
+const second = m._core_hut_place(...gridDirection(12, 12), 1, 0, 0, -1, 0)
 ok('a second hut goes up', second === 1 && m._core_hut_count() === 2)
 selectOnly([1])
 ok('a lone follower of another tribe can claim it', m._core_hut_order_enter(second) === 1 &&
@@ -1451,7 +1451,7 @@ ok('a refused cast afterwards empties the plan', bridgeCast(westShore, gridDirec
 ok('and leaves the bridge as it was', isClean() && changedNodes(bridgedHeights).length === 0)
 
 const shamanPad = gridDirection(4, 8)
-const shamanHut = m._core_hut_place(...shamanPad, 0, 1, 0, -1)
+const shamanHut = m._core_hut_place(...shamanPad, 0, 1, 0, -1, 0)
 const brave = m._core_follower_spawn(...gridDirection(5, 9), 0)
 m._core_follower_clear_selection()
 m._core_follower_set_selected(m._core_shaman(0), 1)

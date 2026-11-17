@@ -141,6 +141,8 @@ async function fillToTheCaps(resolution: number, label: string, wantAllHuts: boo
   }
   terrain.syncMesh()
 
+  // Wood enough for every hut: this is about the heap, not the economy.
+  for (let tribe = 0; tribe < 4; tribe += 1) simulation.setWood(tribe, 1_000_000)
   let huts = 0
   for (let i = 0; i < land.length && huts < MAX_HUTS; i += 1) {
     if (simulation.placeHut(land[i], land[(i + 1) % land.length], i % 4) >= 0) huts += 1

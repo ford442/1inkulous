@@ -23,6 +23,7 @@
     "test:huts": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-huts.ts",
     "test:shaman": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-shaman.ts",
     "test:terrain": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-terrain.ts",
+    "test:economy": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-economy.ts",
     "test:memory": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-memory.ts"
   },
   "devDependencies": {

@@ -88,15 +88,31 @@ export type CoreModule = {
   _core_follower_set_speed: (speed: number) => void
   /** Hut a follower was ordered into, or -1. */
   _core_follower_hut: (id: number) => number
+  /** Tree a follower was sent to chop, or -1. */
+  _core_follower_tree: (id: number) => number
+  /** 0 brave, 1 warrior — see Role; -1 for a bad id. */
+  _core_follower_role: (id: number) => number
+  /** 1 on success; 0 for a bad id or role, or the shaman. For tests and scenarios. */
+  _core_follower_set_role: (id: number, role: number) => number
+  _core_follower_health: (id: number) => number
+  _core_follower_max_health: () => number
+  /** For tests and scenarios; one set to 0 is removed on the next step. */
+  _core_follower_set_health: (id: number, health: number) => void
 
-  /** 0 when a hut fits on the node nearest the direction, else a reason — see HutSite. */
-  _core_hut_site: (x: number, y: number, z: number) => number
+  /**
+   * 0 when `tribe` can build a hut of `kind` on the node nearest the
+   * direction, else a reason — see HutSite. A negative tribe skips the wood.
+   */
+  _core_hut_site: (x: number, y: number, z: number, kind: number, tribe: number) => number
   /**
    * Pointer to 4 floats from the last site check: the anchor's unit direction
    * and the angle to its furthest footprint node.
    */
   _core_hut_site_point: () => number
-  /** Builds a hut there. A negative tribe leaves it unclaimed. Returns the id, or -1. */
+  /**
+   * Builds a hut of `kind` there and charges the tribe. A negative tribe
+   * leaves it unclaimed and free. Returns the id, or -1.
+   */
   _core_hut_place: (
     x: number,
     y: number,
@@ -105,7 +121,10 @@ export type CoreModule = {
     hy: number,
     hz: number,
     tribe: number,
+    kind: number,
   ) => number
+  /** Wood a tribe's next hut of `kind` costs: 0 for its first dwelling. */
+  _core_hut_cost: (kind: number, tribe: number) => number
   _core_hut_count: () => number
   _core_huts_clear: () => void
   /** Pointer to the packed hut instance buffer; moves as huts are built. */
@@ -114,9 +133,32 @@ export type CoreModule = {
   _core_hut_occupants: (id: number) => number
   _core_huts_housed: () => number
   _core_hut_tribe: (id: number) => number
+  /** 0 dwelling, 1 training hut — see HutKind; -1 for a bad id. */
+  _core_hut_kind: (id: number) => number
   _core_hut_order_enter: (id: number) => number
+  /** Sends everyone inside back out of the door as braves. Returns how many. */
+  _core_hut_eject: (id: number) => number
   _core_hut_radius: () => number
   _core_hut_capacity: () => number
+  _core_training_capacity: () => number
+  _core_warrior_cost: () => number
+  _core_train_seconds: () => number
+
+  _core_wood: (tribe: number) => number
+  _core_wood_set: (tribe: number, wood: number) => void
+  /** Scatters up to `count` trees from a seed. Returns how many stand. */
+  _core_trees_spawn: (count: number, seed: number) => number
+  _core_tree_count: () => number
+  _core_trees_clear: () => void
+  /** Pointer to the packed tree instance buffer; moves as trees fall. */
+  _core_tree_instances: () => number
+  _core_tree_instance_floats: () => number
+  /** Sends selected braves to chop a tree. Returns how many went. */
+  _core_tree_order_chop: (id: number) => number
+  /** 0..1 through chopping; -1 for a bad id. */
+  _core_tree_progress: (id: number) => number
+  _core_tree_wood: () => number
+  _core_tree_chop_seconds: () => number
 
   /** Spawns a tribe's shaman. Returns her follower id, or -1 if it has one already. */
   _core_shaman_spawn: (x: number, y: number, z: number, tribe: number) => number

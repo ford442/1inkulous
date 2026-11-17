@@ -7,6 +7,7 @@ import { createPlanet, type Planet } from './planet'
 import { createSculptor, isSculptModifierHeld, type Sculptor } from './sculpt'
 import { createShaman, type Shaman } from './shaman'
 import { createTerrain, type Terrain } from './terrain'
+import { createTrees, type Trees } from './trees'
 
 export type Game = {
   clearColor: [number, number, number]
@@ -18,6 +19,7 @@ export type Game = {
   followers: Followers
   huts: Huts
   shaman: Shaman
+  trees: Trees
   /**
    * `aspect` is the viewport's width / height, needed to turn the cursor into a
    * world-space ray for terrain picking.
@@ -44,6 +46,8 @@ export function createGame(simulation: Simulation): Game {
   const followers = createFollowers(terrain, simulation)
   const huts = createHuts(planet, simulation)
   const shaman = createShaman(planet, simulation)
+  // Once, from the heights the core now owns: the forest the match starts with.
+  const trees = createTrees(planet, simulation)
 
   // Open on the tribe. The starting village is wherever the flattest land
   // turned out to be, which is as likely to be behind the planet as in front.
@@ -63,6 +67,7 @@ export function createGame(simulation: Simulation): Game {
     followers,
     huts,
     shaman,
+    trees,
     get clearColor() {
       return state.clearColor
     },
@@ -83,7 +88,8 @@ export function createGame(simulation: Simulation): Game {
       // A spell being aimed sees the clicks first: a Land Bridge cast is not
       // also a hut, a selection or a move order. Then huts, which own the left
       // button in build mode so no selection box starts while placing, and a
-      // right-click on a hut as an enter order.
+      // right-click on a hut as an enter or eject order. Then trees, which
+      // take a right-click on one as a chop order.
       const pointer = input.pointer
       const without = (taken: ReadonlySet<PointerClick>): InputSnapshot =>
         taken.size === 0
@@ -97,7 +103,16 @@ export function createGame(simulation: Simulation): Game {
             }
       const aimed = shaman.update(deltaMs, input, { camera, aspect })
       const housed = huts.update(deltaMs, without(aimed.consumed), { camera, aspect })
-      const claimed = new Set<PointerClick>([...aimed.consumed, ...housed.consumed])
+      const chopped = trees.update(
+        deltaMs,
+        without(new Set([...aimed.consumed, ...housed.consumed])),
+        { camera, aspect },
+      )
+      const claimed = new Set<PointerClick>([
+        ...aimed.consumed,
+        ...housed.consumed,
+        ...chopped.consumed,
+      ])
       const placing = aimed.targeting || housed.building
       const forFollowers: InputSnapshot =
         claimed.size === 0 && !placing

@@ -28,7 +28,7 @@ const NOTICE_MS = 2500
 
 const FIND_KEYS = ['KeyF']
 const CAST_KEYS = ['KeyL']
-const CANCEL_KEYS = ['Escape', 'KeyB']
+const CANCEL_KEYS = ['Escape', 'KeyB', 'KeyT']
 
 /** Instance layout, in floats: position(3), heading(3), tribe, flags. */
 const OFFSET_POSITION = 0
@@ -67,6 +67,8 @@ export type Shaman = {
   /** Mana gained per second at the tribe's current size. */
   readonly income: number
   readonly cost: number
+  /** The tribe's wood, shown beside its mana. */
+  readonly wood: number
   readonly targeting: boolean
   /** Null outside targeting, while sculpting, or with the cursor off the planet. */
   readonly preview: BridgePreview | null
@@ -137,6 +139,9 @@ export function createShaman(planet: Planet, simulation: Simulation): Shaman {
       return simulation.manaIncome(tribe)
     },
     cost: simulation.landBridgeCost,
+    get wood() {
+      return simulation.wood(tribe)
+    },
     get targeting() {
       return targeting
     },

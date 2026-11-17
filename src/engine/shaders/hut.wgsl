@@ -15,6 +15,8 @@ struct Uniforms {
 
 const PART_DOOR: f32 = 1.0;
 const PART_ROOF: f32 = 2.0;
+// HutKind in huts.hpp.
+const KIND_TRAINING: f32 = 1.0;
 
 struct VertexOutput {
   @builtin(position) clipPosition: vec4f,
@@ -24,6 +26,7 @@ struct VertexOutput {
   // Occupants, or a negative ghost code: -1 a good site, -2 a bad one.
   @location(3) @interpolate(flat) occupants: f32,
   @location(4) @interpolate(flat) part: f32,
+  @location(5) @interpolate(flat) training: f32,
 }
 
 fn tribeColor(tribe: f32) -> vec3f {
@@ -43,7 +46,9 @@ fn vs_main(
   @location(4) instanceHeading: vec3f,
   @location(5) instanceTribe: f32,
   @location(6) instanceOccupants: f32,
+  @location(7) instanceKind: f32,
 ) -> VertexOutput {
+  let training = f32(abs(instanceKind - KIND_TRAINING) < 0.5);
   let up = normalize(instancePosition);
   var forward = instanceHeading - up * dot(up, instanceHeading);
   if (length(forward) < 1e-5) {
@@ -52,7 +57,13 @@ fn vs_main(
   forward = normalize(forward);
   let right = cross(up, forward);
 
-  let world = instancePosition + right * position.x + up * position.y + forward * position.z;
+  // A training hut is the same mesh drawn taller and a little narrower, so
+  // its silhouette is a tower against a dwelling's dome. The faceted normals
+  // are left alone: the stretch is mild enough to light right.
+  let shaped = vec3f(position.x * mix(1.0, 0.9, training),
+                     position.y * mix(1.0, 1.45, training),
+                     position.z * mix(1.0, 0.9, training));
+  let world = instancePosition + right * shaped.x + up * shaped.y + forward * shaped.z;
 
   var output: VertexOutput;
   output.clipPosition = uniforms.viewProj * vec4f(world, 1.0);
@@ -61,6 +72,7 @@ fn vs_main(
   output.tribe = instanceTribe;
   output.occupants = instanceOccupants;
   output.part = part;
+  output.training = training;
   return output;
 }
 
@@ -81,10 +93,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   }
 
   // Mud walls and straw thatch; a claimed hut's roof takes its tribe colour.
-  var albedo = vec3f(0.56, 0.42, 0.28);
+  // A training hut is dark timber under slate, its roof more its tribe's.
+  var albedo = mix(vec3f(0.56, 0.42, 0.28), vec3f(0.30, 0.21, 0.14), input.training);
   if (input.part == PART_ROOF) {
-    let thatch = vec3f(0.66, 0.55, 0.30);
-    albedo = select(thatch, mix(thatch, tribeColor(input.tribe), 0.55), input.tribe > -0.5);
+    let thatch = mix(vec3f(0.66, 0.55, 0.30), vec3f(0.30, 0.31, 0.34), input.training);
+    let claim = mix(0.55, 0.7, input.training);
+    albedo = select(thatch, mix(thatch, tribeColor(input.tribe), claim), input.tribe > -0.5);
   }
 
   var color = albedo * (ambient + vec3f(1.0, 0.97, 0.90) * diffuse);

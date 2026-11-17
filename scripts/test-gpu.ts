@@ -183,7 +183,7 @@ check('and copes with a loss that has no message',
 
 const renderer = read('src/engine/renderer.ts')
 const context = read('src/engine/webgpu.ts')
-const shaders = ['planet', 'follower', 'hut'].map((name) => [name, read(`src/engine/shaders/${name}.wgsl`)] as const)
+const shaders = ['planet', 'follower', 'hut', 'tree'].map((name) => [name, read(`src/engine/shaders/${name}.wgsl`)] as const)
 
 for (const [name, source] of shaders) {
   const curves = source.match(/exp\(-1\.35 \* color\)/g)?.length ?? 0
@@ -191,11 +191,12 @@ for (const [name, source] of shaders) {
 }
 check('the shaders are files, not strings inside the renderer',
   !/\/\*\s*wgsl\s*\*\//.test(renderer) && /planet\.wgsl\?raw/.test(renderer) &&
-    /follower\.wgsl\?raw/.test(renderer) && /hut\.wgsl\?raw/.test(renderer))
+    /follower\.wgsl\?raw/.test(renderer) && /hut\.wgsl\?raw/.test(renderer) &&
+    /tree\.wgsl\?raw/.test(renderer))
 
 const pipelines = withoutComments(renderer).match(/createRenderPipeline\(/g)?.length ?? 0
 const multisampled = withoutComments(renderer).match(/multisample:\s*\{\s*count:\s*SAMPLE_COUNT\s*\}/g)?.length ?? 0
-check('every render pipeline is multisampled', pipelines === 4 && multisampled === pipelines,
+check('every render pipeline is multisampled', pipelines === 5 && multisampled === pipelines,
   `${multisampled} of ${pipelines}`)
 check('the sample count is 4', /const SAMPLE_COUNT = 4\b/.test(renderer))
 check('colour and depth targets are multisampled to match',

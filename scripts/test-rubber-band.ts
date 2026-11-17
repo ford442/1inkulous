@@ -8,6 +8,7 @@ import { screenRay, worldToNdc, type RayCamera } from '../src/engine/picking.ts'
 import { createCamera } from '../src/game/camera.ts'
 import { createFollowers, followerIdsInDragRect } from '../src/game/followers.ts'
 import { createPlanet } from '../src/game/planet.ts'
+import { createTerrain } from '../src/game/terrain.ts'
 import { selectionBandLayout } from '../src/ui/hud.ts'
 import type { DragRect, InputSnapshot, PointerSnapshot } from '../src/input/input.ts'
 import type { Simulation } from '../src/sim/simulation.ts'
@@ -146,9 +147,19 @@ check(
 
 const selected = new Set<number>()
 const orders: Vec3[] = []
+// The fake core keeps the seeded heights and answers height queries with sea
+// level: these checks are about gestures, not ground.
+let seeded: Float32Array = new Float32Array(0)
 const simulation = {
-  uploadNavGraph() {},
-  writeNavHeights() {},
+  uploadNavGraph(_graph: unknown, heights: Float32Array) {
+    seeded = heights
+  },
+  navHeights() {
+    return seeded
+  },
+  terrainHeightAt() {
+    return 0
+  },
   spawnFollower() {
     return 0
   },
@@ -179,7 +190,10 @@ const simulation = {
 } as unknown as Simulation
 
 const planet = createPlanet({ resolution: 2, terrain: 'placeholder', radius: 1 })
-const followers = createFollowers(planet, simulation, { spawnCount: 0, shamanTribe: null })
+const followers = createFollowers(createTerrain(planet, simulation), simulation, {
+  spawnCount: 0,
+  shamanTribe: null,
+})
 
 const view = { camera, aspect: CANVAS_ASPECT }
 

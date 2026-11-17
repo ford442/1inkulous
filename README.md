@@ -7,11 +7,11 @@ the JS main thread.
 
 ```
 src/engine/   WebGPU device, planet + follower meshes, renderer, picking, math
-src/game/     planet + terrain heights, orbit camera, terrain brush, followers, huts
+src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers, huts
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
 src/wasm/     build output (generated) + core.d.ts, the checked-in ABI contract
-cpp/          simulation core: fixed-step clock, navigation graph, followers, huts
+cpp/          simulation core: fixed-step clock, terrain, navigation graph, followers, huts
 ```
 
 ## Prerequisites
@@ -49,8 +49,9 @@ emcc -v   # confirm
 | `npm run build:web` | Skips the WASM step; fails if `src/wasm/core.js` is absent |
 | `npm run build:wasm` | Compiles `cpp/` into `src/wasm/core.js` + `core.wasm` |
 | `npm run test:core` | Headless checks of the core in Node (no browser needed) |
-| `npm run test:huts` | Flatten brush, hut picking and build mode against a fake core; then placing, entering, breeding and routing round a hut on the real core and planet |
-| `npm run test:shaman` | Shaman, mana and Land Bridge end to end, on the real core and planet |
+| `npm run test:huts` | Hut picking and build mode against a fake core; then placing, entering, breeding and routing round a hut on the real core and planet |
+| `npm run test:shaman` | Shaman, mana and Land Bridge: first on the core alone (no planet module), then cast through the game module |
+| `npm run test:terrain` | The core owns the ground: the brush moves core, graph, feet and mesh together, and a pick agrees with a path |
 | `npm run clean:wasm` | Removes the CMake build directory and generated artifacts |
 
 `src/wasm/core.js` and `core.wasm` are generated and git-ignored;
@@ -78,8 +79,8 @@ returns how many ran. A long stall is capped rather than replayed in a burst.
 Only scalars cross the boundary per frame. Bulk state is read directly out of
 the module's linear memory (`simulation.module.HEAPF32` and friends, exported
 for exactly this) rather than marshalled through call arguments — that is how
-follower positions reach the renderer, and how the walkable graph and its
-heights get in.
+follower positions reach the renderer, how the walkable graph gets in, and how
+the terrain heights come back out to the mesh.
 
 ## Controls
 
@@ -130,10 +131,18 @@ seams where duplicate vertices already share a weld id, so linking through the
 weld table stitches the faces together and a path can walk off the edge of one
 face onto the next without any face-adjacency table. See `src/game/navGraph.ts`.
 
-**Terrain deformation is live.** The graph's topology is uploaded once; its
-heights are a buffer in core memory that the game overwrites whenever a sculpt
-stroke moves the ground. Raise a ridge across a walking follower's way and it
-looks for another; if there is none, it gives up and stops where it stands.
+**The core owns the terrain.** Nav nodes are the welded vertices, so the
+core's one float per node *is* the ground. On load `createTerrain`
+(`src/game/terrain.ts`) uploads the graph's topology and seeds those heights
+from the generated field — the only time TypeScript writes walkable height.
+After that every edit is a core call: `Terrain::sculpt` and `Terrain::flatten`
+(`cpp/src/terrain.cpp`) for the brush, the same calls from inside the core for
+a spell. Each edit widens a dirty node range; once a frame `syncMesh` copies
+those nodes onto every mesh vertex sharing their weld id, and the renderer
+uploads the touched vertex range as it always has. Picking reads height from
+the core on the same triangle a walker uses, so a click lands where a path
+does. Raise a ridge across a walking follower's way and it looks for another;
+if there is none, it gives up and stops where it stands.
 
 **A step is refused above a slope of 0.55** — height change over arc length, a
 shade under 30 degrees — and water is never walkable. Path cost is the true
@@ -254,8 +263,8 @@ or touch another hut's, which leaves at least one free node between two huts:
 a lane to walk. On the default planet little land passes as it is, so most
 huts start with the flatten brush: hold C and Shift and drag, and
 the ground under the brush is pulled level with wherever the stroke began. It
-goes through `planet.flatten`, the sibling of `sculpt`, so builders and spells
-can use it later. A pad levels in a fraction of a second at default strength.
+is the core's `Terrain::flatten`, the sibling of `sculpt`, so builders and
+spells in the core can use it too. A pad levels in a fraction of a second at default strength.
 
 In build mode the brush disc becomes the hut's footprint — it reaches the
 furthest footprint node, the same patch that has to be level and that the hut
@@ -335,22 +344,23 @@ The core decides, in `Shamans::plan` (`cpp/src/shaman.cpp`):
   same weight rule routes use — or there is nothing to raise;
 - and the tribe must have the mana.
 
-On success it charges the mana and hands back a plan: stamp centres half a
-stamp apart along the line, a stamp radius (0.09, about three cells of strip)
-and a crest height (0.01 above sea level). The terrain is TypeScript's, so
-`layLandBridge` (`src/game/shaman.ts`) lays the stamps with `planet.sculpt`,
-each lifting its centre to the crest and doing nothing where the ground is
-already higher, then pushes the new heights into the core with
-`writeNavHeights`. That is the whole update: the graph is never rebuilt, and
-the next order walks over the bridge. A refused cast returns no plan, spends
-nothing and moves no terrain. While aiming, the cursor disc marks the far end
+On success it charges the mana and raises the land itself: stamps half a
+stamp apart along the line, each of radius 0.09 (about three cells of strip),
+laid with `Terrain::sculpt` and each lifting its centre to the crest (0.01
+above sea level) and doing nothing where the ground is already higher. That
+is the whole update — no TypeScript runs to finish the cast, the graph is
+never rebuilt, and the next order walks over the bridge; the mesh picks the
+new land up from the dirty range at the end of the frame. The stamps stay
+readable for drawing and tests. A refused cast spends nothing and moves no
+terrain. While aiming, the cursor disc marks the far end
 at the strip's width, green where the core would raise it and red where it
 would not, and the HUD says why.
 
-`npm run test:shaman` checks all of this on the real planet: it rings the
-village with a moat, shows no route crosses it, casts through the game
-module with no mana (nothing moves), then with mana, and walks the shaman
-over the new land with no graph upload.
+`npm run test:shaman` checks all of this twice. First on the core alone —
+topology and a flat seed in, a moat dug with the core's sculpt, casts refused
+for want of mana, over dry ground and out of reach (nothing moves), one spent,
+and the shaman walked across — with no planet module at all. Then through the
+game module, where the mesh has to match the core after each cast.
 
 ### Not done yet
 

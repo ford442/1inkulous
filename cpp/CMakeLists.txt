@@ -23,6 +23,7 @@ set(CORE_SOURCES
   src/huts.cpp
   src/nav.cpp
   src/shaman.cpp
+  src/terrain.cpp
 )
 
 if(EMSCRIPTEN)

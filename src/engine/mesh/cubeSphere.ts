@@ -15,6 +15,8 @@
  * The mesh keeps the undeformed unit directions and a per-vertex height array on
  * the CPU. Deformation is "write heights, refresh the touched vertices,
  * re-upload the touched range" — see `applyHeightField` and `refreshVertices`.
+ * In the game the heights are a copy: the simulation core owns the terrain,
+ * and src/game/terrain.ts writes what it changed back here each frame.
  */
 
 /** position(3) + normal(3) + uv(2) */
@@ -28,7 +30,10 @@ export type PlanetMesh = {
   readonly triangleCount: number
   /** Unit-length surface direction per vertex (3 floats each). Never deformed. */
   readonly directions: Float32Array
-  /** Displacement along `directions`, in world units. One entry per vertex. */
+  /**
+   * Displacement along `directions`, in world units. One entry per vertex.
+   * Generated here, then mirrored from the core once it owns the terrain.
+   */
   readonly heights: Float32Array
   /** Interleaved vertex buffer contents — this is what gets uploaded. */
   readonly vertexData: Float32Array

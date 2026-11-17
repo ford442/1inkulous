@@ -1,7 +1,6 @@
 import {
   applyHeightField,
   createPlanetMesh,
-  refreshVertices,
   sampleHeight,
   type PlanetMesh,
 } from '../engine/mesh/cubeSphere'
@@ -9,9 +8,14 @@ import { intersectSphere, pointOnRay, type Ray } from '../engine/picking'
 import { normalize, type Vec3 } from '../engine/math'
 
 /**
- * The playable world. Terrain is a per-vertex height above sea level, stored on
- * the mesh and edited in place — `sculpt` and `flatten` are the primitives that
- * the player's brush and, later, raise/lower spells and builders all go through.
+ * The playable world as the player sees it: the mesh, and the picking and
+ * height queries that go with it.
+ *
+ * The planet generates the starting height field and nothing more. Once the
+ * simulation core takes the terrain (see `createTerrain` in ./terrain), the
+ * core's height per nav node is the ground: every edit happens there, the mesh
+ * is redrawn from it, and `heightAt` reads it on the same triangle a walker
+ * stands on — so a click lands where a path would.
  */
 
 export type TerrainKind = 'placeholder' | 'flat'
@@ -26,13 +30,17 @@ export type PlanetOptions = {
   seed?: number
 }
 
+/** Answers "how high is the ground here" for a direction. */
+export type HeightSource = (direction: Vec3) => number
+
 export type Planet = {
   readonly mesh: PlanetMesh
   readonly radius: number
   readonly maxHeight: number
-  /** Rebuilds the height field. Deterministic for a given kind and seed. */
-  generateTerrain: (kind: TerrainKind, seed?: number) => void
-  /** Height above sea level at a direction, interpolated across the cell. */
+  /**
+   * Height above sea level at a direction. Before a core owns the terrain this
+   * is the generated field on the mesh; after, it is the core's.
+   */
   heightAt: (direction: Vec3) => number
   /** World-space point on the terrain surface along a direction. */
   surfacePointAt: (direction: Vec3) => Vec3
@@ -41,50 +49,36 @@ export type Planet = {
   /** Direction of the terrain point under a ray, or null if it misses. */
   pickDirection: (ray: Ray) => Vec3 | null
   /**
-   * Raises (positive delta) or lowers (negative) the terrain inside an angular
-   * radius, with a smooth falloff to the edge. Returns true if anything moved.
+   * Hands height queries to whoever now owns the terrain. Called once, when the
+   * core takes it; the mesh stops being the source of truth from then on.
    */
-  sculpt: (centre: Vec3, angularRadius: number, delta: number) => boolean
-  /**
-   * Pulls the terrain inside an angular radius towards `targetHeight`, moving
-   * each vertex by at most `rate` at the centre and less towards the rim. A
-   * vertex within reach of the target lands on it exactly, so a few strokes
-   * leave a truly level pad. Returns true if anything moved.
-   */
-  flatten: (centre: Vec3, angularRadius: number, targetHeight: number, rate: number) => boolean
+  readHeightsFrom: (source: HeightSource) => void
 }
 
 /** Refinement passes for ray → surface picking. */
 const PICK_REFINEMENTS = 4
-
-/**
- * Steps smaller than this fraction of the height range are skipped: at the very
- * rim of the brush the falloff goes to nothing, and a step that cannot survive
- * being rounded into the float32 height array would only dirty the buffer.
- */
-const MIN_STEP_FRACTION = 1e-9
 
 export function createPlanet(options: PlanetOptions = {}): Planet {
   const radius = options.radius ?? 1
   const maxHeight = options.maxHeight ?? radius * 0.06
   const mesh = createPlanetMesh({ resolution: options.resolution ?? 24, radius })
 
-  const heightAt = (direction: Vec3) =>
-    sampleHeight(mesh, direction[0], direction[1], direction[2])
+  // Deterministic for a given kind and seed.
+  const seed = options.seed ?? 1
+  if ((options.terrain ?? 'placeholder') === 'flat') {
+    applyHeightField(mesh, () => 0)
+  } else {
+    applyHeightField(mesh, (x, y, z) => landHeight(x, y, z, seed, maxHeight))
+  }
 
-  const planet: Planet = {
+  let source: HeightSource = (direction) =>
+    sampleHeight(mesh, direction[0], direction[1], direction[2])
+  const heightAt = (direction: Vec3) => source(direction)
+
+  return {
     mesh,
     radius,
     maxHeight,
-
-    generateTerrain(kind: TerrainKind, seed = 0) {
-      if (kind === 'flat') {
-        applyHeightField(mesh, () => 0)
-        return
-      }
-      applyHeightField(mesh, (x, y, z) => landHeight(x, y, z, seed, maxHeight))
-    },
-
     heightAt,
 
     surfacePointAt(direction: Vec3) {
@@ -118,117 +112,10 @@ export function createPlanet(options: PlanetOptions = {}): Planet {
       return direction
     },
 
-    sculpt(centre: Vec3, angularRadius: number, delta: number) {
-      if (delta === 0 || angularRadius <= 0) {
-        return false
-      }
-
-      const unit = normalize(centre)
-      const cosRadius = Math.cos(angularRadius)
-      const { directions, heights, vertexCount } = mesh
-      const touched: number[] = []
-      // Heights live in a float32 array, so cap at the representable value —
-      // otherwise a saturated vertex compares unequal to its own stored height
-      // every frame and never stops re-uploading.
-      const cap = Math.fround(maxHeight)
-      const minStep = MIN_STEP_FRACTION * maxHeight
-
-      for (let i = 0; i < vertexCount; i += 1) {
-        const dot =
-          directions[i * 3] * unit[0] +
-          directions[i * 3 + 1] * unit[1] +
-          directions[i * 3 + 2] * unit[2]
-        if (dot <= cosRadius) {
-          continue
-        }
-
-        // Smooth falloff from full strength at the centre to nothing at the rim,
-        // so strokes blend instead of leaving stepped craters.
-        const angle = Math.acos(Math.min(1, dot))
-        const t = 1 - angle / angularRadius
-        const falloff = t * t * (3 - 2 * t)
-
-        const step = delta * falloff
-        if (Math.abs(step) < minStep) {
-          continue
-        }
-
-        const before = heights[i]
-        // Snap hard at both ends rather than approaching them: game logic reads
-        // water as `height <= 0`, so a stroke meant to flood a valley has to
-        // land on exactly zero.
-        let after = before + step
-        if (after <= 0) after = 0
-        else if (after >= cap) after = cap
-
-        if (after !== before) {
-          heights[i] = after
-          touched.push(i)
-        }
-      }
-
-      if (touched.length === 0) {
-        return false
-      }
-
-      refreshVertices(mesh, touched)
-      return true
-    },
-
-    flatten(centre: Vec3, angularRadius: number, targetHeight: number, rate: number) {
-      if (!(rate > 0) || angularRadius <= 0) {
-        return false
-      }
-
-      const unit = normalize(centre)
-      const cosRadius = Math.cos(angularRadius)
-      const { directions, heights, vertexCount } = mesh
-      const touched: number[] = []
-      // Stored as float32, so the target is too: a vertex that has arrived has
-      // to compare equal to it, or the pad would re-upload every frame.
-      const target = Math.fround(Math.min(Math.max(targetHeight, 0), maxHeight))
-
-      for (let i = 0; i < vertexCount; i += 1) {
-        const dot =
-          directions[i * 3] * unit[0] +
-          directions[i * 3 + 1] * unit[1] +
-          directions[i * 3 + 2] * unit[2]
-        if (dot <= cosRadius) {
-          continue
-        }
-
-        const before = heights[i]
-        const gap = target - before
-        if (gap === 0) {
-          continue
-        }
-
-        // Same falloff as `sculpt`, so the pad's edge blends into the slope
-        // round it instead of stepping down a cliff.
-        const angle = Math.acos(Math.min(1, dot))
-        const t = 1 - angle / angularRadius
-        const reach = rate * t * t * (3 - 2 * t)
-        if (reach <= 0) {
-          continue
-        }
-
-        heights[i] = Math.abs(gap) <= reach ? target : before + Math.sign(gap) * reach
-        if (heights[i] !== before) {
-          touched.push(i)
-        }
-      }
-
-      if (touched.length === 0) {
-        return false
-      }
-
-      refreshVertices(mesh, touched)
-      return true
+    readHeightsFrom(next: HeightSource) {
+      source = next
     },
   }
-
-  planet.generateTerrain(options.terrain ?? 'placeholder', options.seed ?? 1)
-  return planet
 }
 
 /**

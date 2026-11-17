@@ -22,8 +22,8 @@ const ok = (name, pass, detail = '') => out.push(`${pass ? 'PASS' : 'FAIL'}  ${n
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
-ok('version string', version === '0.6.0', version)
-ok('encoded version matches', m._core_version() === 600, String(m._core_version()))
+ok('version string', version === '0.7.0', version)
+ok('encoded version matches', m._core_version() === 700, String(m._core_version()))
 
 // default step
 m._core_init(0)
@@ -137,7 +137,10 @@ function uploadGrid(heights) {
   m._core_nav_commit(RADIUS, 0.55)
 }
 
-/** Overwrites the core's heights in place, the way a sculpt stroke does. */
+/**
+ * Test-only seed: overwrites the core's heights in place to set up a scenario.
+ * The game never does this after load; its edits go through core_terrain_*.
+ */
 const writeHeights = (heights) => m.HEAPF32.set(heights, m._core_nav_heights() >> 2)
 
 function instances() {
@@ -1281,6 +1284,81 @@ ok('200 steps of 60 walking followers stay cheap',
    stepMs < 50, `${stepMs.toFixed(1)}ms total, ${(stepMs / 200 * 1000).toFixed(0)}us per step`)
 
 // ---------------------------------------------------------------------------
+// Terrain edits in the core, on the small patch: the brush's sculpt and flatten
+// with its falloff, the snaps at sea level and the ceiling, the dirty range,
+// and height read off the walkers' triangles.
+
+m._core_followers_clear()
+m._core_huts_clear()
+uploadGrid(grid.heights)
+const CAP = 0.05
+m._core_terrain_set_max_height(CAP)
+const dirtyRange = () => [m._core_terrain_dirty_first(), m._core_terrain_dirty_last()]
+const isClean = () => dirtyRange()[1] < dirtyRange()[0]
+const changedNodes = (before) => {
+  const now = coreHeights()
+  const changed = []
+  for (let node = 0; node < now.length; node += 1) if (now[node] !== before[node]) changed.push(node)
+  return changed
+}
+ok('a freshly committed grid has nothing dirty', isClean())
+ok('and reads its ceiling back', Math.abs(m._core_terrain_max_height() - CAP) < 1e-12)
+
+{
+  const centreNode = nodeAt(8, 8)
+  const centre = gridDirection(8, 8)
+  const brush = 0.12
+  let before = coreHeights()
+  ok('a raise stroke moves the ground', m._core_terrain_sculpt(...centre, brush, 0.01) === 1)
+  const raised = changedNodes(before)
+  ok('by the full delta at the centre', Math.abs(coreHeights()[centreNode] - (LAND + 0.01)) < 1e-6,
+     `${coreHeights()[centreNode]}`)
+  ok('and only inside the brush', raised.every((node) => {
+    const at = [grid.directions[node * 3], grid.directions[node * 3 + 1], grid.directions[node * 3 + 2]]
+    return angleTo(at, centre) < brush
+  }) && raised.length > 1, `${raised.length} nodes`)
+  const halfway = nodeAt(10, 8)
+  ok('fading with the falloff', coreHeights()[halfway] > LAND && coreHeights()[halfway] < LAND + 0.01,
+     `${coreHeights()[halfway]}`)
+  const [first, last] = dirtyRange()
+  ok('the dirty range spans exactly what moved',
+     first === Math.min(...raised) && last === Math.max(...raised), `${first}..${last}`)
+  m._core_terrain_clear_dirty()
+  ok('and clears', isClean())
+
+  before = coreHeights()
+  m._core_terrain_sculpt(...centre, brush, -1)
+  ok('a deep stroke floods to exactly sea level', coreHeights()[centreNode] === 0)
+  ok('which is water to the graph', m._core_nav_nearest_walkable(...centre) !== centreNode)
+  m._core_terrain_sculpt(...centre, brush, 1)
+  ok('a tall one stops exactly at the ceiling', coreHeights()[centreNode] === Math.fround(CAP))
+  m._core_terrain_clear_dirty()
+  ok('and pushing past it moves nothing',
+     m._core_terrain_sculpt(...centre, brush * 0.3, 1) === 0 && isClean())
+
+  ok('a flatten stroke moves the ground', m._core_terrain_flatten(...centre, brush, 0.03, 0.002) === 1)
+  ok('a step at a time', Math.abs(coreHeights()[centreNode] - (CAP - 0.002)) < 1e-6)
+  for (let i = 0; i < 50; i += 1) m._core_terrain_flatten(...centre, brush, 0.03, 0.002)
+  ok('held, the middle lands exactly on the target', coreHeights()[centreNode] === Math.fround(0.03))
+  m._core_terrain_clear_dirty()
+  ok('and a level pad stops moving',
+     m._core_terrain_flatten(...centre, brush * 0.3, 0.03, 0.002) === 0 && isClean())
+  ok('zero rate and zero delta do nothing',
+     m._core_terrain_flatten(...centre, brush, 0, 0) === 0 && m._core_terrain_sculpt(...centre, brush, 0) === 0)
+
+  const h = coreHeights()
+  ok('height on a node is the node', Math.abs(m._core_terrain_height_at(...centre) - h[centreNode]) < 1e-7)
+  const a = gridDirection(8, 8)
+  const b = gridDirection(9, 8)
+  const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]
+  const expected = (h[centreNode] + h[nodeAt(9, 8)]) / 2
+  ok('halfway along a link it is the average of the two',
+     Math.abs(m._core_terrain_height_at(...mid) - expected) < 1e-4,
+     `${m._core_terrain_height_at(...mid).toFixed(5)} vs ${expected.toFixed(5)}`)
+  m._core_terrain_set_max_height(0)
+}
+
+// ---------------------------------------------------------------------------
 // The shaman, mana and Land Bridge, on the small patch with a strait down it.
 
 m._core_followers_clear()
@@ -1306,9 +1384,11 @@ ok('a second shaman for the tribe is refused', m._core_shaman_spawn(...westShore
 ok('and a tribe out of range gets none', m._core_shaman_spawn(...westShore, 9) === -1 && m._core_shaman(9) === -1)
 
 m._core_mana_set(0, 0)
+m._core_terrain_clear_dirty()
 ok('a bridge needs mana', bridgeCheck(westShore, eastShore) === 6)
 ok('a cast without it is refused and plans nothing',
    bridgeCast(westShore, eastShore) === 6 && m._core_land_bridge_stamp_count() === 0 && m._core_mana(0) === 0)
+ok('nor moves any ground', isClean() && changedNodes(strait).length === 0)
 
 m._core_mana_set(0, 500)
 ok('dry ground needs no bridge', bridgeCheck(westShore, gridDirection(5, 6)) === 5)
@@ -1324,6 +1404,7 @@ ok('a bridge with neither end near a shore is refused',
 ok('a pier from her shore out to sea is not', bridgeCheck(westShore, gridDirection(11, 8)) === 0)
 writeHeights(strait)
 ok('no refusal touched the mana', m._core_mana(0) === 500)
+ok('or the ground', isClean())
 
 const unbridged = m._core_nav_route(...westShore, ...eastShore, 0)
 ok('the strait has no way across', unbridged === -1)
@@ -1340,22 +1421,26 @@ ok('its plan runs shore to shore', stampCount >= 3 &&
 const stampRadius = m._core_land_bridge_stamp_radius()
 ok('and overlaps, stamp to stamp', angleTo(stampAt(0), stampAt(1)) <= stampRadius * 0.5 + 1e-6)
 
-// What the game does with the plan, reduced to the nav nodes: everything under
-// a stamp is raised to the crest, and only the heights are written back.
-const bridged = Float32Array.from(strait)
-for (let node = 0; node < grid.nodeCount; node += 1) {
-  const at = [grid.directions[node * 3], grid.directions[node * 3 + 1], grid.directions[node * 3 + 2]]
-  for (let k = 0; k < stampCount; k += 1) {
-    if (angleTo(at, stampAt(k)) < stampRadius * 0.8) {
-      bridged[node] = Math.max(bridged[node], m._core_land_bridge_height())
-    }
-  }
-}
-writeHeights(bridged)
-ok('a heights-only write opens a route over it',
+// The core raised the land itself: no height write from here.
+const crest = m._core_land_bridge_height()
+const straitNodes = [7, 8, 9].map((i) => nodeAt(i, 8))
+// Each stamp lifts its centre to the crest; a node between centres that the
+// shore already props up comes out lower, but dry.
+ok('the cast raised the strait out of the water in the core',
+   straitNodes.every((node) => coreHeights()[node] > WATER) &&
+     straitNodes.some((node) => coreHeights()[node] >= crest - 1e-6),
+   straitNodes.map((node) => coreHeights()[node].toFixed(4)).join(', '))
+const bridgedNodes = changedNodes(strait)
+ok('and reports it dirty for the mesh', !isClean() &&
+   dirtyRange()[0] <= Math.min(...bridgedNodes) && dirtyRange()[1] >= Math.max(...bridgedNodes),
+   `${bridgedNodes.length} nodes in ${dirtyRange().join('..')}`)
+ok('a route opens over it with no height written from outside',
    m._core_nav_route(...westShore, ...eastShore, 1) > 0 && m._core_nav_ready() === 1)
+m._core_terrain_clear_dirty()
+const bridgedHeights = coreHeights()
 ok('a refused cast afterwards empties the plan', bridgeCast(westShore, gridDirection(5, 6)) === 5 &&
    m._core_land_bridge_stamp_count() === 0)
+ok('and leaves the bridge as it was', isClean() && changedNodes(bridgedHeights).length === 0)
 
 const shamanPad = gridDirection(4, 8)
 const shamanHut = m._core_hut_place(...shamanPad, 0, 1, 0, -1)

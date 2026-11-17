@@ -2,19 +2,19 @@ import type { Vec3 } from '../engine/math'
 import { screenRay, worldToNdc, type Ray, type RayCamera } from '../engine/picking'
 import type { DragRect, InputSnapshot } from '../input/input'
 import type { Simulation } from '../sim/simulation'
-import { buildNavGraph, type NavGraph } from './navGraph'
-import type { Planet } from './planet'
+import type { NavGraph } from './navGraph'
 import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
+import { MAX_WALKABLE_SLOPE, type Terrain } from './terrain'
 
 /**
  * Followers — the first units on the planet.
  *
  * The units themselves live in the C++ core: it owns their positions, their
- * paths and the A* search over the walkable graph. This module is the glue.
- * It builds that graph out of the planet mesh, keeps the core's copy of the
- * terrain heights current as the player sculpts, turns clicks into selections
- * and orders, and hands the renderer the packed instance buffer the core
- * already maintains. Nothing about a follower is mirrored on the JS side.
+ * paths and the A* search over the walkable graph, which the terrain module
+ * hands it. This module is the glue: it picks the starting village, turns
+ * clicks into selections and orders, and hands the renderer the packed
+ * instance buffer the core already maintains. Nothing about a follower — nor
+ * the ground under one — is mirrored on the JS side.
  */
 
 /** Mirrors kFlagSelected / kFlagWalking in cpp/include/1inkulous/followers.hpp. */
@@ -24,13 +24,6 @@ const FLAG_WALKING = 1 << 1
 /** Instance layout, in floats: position(3), heading(3), tribe, flags. */
 const OFFSET_POSITION = 0
 const OFFSET_FLAGS = 7
-
-/**
- * Steepest ground a follower will cross, as height over run. Terrain runs from
- * sea level to `planet.maxHeight` over a handful of cells, so this turns a
- * sculpted mound into a wall while leaving rolling country walkable.
- */
-const MAX_WALKABLE_SLOPE = 0.55
 
 /**
  * Followers are people on a planet: tiny next to it, but the camera stops close
@@ -85,48 +78,22 @@ export type Followers = {
    * dragging one — including while the sculpt modifier owns the gesture.
    */
   readonly selectionBand: DragRect | null
-  /**
-   * Pushes terrain edited since the last call into the core. `update` does it
-   * too; this is for anything that asks the core about the ground first.
-   */
-  syncTerrain: () => void
   update: (deltaMs: number, input: InputSnapshot, view: FollowerViewContext) => void
 }
 
 export function createFollowers(
-  planet: Planet,
+  terrain: Terrain,
   simulation: Simulation,
   options: FollowersOptions = {},
 ): Followers {
-  const graph = buildNavGraph(planet.mesh)
-  const heights = new Float32Array(graph.nodeCount)
-
-  simulation.uploadNavGraph(graph, {
-    planetRadius: planet.radius,
-    maxSlope: MAX_WALKABLE_SLOPE,
-  })
-
-  // The core's heights start at zero — every node reads as ocean — so they have
-  // to be pushed before the first spawn or path search.
-  let uploadedRevision = -1
-  const syncHeights = () => {
-    if (planet.mesh.revision === uploadedRevision) {
-      return
-    }
-    for (let node = 0; node < graph.nodeCount; node += 1) {
-      heights[node] = planet.mesh.heights[graph.nodeVertex[node]]
-    }
-    simulation.writeNavHeights(heights)
-    uploadedRevision = planet.mesh.revision
-  }
-
-  syncHeights()
+  const { planet, graph } = terrain
 
   const shamanTribe = options.shamanTribe === undefined ? 0 : options.shamanTribe
   const wanted = Math.min(options.spawnCount ?? DEFAULT_SPAWN_COUNT, MAX_FOLLOWERS - 1)
+  // Chosen before anyone spawns, so the heights view cannot go stale under it.
   const spawnNodes = findSpawnNodes(
     graph,
-    heights,
+    terrain.heights(),
     planet.radius,
     wanted + (shamanTribe === null ? 0 : 1),
   )
@@ -256,7 +223,6 @@ export function createFollowers(
     get selectionBand() {
       return selectionBand
     },
-    syncTerrain: syncHeights,
     get walkingCount() {
       const data = simulation.followerInstances()
       const stride = simulation.followerInstanceFloats
@@ -270,10 +236,6 @@ export function createFollowers(
     },
 
     update(_deltaMs: number, input: InputSnapshot, view: FollowerViewContext) {
-      // Terrain the player just reshaped has to reach the core before any path
-      // is searched over it.
-      syncHeights()
-
       const live = input.pointer.dragRect
       const sculpting = isSculptModifierHeld(input)
       // Hide the band for the whole gesture once C has been involved, not only
@@ -418,7 +380,7 @@ function findSpawnNodes(
   }
 
   if (start < 0) {
-    // No land anywhere — an all-ocean world, which `generateTerrain('flat')`
+    // No land anywhere — an all-ocean world, which `terrain: 'flat'`
     // produces. Say so rather than starting an empty match in silence.
     console.warn('[followers] no walkable land on the planet; nobody was spawned')
     return []

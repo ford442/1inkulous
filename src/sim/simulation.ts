@@ -24,7 +24,12 @@ export type NavCommitOptions = {
   planetRadius: number
   /** Steepest walkable ground as height over run. Omit for the core's default. */
   maxSlope?: number
+  /** Highest the terrain may be raised, above sea level. Omit for no ceiling. */
+  maxHeight?: number
 }
+
+/** An inclusive run of nav node ids. */
+export type NodeRange = { readonly first: number; readonly last: number }
 
 export { HutSite } from './hutSite'
 export { LandBridge } from './landBridge'
@@ -38,7 +43,10 @@ export type HutSiteReport = {
   readonly footprint: number
 }
 
-/** What a successful Land Bridge cast asks the terrain to do. */
+/**
+ * What a successful Land Bridge cast laid. The core has already raised the
+ * land; this is for drawing and for tests.
+ */
 export type LandBridgePlan = {
   /** Stamp centres along the bridge, as unit directions, in order. */
   readonly stamps: readonly Vec3[]
@@ -65,16 +73,44 @@ export type Simulation = {
   reset: () => void
 
   /**
-   * Uploads the walkable graph. Copies the topology into the core once; call
-   * `writeNavHeights` afterwards and whenever the terrain moves.
+   * Uploads the walkable graph and seeds the terrain with `heights`, one per
+   * node — the generated field. Done once: from then on the core owns the
+   * heights, and only the terrain calls below change them.
    */
-  uploadNavGraph: (graph: NavGraphUpload, options: NavCommitOptions) => void
-  /**
-   * Overwrites the core's height per node, in place. Cheap enough to call on
-   * every frame a sculpt stroke touched the terrain.
-   */
-  writeNavHeights: (heights: Float32Array) => void
+  uploadNavGraph: (
+    graph: NavGraphUpload,
+    heights: Float32Array,
+    options: NavCommitOptions,
+  ) => void
   readonly navReady: boolean
+
+  /**
+   * Live, read-only view of the core's height per node. Re-read it rather than
+   * keeping it: the view is invalidated when linear memory grows.
+   */
+  navHeights: () => Float32Array
+  /** Terrain height under a direction, on the triangle a walker there stands on. */
+  terrainHeightAt: (direction: Vec3) => number
+  /**
+   * Raises (positive delta) or lowers the terrain inside an angular radius,
+   * with a smooth falloff to the edge. Returns true if anything moved.
+   */
+  sculptTerrain: (centre: Vec3, angularRadius: number, delta: number) => boolean
+  /**
+   * Pulls the terrain inside an angular radius towards `targetHeight`, by at
+   * most `rate` at the centre. Returns true if anything moved.
+   */
+  flattenTerrain: (
+    centre: Vec3,
+    angularRadius: number,
+    targetHeight: number,
+    rate: number,
+  ) => boolean
+  /**
+   * The nodes any edit has moved since the last call, and clears them; null
+   * when nothing has. What the mesh has to copy back.
+   */
+  takeTerrainDirty: () => NodeRange | null
 
   spawnFollower: (direction: Vec3, tribe: number) => number
   readonly followerCount: number
@@ -134,8 +170,8 @@ export type Simulation = {
   /** Whether a tribe's shaman could bridge `from` to `to`, and if not, why. */
   checkLandBridge: (tribe: number, from: Vec3, to: Vec3) => LandBridge
   /**
-   * Casts it: on success the mana is spent and the plan comes back for the
-   * terrain to carry out; otherwise the reason, and nothing has changed.
+   * Casts it: on success the mana is spent, the core raises the land, and the
+   * stamps it laid come back; otherwise the reason, and nothing has changed.
    */
   castLandBridge: (
     tribe: number,
@@ -185,7 +221,7 @@ export async function createSimulation(
 
   const instanceFloats = module._core_follower_instance_floats()
   const hutInstanceFloats = module._core_hut_instance_floats()
-  // Cached only to spot a stale build; the pointer itself is re-read per call.
+  // Sizes the heights view; the pointer itself is re-read per call.
   let navNodeCount = 0
 
   return {
@@ -207,18 +243,19 @@ export async function createSimulation(
       module._core_reset()
     },
 
-    uploadNavGraph(graph: NavGraphUpload, commit: NavCommitOptions) {
+    uploadNavGraph(graph: NavGraphUpload, heights: Float32Array, commit: NavCommitOptions) {
       // `TypedArray.set` bounds-checks against the whole heap view, not against
       // the region the core allocated, so an oversized array here would scribble
       // over unrelated core memory without raising anything.
       if (
         graph.directions.length !== graph.nodeCount * 3 ||
         graph.neighborOffsets.length !== graph.nodeCount + 1 ||
-        graph.neighbors.length !== graph.linkCount
+        graph.neighbors.length !== graph.linkCount ||
+        heights.length !== graph.nodeCount
       ) {
         throw new Error(
           `Navigation graph arrays do not match ${graph.nodeCount} nodes and ` +
-            `${graph.linkCount} links.`,
+            `${graph.linkCount} links, or the heights do not match its nodes.`,
         )
       }
 
@@ -235,7 +272,10 @@ export async function createSimulation(
       module.HEAPF32.set(graph.directions, module._core_nav_directions() >> 2)
       module.HEAP32.set(graph.neighborOffsets, module._core_nav_neighbor_offsets() >> 2)
       module.HEAP32.set(graph.neighbors, module._core_nav_neighbors() >> 2)
+      // The one time TypeScript writes walkable height.
+      module.HEAPF32.set(heights, module._core_nav_heights() >> 2)
 
+      module._core_terrain_set_max_height(commit.maxHeight ?? 0)
       module._core_nav_commit(commit.planetRadius, commit.maxSlope ?? 0)
       // The core validates the CSR topology on commit and simply stays unready
       // if it does not hold. Fail here rather than leaving a world whose units
@@ -248,18 +288,49 @@ export async function createSimulation(
       navNodeCount = graph.nodeCount
     },
 
-    writeNavHeights(heights: Float32Array) {
-      if (heights.length !== navNodeCount) {
-        throw new Error(
-          `Height buffer of ${heights.length} does not match the core's ` +
-            `${navNodeCount} navigation nodes.`,
-        )
-      }
-      module.HEAPF32.set(heights, module._core_nav_heights() >> 2)
-    },
-
     get navReady() {
       return module._core_nav_ready() === 1
+    },
+
+    navHeights() {
+      if (navNodeCount === 0) {
+        return new Float32Array(0)
+      }
+      const start = module._core_nav_heights() >> 2
+      return module.HEAPF32.subarray(start, start + navNodeCount)
+    },
+
+    terrainHeightAt(direction: Vec3) {
+      return module._core_terrain_height_at(direction[0], direction[1], direction[2])
+    },
+
+    sculptTerrain(centre: Vec3, angularRadius: number, delta: number) {
+      return (
+        module._core_terrain_sculpt(centre[0], centre[1], centre[2], angularRadius, delta) === 1
+      )
+    },
+
+    flattenTerrain(centre: Vec3, angularRadius: number, targetHeight: number, rate: number) {
+      return (
+        module._core_terrain_flatten(
+          centre[0],
+          centre[1],
+          centre[2],
+          angularRadius,
+          targetHeight,
+          rate,
+        ) === 1
+      )
+    },
+
+    takeTerrainDirty() {
+      const first = module._core_terrain_dirty_first()
+      const last = module._core_terrain_dirty_last()
+      if (last < first) {
+        return null
+      }
+      module._core_terrain_clear_dirty()
+      return { first, last }
     },
 
     spawnFollower(direction: Vec3, tribe: number) {

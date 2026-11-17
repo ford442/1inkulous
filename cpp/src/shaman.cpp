@@ -129,7 +129,7 @@ LandBridge Shamans::plan(std::int32_t tribe, const double a_in[3], const double 
   if (commit) {
     stamps_.clear();
   }
-  if (grid_ == nullptr || followers_ == nullptr || !grid_->ready()) {
+  if (grid_ == nullptr || terrain_ == nullptr || followers_ == nullptr || !grid_->ready()) {
     return LandBridge::kNoGrid;
   }
   double a[3] = {a_in[0], a_in[1], a_in[2]};
@@ -212,7 +212,23 @@ LandBridge Shamans::plan(std::int32_t tribe, const double a_in[3], const double 
     stamps_.push_back(static_cast<float>(p[1]));
     stamps_.push_back(static_cast<float>(p[2]));
   }
+  raise_land();
   return LandBridge::kOk;
+}
+
+void Shamans::raise_land() {
+  // One stamp at a time, each reading the ground the last one left: a stamp
+  // lifts its centre to the crest and no further, so overlapping stamps build
+  // one ridge, and a stamp on ground already that high — the beaches at the
+  // ends — lifts nothing. Its neighbours' falloff may still nudge it a little.
+  const double radius = stamp_angle();
+  for (std::int32_t i = 0; i < stamp_count(); ++i) {
+    const double at[3] = {stamps_[i * 3], stamps_[i * 3 + 1], stamps_[i * 3 + 2]};
+    const double lift = kLandBridgeHeight - terrain_->height_at(at);
+    if (lift > 0.0) {
+      terrain_->sculpt(at, radius, lift);
+    }
+  }
 }
 
 void Shamans::count_population() {

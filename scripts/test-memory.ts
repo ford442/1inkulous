@@ -94,7 +94,7 @@ function selectAll(simulation: Simulation): void {
 
   // Send everyone to the far side, sculpt under them, and let it play out.
   selectAll(simulation)
-  const home = game.followers.homeDirection ?? ([0, 0, 1] as Vec3)
+  const home = game.match.playerHome ?? ([0, 0, 1] as Vec3)
   const away = normalize([-home[0], -home[1], -home[2]])
   const routed = simulation.orderFollowerMove(away)
   game.terrain.sculpt(home, 0.12, 0.01)

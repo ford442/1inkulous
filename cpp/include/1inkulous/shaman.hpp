@@ -202,6 +202,13 @@ class Shamans {
   // How `tribe`'s most recent cast ended. All zeros before the first.
   CastEnd last_end(std::int32_t tribe) const;
 
+  // The match: over once a shaman has been killed and at most one tribe's
+  // shaman still stands. The winner is that tribe, or -1 while the match goes
+  // on — or when the last two fell on the same step. Reincarnation is not in
+  // yet, so a shaman's death is final.
+  bool match_over() const;
+  std::int32_t winner() const;
+
   // Angular radius, in radians, of the disc `spell` writes on this planet.
   double spell_angle(Spell spell) const;
 

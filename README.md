@@ -12,7 +12,7 @@ src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
 src/wasm/     build output (generated) + core.d.ts, the checked-in ABI contract
-cpp/          simulation core: fixed-step clock, terrain, navigation graph, followers, huts, trees, wood
+cpp/          simulation core: fixed-step clock, terrain, navigation graph, followers, huts, trees, wood, tribe AI
 ```
 
 ## Prerequisites
@@ -59,6 +59,7 @@ emcc -v   # confirm
 | `npm run test:shaman` | Shaman, mana and the four spells — cast, cancelled, short of mana, cooling down, and one enemy shaman — first on the core alone (no planet module), then aimed and cast through the game module |
 | `npm run test:terrain` | The core owns the ground: the brush moves core, graph, feet and mesh together, and a pick agrees with a path |
 | `npm run test:economy` | Chopping, what huts cost, eject, training a warrior and a kill: on the core alone, then through the game modules |
+| `npm run test:ai` | The enemy tribe on its own: on a flat core with a few planted trees it chops, builds, trains a warrior and sends him at the player's shaman; bridges a strait only when it can pay; swamps a crowd but not its own people; then a shaman killed by a warrior ending the match, her people deaf to orders and the AI stopped; and the match the game opens on |
 | `npm run test:memory` | The core's heap holds the opening village and a full tribe without growing, and the module declares a ceiling |
 | `npm run test:gpu` | Drawing-buffer sizing, limit planning, GPU error reporting and loss messages, and what the renderer's source must keep true |
 | `npm run clean:wasm` | Removes the CMake build directories and generated artifacts |
@@ -328,10 +329,9 @@ and reading the ground under each follower, both linear in the population.
   the stream.
 - Avoidance is reactive (look ahead, step aside), not velocity-obstacle
   planning, so two crowds crossing still jostle where they meet.
-- Followers are placeholder pawns. The opening village cycles the four
-  placeholder tribe colours (blue, red, yellow, green); unique art comes later.
-  Because the tribes start mixed together, the first warrior the player
-  trains at home starts cutting down the other three straight away.
+- Followers are placeholder pawns in the placeholder tribe colours (blue,
+  red, yellow, green); unique art comes later. A match uses blue and red (see
+  [The match](#the-match)).
 
 ## Huts
 
@@ -487,7 +487,7 @@ One special unit and four spells, and the spells only work because the world
 already has live heights and a walkable graph.
 
 **The shaman is a follower with a flag.** She spawns at the heart of the
-opening village, on top of the 60 pawns, as the player's (blue) tribe's
+opening village, on top of its 24 braves, as the player's (blue) tribe's
 shaman: `kFlagShaman` in the instance buffer, drawn taller and in a pale robe
 over her tribe colour. Everything else — selecting, box selection, move
 orders, avoidance — is the follower code, unchanged. She never goes into a
@@ -503,9 +503,8 @@ inside huts, up to 1000. The HUD shows the player's mana and current income.
 `Shamans::check(spell, tribe, target)` says whether it would go ahead and, if
 not, why; `Shamans::cast(spell, tribe, target)` runs the same check and, if it
 passes, starts the cast. The player's keys reach them through
-`core_spell_check` / `core_spell_cast`; an enemy shaman's AI will call the
-same two from inside the core (`test:shaman` already has a second tribe's
-shaman Blast the player's out of range through them). Each spell's cost,
+`core_spell_check` / `core_spell_cast`; the enemy tribe's AI calls the same
+two from inside the core (see [The match](#the-match)). Each spell's cost,
 range, cast time, cooldown and radius are one row of `kSpellRules`, not
 anything the input code knows:
 
@@ -568,9 +567,7 @@ the HUD row, a cancel, and the mesh matching the core after each cast.
 
 ### Not done yet
 
-- Enemy shaman AI, reincarnation, spell unlocks and the vault. Only the
-  player's tribe starts with a shaman; the other tribes bank mana with
-  nothing to spend it on.
+- Reincarnation, spell unlocks and the vault. A shaman's death ends the match.
 - Lightning, swarm, earthquake, erode, volcano, hypnotise, angel of death.
   Lightning wants the damage path; it comes once warriors can die from
   something other than a warrior.
@@ -581,6 +578,71 @@ the HUD row, a cancel, and the mesh matching the core after each cast.
 - Swamp does not spare huts: one standing in the disc keeps its footprint
   blocked on ground that is now water.
 - No line-of-sight rule.
+
+## The match
+
+Two shamans on one planet. `createMatch` in `src/game/scenario.ts` is the one
+place a match is laid out, on the placeholder noise planet:
+
+- **Blue, the player**: the shaman and 24 braves on the flattest land. The
+  camera opens on them, and only blue can be clicked or boxed into the
+  selection.
+- **Red, tribe 1**: a shaman and 10 braves round a dwelling on the flattest
+  land at least 1.2 rad round the planet, preferring a site the player could
+  walk to. The scenario levels the pad itself (no mana) and plants a few trees
+  round each village if the forest left one short. Red's mana rises with its
+  population like blue's; the HUD's red line shows its people, mana, wood and
+  what its AI did last.
+- Yellow and green are unused.
+
+**The AI is in the core** (`TribeAi`, `cpp/include/1inkulous/tribe_ai.hpp`),
+and it does not run every 50 ms step: every 2 s, for each tribe handed to it
+(`core_ai_enable`), it does at most one thing, the first of:
+
+1. If the shaman is idle and a spell is legal and useful, cast it. **Land
+   Bridge** only when water cuts the tribe's warriors off from the enemy
+   shaman: a flood fill from a warrior finds his landmass, the shore nearest
+   the enemy is the near end, and the first foreign land along the line, within
+   the spell's range, is the far end. If she is out of range she first walks to
+   that shore. If the tribe cannot pay, she does neither. **Swamp**, else
+   **Blast**, centred on the enemy with the most other enemies round them
+   (three or more) in her range, never with one of her own people or her huts
+   in the disc.
+2. If the wood allows and there are fewer than four huts, build: a training hut
+   first if there is none (the free first dwelling excepted), otherwise a
+   dwelling, on the nearest level site within 0.35 of home. With none level,
+   she **Flattens** the nearest uneven site she can reach, clear of every hut,
+   and the hut goes up on a later think. That is the only time she flattens.
+3. If braves are idle and trees stand within 0.6 of home, send them to chop.
+   One is kept back when a training hut could take him, or chopping would keep
+   every hand busy.
+4. If a training hut has room and the wood allows, send a brave in.
+5. If warriors are idle, send them at the nearest enemy shaman. The ordinary
+   group order is the attack move: they strike whoever they pass, and every
+   think resends the idle ones to where she is now.
+
+Every one of these is the call the player's input reaches: `Shamans::cast`,
+`HutSet::place`, `HutSet::order_enter`, `TreeSet::order_chop` and
+`FollowerSet::order_move`. The enter and chop orders take an id list, and the
+player's selection versions now build that list and call them.
+
+**A shaman can die** from warrior damage like anyone else. When she does, her
+tribe has fallen (`core_shaman_fallen`): its people stop and drop out of the
+selection, and no order call (move, enter, chop, eject) moves them again. The
+match is over once a shaman has fallen and at most one still stands
+(`core_match_over`, `core_match_winner`). The HUD shows who fell and whether
+that is a win or a loss, and the AI stops thinking.
+
+### Not done yet
+
+- Reincarnation, the stone head and a timer to bring her back. Death is final.
+- Personalities, difficulty, more than one enemy, and the rest of the solar
+  system.
+- Boats and balloons. Land Bridge is the only crossing, so a red village across
+  an ocean too wide to bridge never reaches the player.
+- Red's dwellings are never filled, so red does not grow: braves become
+  warriors until it runs out of braves or wood.
+- Pathfinding for armies. Warriors walk as one ordinary group order.
 
 ## Design notes
 

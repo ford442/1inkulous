@@ -76,6 +76,14 @@ class TreeSet {
   // kChoppersPerTree once those already on their way are counted. Warriors
   // and the shaman stay put. Returns how many were sent.
   std::int32_t order_chop_selected(std::int32_t id);
+  // The same order for an explicit list of ids, which is what a tribe's AI
+  // gives. Anyone not a brave of a tribe still taking orders is passed over.
+  std::int32_t order_chop(const std::vector<std::int32_t>& ids, std::int32_t id);
+
+  // Plants one tree on the walkable node nearest the direction, unless a
+  // tree already stands on that node. For tests and scenario setup; a match
+  // starts from spawn(). Returns its id, or -1.
+  std::int32_t plant(double x, double y, double z);
 
   // One fixed step: drops trees the ground has drowned or a hut has covered,
   // lets everyone in reach of the tree they were sent to chop at it, fells

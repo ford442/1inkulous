@@ -1,9 +1,11 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
 #include "1inkulous/nav.hpp"
+#include "1inkulous/tribes.hpp"
 
 // Followers: the first units on the planet.
 //
@@ -202,6 +204,19 @@ class FollowerSet {
 
   // Makes follower `id` its tribe's shaman. False for a bad id.
   bool make_shaman(std::int32_t id);
+
+  // Whether `tribe`'s shaman has been killed this match. Her people stop
+  // taking orders from that step on: they are deselected and stopped, a
+  // selection or an order that names them passes them over, and no order
+  // call (move, enter, chop, eject) moves them again. Cleared with the set.
+  bool fallen(std::int32_t tribe) const {
+    return valid_tribe(tribe) && fallen_[static_cast<std::size_t>(tribe)];
+  }
+  // Whether follower `id` still answers to orders: in range, and of a tribe
+  // whose shaman stands (or never had one).
+  bool takes_orders(std::int32_t id) const {
+    return id >= 0 && id < count() && !fallen(tribe(id));
+  }
   // Id of `tribe`'s shaman, or -1. Ids shift as followers go into huts, so
   // look her up rather than keeping the number.
   std::int32_t shaman(std::int32_t tribe) const;
@@ -404,6 +419,8 @@ class FollowerSet {
   // fight: health each follower loses this step, by id.
   std::vector<double> damage_scratch_;
   std::uint32_t flood_generation_ = 0;
+  // See fallen().
+  std::array<bool, kMaxTribes> fallen_{};
   std::vector<Cell> cells_;
   std::vector<Run> runs_;
   int index_bins_ = 1;

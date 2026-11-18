@@ -8,6 +8,7 @@
 #include "1inkulous/shaman.hpp"
 #include "1inkulous/terrain.hpp"
 #include "1inkulous/trees.hpp"
+#include "1inkulous/tribe_ai.hpp"
 #include "1inkulous/tribes.hpp"
 
 // Simulation core. Compiled to WebAssembly and driven from TypeScript through
@@ -17,7 +18,7 @@ namespace inkulous {
 
 // Semantic version of the core, so the loader can report what it got.
 constexpr int kVersionMajor = 0;
-constexpr int kVersionMinor = 9;
+constexpr int kVersionMinor = 10;
 constexpr int kVersionPatch = 0;
 
 // Encoded as MAJOR * 10000 + MINOR * 100 + PATCH: cheap to pass across the
@@ -66,6 +67,7 @@ class Simulation {
   Terrain& terrain() { return terrain_; }
   TreeSet& trees() { return trees_; }
   Stockpile& stores() { return stores_; }
+  TribeAi& ai() { return ai_; }
 
   std::int64_t step_count() const { return step_count_; }
   // Simulated time in milliseconds, i.e. whole steps only.
@@ -88,6 +90,7 @@ class Simulation {
   TreeSet trees_;
   HutSet huts_;
   Shamans shamans_;
+  TribeAi ai_;
 };
 
 }  // namespace inkulous

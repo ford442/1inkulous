@@ -285,6 +285,9 @@ int core_tree_instance_floats(void);
 int core_tree_order_chop(int id);
 // How far through chopping tree `id` is, 0..1; -1 for a bad id.
 double core_tree_progress(int id);
+// Plants one tree on the walkable node nearest the direction, unless one
+// stands there already. Returns its id, or -1. For tests and scenario setup.
+int core_tree_plant(double x, double y, double z);
 // Wood one tree gives, and the brave-seconds it takes to fell.
 int core_tree_wood(void);
 double core_tree_chop_seconds(void);
@@ -320,6 +323,9 @@ int core_shaman(int tribe);
 // and the ceiling it stops at.
 double core_mana(int tribe);
 double core_mana_income(int tribe);
+// Everyone of `tribe`, out walking or inside a hut, as of the last step: what
+// its mana income is counted from.
+int core_population(int tribe);
 double core_mana_max(void);
 // Sets a tribe's mana, clamped to [0, max]. For tests and scenario setup.
 void core_mana_set(int tribe, double mana);
@@ -368,6 +374,38 @@ int core_spell_ended_result(int tribe);
 int core_land_bridge_stamp_count(void);
 float* core_land_bridge_stamps(void);
 double core_land_bridge_height(void);
+
+// --- the match and the tribes the core plays ----------------------------
+//
+// A shaman killed by warriors is gone for good. Her tribe has fallen: its
+// people are stopped and deselected, and no order call moves them again. The
+// match is over once a shaman has fallen and at most one still stands.
+
+// 1 once `tribe`'s shaman has been killed this match.
+int core_shaman_fallen(int tribe);
+// 1 once the match is decided; and the tribe whose shaman is left standing,
+// or -1 while it goes on (or if the last two fell together).
+int core_match_over(void);
+int core_match_winner(void);
+
+// Hands `tribe` to the core's AI, which every core_ai_think_seconds() does
+// at most one thing for it through the same order and cast calls as above:
+// cast a useful spell, build (flattening a pad first if it must), chop, train
+// a warrior, or send its warriors at the enemy shaman. Its home is its first
+// hut, or where its shaman stands. Returns 1, or 0 for a bad tribe or one
+// with neither. It stops for good once the match is over.
+int core_ai_enable(int tribe);
+void core_ai_disable(int tribe);
+int core_ai_enabled(int tribe);
+// What the tribe's last think did — 0 waited, 1 cast a spell, 2 sent the
+// shaman to the shore to bridge from, 3 built a hut, 4 flattened a pad, 5
+// sent braves to chop, 6 sent a brave to train, 7 sent warriors to attack
+// (mirrors inkulous::AiAction) — how many thinks did something, and how many
+// there have been.
+int core_ai_last_action(int tribe);
+int core_ai_actions(int tribe);
+int core_ai_thinks(int tribe);
+double core_ai_think_seconds(void);
 
 #ifdef __cplusplus
 }  // extern "C"

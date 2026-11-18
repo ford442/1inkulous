@@ -5,6 +5,7 @@ import { Role, roleOfFlags } from '../sim/role'
 import type { Simulation } from '../sim/simulation'
 import type { NavGraph } from './navGraph'
 import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
+import { PLAYER_TRIBE } from './shaman'
 import { MAX_WALKABLE_SLOPE, type Terrain } from './terrain'
 
 /**
@@ -24,6 +25,7 @@ const FLAG_WALKING = 1 << 1
 
 /** Instance layout, in floats: position(3), heading(3), tribe, flags. */
 const OFFSET_POSITION = 0
+const OFFSET_TRIBE = 6
 const OFFSET_FLAGS = 7
 
 /**
@@ -53,6 +55,11 @@ export type FollowersOptions = {
    * `spawnCount` ordinary followers. Null for no shaman. Defaults to tribe 0.
    */
   shamanTribe?: number | null
+  /**
+   * Only this tribe's followers can be clicked or boxed into the selection —
+   * the player's, in a match. Omit to let any tribe be selected.
+   */
+  selectTribe?: number
 }
 
 export type FollowerViewContext = {
@@ -67,6 +74,7 @@ export type Followers = {
    * at it. Null when the planet offered nowhere to stand.
    */
   readonly homeDirection: Vec3 | null
+  /** The player's tribe out walking; the counts below are of them too. */
   readonly count: number
   readonly selectedCount: number
   /** Live view of the core's instance buffer. Re-read every frame. */
@@ -150,6 +158,9 @@ export function createFollowers(
     let bestDistance = Infinity
 
     for (let id = 0; id < count; id += 1) {
+      if (options.selectTribe !== undefined && data[id * stride + OFFSET_TRIBE] !== options.selectTribe) {
+        continue
+      }
       const base = id * stride + OFFSET_POSITION
       const px = data[base]
       const py = data[base + 1]
@@ -190,6 +201,19 @@ export function createFollowers(
 
   let selectionBand: DragRect | null = null
 
+  /** The player's tribe's followers whose flags pass `test`. */
+  const countMine = (test: (flags: number) => boolean): number => {
+    const data = simulation.followerInstances()
+    const stride = simulation.followerInstanceFloats
+    let total = 0
+    for (let id = 0; id < data.length / stride; id += 1) {
+      if (data[id * stride + OFFSET_TRIBE] === PLAYER_TRIBE && test(data[id * stride + OFFSET_FLAGS])) {
+        total += 1
+      }
+    }
+    return total
+  }
+
   const applyDragSelection = (drag: DragRect, view: FollowerViewContext) => {
     // Sample positions before any selection write: the core refreshes the
     // instance buffer on each select, and the ids are all this pass needs.
@@ -206,7 +230,12 @@ export function createFollowers(
     if (!drag.shiftKey) {
       simulation.clearFollowerSelection()
     }
+    const data = simulation.followerInstances()
+    const stride = simulation.followerInstanceFloats
     for (const id of ids) {
+      if (options.selectTribe !== undefined && data[id * stride + OFFSET_TRIBE] !== options.selectTribe) {
+        continue
+      }
       simulation.setFollowerSelected(id, true)
     }
   }
@@ -214,7 +243,7 @@ export function createFollowers(
   return {
     homeDirection,
     get count() {
-      return simulation.followerCount
+      return countMine(() => true)
     },
     get selectedCount() {
       return simulation.selectedFollowerCount
@@ -227,26 +256,10 @@ export function createFollowers(
       return selectionBand
     },
     get walkingCount() {
-      const data = simulation.followerInstances()
-      const stride = simulation.followerInstanceFloats
-      let walking = 0
-      for (let id = 0; id < data.length / stride; id += 1) {
-        if ((data[id * stride + OFFSET_FLAGS] & FLAG_WALKING) !== 0) {
-          walking += 1
-        }
-      }
-      return walking
+      return countMine((flags) => (flags & FLAG_WALKING) !== 0)
     },
     get warriorCount() {
-      const data = simulation.followerInstances()
-      const stride = simulation.followerInstanceFloats
-      let warriors = 0
-      for (let id = 0; id < data.length / stride; id += 1) {
-        if (roleOfFlags(data[id * stride + OFFSET_FLAGS]) === Role.warrior) {
-          warriors += 1
-        }
-      }
-      return warriors
+      return countMine((flags) => roleOfFlags(flags) === Role.warrior)
     },
 
     update(_deltaMs: number, input: InputSnapshot, view: FollowerViewContext) {
@@ -332,11 +345,12 @@ export function createFollowers(
  * Runs once at startup over a few thousand nodes, so a plain scan and a
  * breadth-first spread are more than quick enough.
  */
-function findSpawnNodes(
+export function findSpawnNodes(
   graph: NavGraph,
   heights: Float32Array,
   planetRadius: number,
   wanted: number,
+  from: { start?: number; skip?: (node: number) => boolean } = {},
 ): number[] {
   const { nodeCount, neighborOffsets, neighbors, directions } = graph
 
@@ -392,6 +406,10 @@ function findSpawnNodes(
   if (start < 0) {
     start = shoreline
   }
+  // A village placed by a scenario grows from where it is told.
+  if (from.start !== undefined) {
+    start = from.start
+  }
 
   if (start < 0) {
     // No land anywhere — an all-ocean world, which `terrain: 'flat'`
@@ -409,7 +427,10 @@ function findSpawnNodes(
 
   while (queue.length > 0 && chosen.length < wanted) {
     const node = queue.shift() as number
-    chosen.push(node)
+    // Skipped ground (a hut's pad) is still spread across, just not stood on.
+    if (!from.skip?.(node)) {
+      chosen.push(node)
+    }
 
     for (let link = neighborOffsets[node]; link < neighborOffsets[node + 1]; link += 1) {
       const neighbor = neighbors[link]

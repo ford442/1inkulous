@@ -150,6 +150,10 @@ class HutSet {
   std::int32_t kind(std::int32_t id) const;
   // Everyone inside every hut.
   std::int32_t housed() const;
+  // Unit direction of hut `id`'s centre; `id` must be in range.
+  const double* direction(std::int32_t id) const {
+    return huts_[static_cast<std::size_t>(id)].dir;
+  }
 
   // Sends selected braves into hut `id`: as many as it has room for once
   // those already on their way are counted, nearest first, and only of the
@@ -158,6 +162,12 @@ class HutSet {
   // nobody while its tribe is short of a warrior's wood. Returns how many
   // were sent.
   std::int32_t order_enter_selected(std::int32_t id);
+  // The same order for an explicit list of ids, which is what a tribe's AI
+  // gives. Ids that are not braves of a tribe still taking orders are passed
+  // over.
+  std::int32_t order_enter(const std::vector<std::int32_t>& ids, std::int32_t id);
+  // Followers already sent into hut `id` and not yet arrived; 0 for a bad id.
+  std::int32_t incoming(std::int32_t id) const;
 
   // Sends everyone inside hut `id` back out of the door as braves, the
   // reverse of going in. They rejoin the follower set, so they stop when it
@@ -202,8 +212,6 @@ class HutSet {
   // Re-marks every footprint after the grid has been reallocated.
   void sync_blocked();
   void mark(const Hut& hut, bool blocked);
-  // Followers already sent into hut `id` and not yet arrived.
-  std::int32_t incoming(std::int32_t id) const;
   void door_point(const Hut& hut, double out[3]) const;
   void admit_arrivals();
   void breed(double dt_seconds);

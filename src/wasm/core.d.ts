@@ -159,6 +159,10 @@ export type CoreModule = {
   _core_tree_progress: (id: number) => number
   _core_tree_wood: () => number
   _core_tree_chop_seconds: () => number
+  /** Plants one tree on the walkable node nearest the direction. Its id, or -1. */
+  /** Everyone of the tribe, walking or housed, as of the last step. */
+  _core_population: (tribe: number) => number
+  _core_tree_plant: (x: number, y: number, z: number) => number
 
   /** Spawns a tribe's shaman. Returns her follower id, or -1 if it has one already. */
   _core_shaman_spawn: (x: number, y: number, z: number, tribe: number) => number
@@ -220,6 +224,23 @@ export type CoreModule = {
   _core_land_bridge_stamps: () => number
   /** Height above sea level the stamps raise the centre line to. */
   _core_land_bridge_height: () => number
+
+  /** 1 once the tribe's shaman has been killed. */
+  _core_shaman_fallen: (tribe: number) => number
+  /** 1 once a shaman has fallen and at most one stands. */
+  _core_match_over: () => number
+  /** The tribe whose shaman is left standing, or -1. */
+  _core_match_winner: () => number
+
+  /** Hands a tribe to the core's AI. 1 on success. */
+  _core_ai_enable: (tribe: number) => number
+  _core_ai_disable: (tribe: number) => void
+  _core_ai_enabled: (tribe: number) => number
+  /** Mirrors inkulous::AiAction. */
+  _core_ai_last_action: (tribe: number) => number
+  _core_ai_actions: (tribe: number) => number
+  _core_ai_thinks: (tribe: number) => number
+  _core_ai_think_seconds: () => number
 
   UTF8ToString: (pointer: number) => string
 

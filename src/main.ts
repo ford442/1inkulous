@@ -28,7 +28,7 @@ async function main() {
 
   const game = createGame(simulation)
   hud.setStatus(
-    `core ${simulation.version} · ${game.followers.count} followers (one a shaman) — starting renderer…`,
+    `core ${simulation.version} · ${game.followers.count} followers against ${game.match.enemy.name} — starting renderer…`,
   )
 
   const renderer = await createRenderer(canvas, game)
@@ -108,6 +108,7 @@ async function main() {
       hud.setShaman(game.shaman)
       hud.setTrees(game.trees)
       hud.setSelectionBand(game.followers.selectionBand)
+      hud.setMatch(game.match)
 
       input.endFrame()
     } catch (error) {

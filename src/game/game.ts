@@ -4,6 +4,7 @@ import { createCamera, type Camera } from './camera'
 import { createFollowers, type Followers } from './followers'
 import { createHuts, type Huts } from './huts'
 import { createPlanet, type Planet } from './planet'
+import { createMatch, type Match } from './scenario'
 import { createSculptor, isSculptModifierHeld, type Sculptor } from './sculpt'
 import { createShaman, type Shaman } from './shaman'
 import { createTerrain, type Terrain } from './terrain'
@@ -20,6 +21,8 @@ export type Game = {
   huts: Huts
   shaman: Shaman
   trees: Trees
+  /** Who is playing whom, and how it is going. */
+  match: Match
   /**
    * `aspect` is the viewport's width / height, needed to turn the cursor into a
    * world-space ray for terrain picking.
@@ -43,16 +46,24 @@ export function createGame(simulation: Simulation): Game {
   })
 
   const sculptor = createSculptor(terrain)
-  const followers = createFollowers(terrain, simulation)
+  // Once, from the heights the core now owns: the forest the match starts with.
+  // Before the match, so the enemy's pad clears whatever tree it lands on.
+  const trees = createTrees(planet, simulation)
+  // Both villages, the enemy's hut and its AI. The follower module is then
+  // only the glue for clicks: it spawns nobody of its own.
+  const match = createMatch(terrain, simulation)
+  const followers = createFollowers(terrain, simulation, {
+    spawnCount: 0,
+    shamanTribe: null,
+    selectTribe: match.playerTribe,
+  })
   const huts = createHuts(planet, simulation)
   const shaman = createShaman(planet, simulation)
-  // Once, from the heights the core now owns: the forest the match starts with.
-  const trees = createTrees(planet, simulation)
 
-  // Open on the tribe. The starting village is wherever the flattest land
-  // turned out to be, which is as likely to be behind the planet as in front.
-  if (followers.homeDirection) {
-    camera.focusOn(followers.homeDirection, true)
+  // Open on the player's tribe. The starting village is wherever the flattest
+  // land turned out to be, which is as likely to be behind the planet as in front.
+  if (match.playerHome) {
+    camera.focusOn(match.playerHome, true)
   }
 
   const state = {
@@ -68,6 +79,7 @@ export function createGame(simulation: Simulation): Game {
     huts,
     shaman,
     trees,
+    match,
     get clearColor() {
       return state.clearColor
     },

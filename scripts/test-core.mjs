@@ -30,8 +30,8 @@ const budget = (name, pass, detail = '') =>
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
-ok('version string', version === '0.9.0', version)
-ok('encoded version matches', m._core_version() === 900, String(m._core_version()))
+ok('version string', version === '0.10.0', version)
+ok('encoded version matches', m._core_version() === 1000, String(m._core_version()))
 
 // default step
 m._core_init(0)

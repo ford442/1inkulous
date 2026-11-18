@@ -6,13 +6,13 @@
 namespace inkulous {
 namespace {
 
-// "0.9.0" — built by hand so the string is static storage with no allocation,
+// "0.10.0" — built by hand so the string is static storage with no allocation,
 // which keeps core_version_text() safe to hand across the WASM boundary.
 #define INKULOUS_STRINGIFY_(x) #x
 #define INKULOUS_STRINGIFY(x) INKULOUS_STRINGIFY_(x)
-constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(9) "." INKULOUS_STRINGIFY(0);
+constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(10) "." INKULOUS_STRINGIFY(0);
 
-static_assert(kVersionMajor == 0 && kVersionMinor == 9 && kVersionPatch == 0,
+static_assert(kVersionMajor == 0 && kVersionMinor == 10 && kVersionPatch == 0,
               "kVersionText must be kept in step with the version constants");
 
 }  // namespace
@@ -28,6 +28,7 @@ Simulation::Simulation(double step_ms)
   huts_.attach(&nav_, &followers_, &stores_);
   trees_.attach(&nav_, &followers_, &stores_);
   shamans_.attach(&nav_, &terrain_, &followers_, &huts_);
+  ai_.attach(&nav_, &followers_, &huts_, &trees_, &shamans_, &stores_);
 }
 
 void Simulation::set_step_ms(double step_ms) {
@@ -62,6 +63,9 @@ std::int32_t Simulation::advance(double delta_ms) {
     trees_.step(dt_seconds);
     // Last, so mana counts the tribe as this step left it: births and all.
     shamans_.step(dt_seconds);
+    // After everything, so a tribe's AI decides on the world this step left:
+    // a hut that has just gone up, a cast that has just landed.
+    ai_.step(dt_seconds);
   }
 
   // One rebuild per frame rather than per step: the renderer only ever sees the

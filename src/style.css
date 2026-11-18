@@ -76,6 +76,25 @@ body {
   opacity: 0.9;
 }
 
+/* The match is over: who fell, in the shaman's blue for a win, red for a loss. */
+#hud .match-end {
+  margin: 0.4rem 0;
+  padding: 0.35rem 0.6rem;
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: right;
+  color: #9ec8ff;
+  border-right: 3px solid currentColor;
+}
+
+#hud .match-end.lost {
+  color: #ff8a7a;
+}
+
+#hud .match-end[hidden] {
+  display: none;
+}
+
 /* A failure the game cannot continue past: replaces the HUD. */
 #hud .fatal {
   max-width: 34rem;

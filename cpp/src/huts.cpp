@@ -340,6 +340,19 @@ std::int32_t HutSet::incoming(std::int32_t id) const {
 }
 
 std::int32_t HutSet::order_enter_selected(std::int32_t id) {
+  if (followers_ == nullptr) {
+    return 0;
+  }
+  std::vector<std::int32_t> ids;
+  for (std::int32_t f = 0; f < followers_->count(); ++f) {
+    if (followers_->selected(f)) {
+      ids.push_back(f);
+    }
+  }
+  return order_enter(ids, id);
+}
+
+std::int32_t HutSet::order_enter(const std::vector<std::int32_t>& ids, std::int32_t id) {
   if (followers_ == nullptr || grid_ == nullptr || !grid_->ready() || id < 0 || id >= count()) {
     return 0;
   }
@@ -350,12 +363,12 @@ std::int32_t HutSet::order_enter_selected(std::int32_t id) {
     return 0;
   }
 
-  // Selected braves not already on their way in, nearest first.
+  // Braves not already on their way in, nearest first.
   std::vector<std::pair<double, std::int32_t>> candidates;
-  for (std::int32_t f = 0; f < followers_->count(); ++f) {
+  for (const std::int32_t f : ids) {
     // The shaman stays out: she has spells to cast, not children to raise.
     // So do warriors, who are trained already.
-    if (!followers_->selected(f) || followers_->hut(f) == id || followers_->is_shaman(f) ||
+    if (!followers_->takes_orders(f) || followers_->hut(f) == id || followers_->is_shaman(f) ||
         !followers_->is_brave(f)) {
       continue;
     }
@@ -525,6 +538,10 @@ std::int32_t HutSet::eject(std::int32_t id) {
     return 0;
   }
   Hut& hut = huts_[static_cast<std::size_t>(id)];
+  // A fallen tribe's huts take no more orders than its people do.
+  if (followers_->fallen(hut.tribe)) {
+    return 0;
+  }
   std::int32_t out = 0;
   while (hut.occupants > 0) {
     double step_out[3];

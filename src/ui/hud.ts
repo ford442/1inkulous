@@ -4,6 +4,8 @@ import { SPELL_NAMES, spellProblem, type SpellPreview, type SpellSlot } from '..
 import type { SpellCast } from '../sim/simulation'
 import { SpellResult, type Spell } from '../sim/spell'
 import { HutKind, HutSite } from '../sim/hutSite'
+import { AI_ACTION_TEXT } from '../sim/ai'
+import { TRIBE_NAMES, type MatchOutcome, type TribeReadout } from '../game/scenario'
 
 /** The slice of the terrain brush the HUD reports on. */
 export type BrushReadout = {
@@ -62,6 +64,13 @@ export type TreeReadout = {
   readonly notice: string | null
 }
 
+/** The slice of the match the HUD reports on. */
+export type MatchReadout = {
+  readonly playerTribe: number
+  readonly outcome: MatchOutcome
+  readonly enemy: TribeReadout
+}
+
 /** Smoothed frame timing. `drawMs` is CPU time in `renderer.render`, not a GPU query. */
 export type FramePerf = {
   readonly fps: number
@@ -85,6 +94,7 @@ export type Hud = {
   setHuts: (huts: HutReadout) => void
   setShaman: (shaman: ShamanReadout) => void
   setTrees: (trees: TreeReadout) => void
+  setMatch: (match: MatchReadout) => void
   /** Screen-space selection box, or null when there isn't one. */
   setSelectionBand: (band: DragRect | null) => void
 }
@@ -142,6 +152,34 @@ export function shamanLine(shaman: ShamanReadout): string {
     return `${head} · casting ${SPELL_NAMES[shaman.casting.spell]}`
   }
   return `${head} · F finds her`
+}
+
+/** The enemy tribe's line: how big it is, what it holds and what it is up to. Pure. */
+export function enemyLine(match: MatchReadout): string {
+  const enemy = match.enemy
+  const head =
+    `${enemy.name}: ${enemy.population} people · mana ${Math.floor(enemy.mana)} ` +
+    `(+${enemy.income.toFixed(0)}/s) · wood ${enemy.wood}`
+  return enemy.shamanStanding ? `${head} · ${AI_ACTION_TEXT[enemy.action]}` : `${head} · shaman fallen`
+}
+
+/**
+ * Who fell and what that means, once the match is over; null while it is on.
+ * Pure.
+ */
+export function matchBanner(match: MatchReadout): string | null {
+  const enemy = match.enemy.name
+  const player = TRIBE_NAMES[match.playerTribe] ?? 'your tribe'
+  switch (match.outcome) {
+    case 'won':
+      return `${enemy}'s shaman has fallen — you win. ${enemy}'s people take no more orders.`
+    case 'lost':
+      return `Your shaman has fallen — ${enemy} wins. ${player}'s people take no more orders.`
+    case 'draw':
+      return 'Both shamans have fallen — nobody wins.'
+    default:
+      return null
+  }
 }
 
 /**
@@ -238,6 +276,8 @@ export function createHud(): Hud {
       <p class="hint" id="hud-shaman">—</p>
       <p class="hint" id="hud-spells">—</p>
       <p class="hint" id="hud-trees">—</p>
+      <p class="hint" id="hud-enemy">—</p>
+      <p class="match-end" id="hud-match" role="status" hidden></p>
       <p class="hint">Right-drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
       <p class="hint">Drag a box to select · Shift-drag adds · click ground clears · right-click sends them</p>
       <p class="hint">Hold C to sculpt: left raises, right lowers, Shift-left flattens · wheel sizes the brush · [ ] strength</p>
@@ -245,6 +285,7 @@ export function createHud(): Hud {
       <p class="hint">Right-click a hut to send the selected braves inside, or with nobody selected to empty it · right-click a tree to chop it</p>
       <p class="hint">A brave sent into a training hut, with wood to spare, comes out a warrior · warriors strike enemies next to them</p>
       <p class="hint">F finds the shaman · L aims a Land Bridge: click across water from her, or drag shore to shore</p>
+      <p class="hint">Red plays itself: kill its shaman to win, and keep yours alive · warriors are the way to do it</p>
       <p class="hint">X Blast raises a hill and throws people off it · V Flatten levels a hut pad · M Swamp sinks the ground · a cast takes a moment: move her or cast again to cancel</p>
     </div>
   `
@@ -258,6 +299,8 @@ export function createHud(): Hud {
   const shamanEl = root.querySelector<HTMLParagraphElement>('#hud-shaman')
   const spellsEl = root.querySelector<HTMLParagraphElement>('#hud-spells')
   const treesEl = root.querySelector<HTMLParagraphElement>('#hud-trees')
+  const enemyEl = root.querySelector<HTMLParagraphElement>('#hud-enemy')
+  const matchEl = root.querySelector<HTMLParagraphElement>('#hud-match')
   const bandEl = document.querySelector<HTMLDivElement>('#select-band')
   const canvasEl = document.querySelector<HTMLCanvasElement>('#game-canvas')
 
@@ -319,6 +362,17 @@ export function createHud(): Hud {
     setTrees(trees: TreeReadout) {
       if (treesEl) {
         treesEl.textContent = treeLine(trees)
+      }
+    },
+    setMatch(match: MatchReadout) {
+      if (enemyEl) {
+        enemyEl.textContent = enemyLine(match)
+      }
+      if (matchEl) {
+        const banner = matchBanner(match)
+        matchEl.hidden = banner === null
+        matchEl.textContent = banner ?? ''
+        matchEl.classList.toggle('lost', match.outcome === 'lost')
       }
     },
     setSelectionBand(band: DragRect | null) {

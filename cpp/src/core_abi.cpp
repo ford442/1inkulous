@@ -525,4 +525,34 @@ INKULOUS_EXPORT float* core_land_bridge_stamps(void) {
 
 INKULOUS_EXPORT double core_land_bridge_height(void) { return inkulous::kLandBridgeHeight; }
 
+INKULOUS_EXPORT int core_population(int tribe) { return simulation().shamans().population(tribe); }
+
+INKULOUS_EXPORT int core_tree_plant(double x, double y, double z) {
+  return simulation().trees().plant(x, y, z);
+}
+
+INKULOUS_EXPORT int core_shaman_fallen(int tribe) {
+  return simulation().followers().fallen(tribe) ? 1 : 0;
+}
+
+INKULOUS_EXPORT int core_match_over(void) { return simulation().shamans().match_over() ? 1 : 0; }
+
+INKULOUS_EXPORT int core_match_winner(void) { return simulation().shamans().winner(); }
+
+INKULOUS_EXPORT int core_ai_enable(int tribe) { return simulation().ai().enable(tribe) ? 1 : 0; }
+
+INKULOUS_EXPORT void core_ai_disable(int tribe) { simulation().ai().disable(tribe); }
+
+INKULOUS_EXPORT int core_ai_enabled(int tribe) { return simulation().ai().enabled(tribe) ? 1 : 0; }
+
+INKULOUS_EXPORT int core_ai_last_action(int tribe) {
+  return static_cast<int>(simulation().ai().last_action(tribe));
+}
+
+INKULOUS_EXPORT int core_ai_actions(int tribe) { return simulation().ai().actions(tribe); }
+
+INKULOUS_EXPORT int core_ai_thinks(int tribe) { return simulation().ai().thinks(tribe); }
+
+INKULOUS_EXPORT double core_ai_think_seconds(void) { return inkulous::kAiThinkSeconds; }
+
 }  // extern "C"

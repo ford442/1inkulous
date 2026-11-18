@@ -602,10 +602,12 @@ void FollowerSet::clear_huts() {
 void FollowerSet::clear() {
   followers_.clear();
   instances_.clear();
+  fallen_.fill(false);
 }
 
 void FollowerSet::set_selected(std::int32_t id, bool selected) {
-  if (id < 0 || id >= count()) {
+  // A fallen tribe's people cannot be picked up again to be given orders.
+  if (!takes_orders(id)) {
     return;
   }
   followers_[static_cast<std::size_t>(id)].selected = selected;
@@ -927,7 +929,7 @@ std::int32_t FollowerSet::order_move(const std::vector<std::int32_t>& ids,
   members_.clear();
   start_scratch_.clear();
   for (const std::int32_t id : ids) {
-    if (id < 0 || id >= count()) {
+    if (!takes_orders(id)) {
       continue;
     }
     Follower& follower = followers_[static_cast<std::size_t>(id)];
@@ -1723,11 +1725,33 @@ void FollowerSet::fight(double dt_seconds) {
   }
 
   // The fallen leave the set, from the top so the ids still to visit hold.
+  // A shaman among them takes her tribe out of the match.
   bool removed = false;
+  std::array<bool, kMaxTribes> shaman_fell{};
   for (std::int32_t id = count() - 1; id >= 0; --id) {
-    if (followers_[static_cast<std::size_t>(id)].health <= 0.0) {
+    const Follower& dead = followers_[static_cast<std::size_t>(id)];
+    if (dead.health <= 0.0) {
+      if (dead.shaman && valid_tribe(dead.tribe)) {
+        shaman_fell[static_cast<std::size_t>(dead.tribe)] = true;
+      }
       followers_.erase(followers_.begin() + id);
       removed = true;
+    }
+  }
+  for (std::int32_t tribe = 0; tribe < kMaxTribes; ++tribe) {
+    if (!shaman_fell[static_cast<std::size_t>(tribe)]) {
+      continue;
+    }
+    fallen_[static_cast<std::size_t>(tribe)] = true;
+    // Her people put down what they were doing: no route, no hut, no tree,
+    // and out of the player's selection.
+    for (Follower& follower : followers_) {
+      if (follower.tribe == tribe) {
+        follower.selected = false;
+        follower.hut = -1;
+        follower.tree = -1;
+        stop(follower);
+      }
     }
   }
   if (removed) {

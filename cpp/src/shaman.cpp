@@ -76,6 +76,31 @@ std::int32_t Shamans::population(std::int32_t tribe) const {
   return valid_tribe(tribe) ? population_[static_cast<std::size_t>(tribe)] : 0;
 }
 
+bool Shamans::match_over() const {
+  if (followers_ == nullptr) {
+    return false;
+  }
+  bool anyone_fell = false;
+  std::int32_t standing = 0;
+  for (std::int32_t tribe = 0; tribe < kMaxTribes; ++tribe) {
+    anyone_fell = anyone_fell || followers_->fallen(tribe);
+    standing += followers_->shaman(tribe) >= 0 ? 1 : 0;
+  }
+  return anyone_fell && standing <= 1;
+}
+
+std::int32_t Shamans::winner() const {
+  if (!match_over()) {
+    return -1;
+  }
+  for (std::int32_t tribe = 0; tribe < kMaxTribes; ++tribe) {
+    if (followers_->shaman(tribe) >= 0) {
+      return tribe;
+    }
+  }
+  return -1;
+}
+
 double Shamans::spell_angle(Spell spell) const {
   const double radius = grid_ != nullptr ? grid_->planet_radius() : 1.0;
   return spell_rules(spell).radius / radius;

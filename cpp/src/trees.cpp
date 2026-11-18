@@ -145,6 +145,33 @@ std::int32_t TreeSet::spawn(std::int32_t how_many, std::uint32_t seed) {
   return count();
 }
 
+std::int32_t TreeSet::plant(double x, double y, double z) {
+  if (grid_ == nullptr || !grid_->ready() || count() >= kMaxTrees) {
+    return -1;
+  }
+  const std::int32_t node = grid_->nearest_walkable_node(x, y, z);
+  if (node < 0) {
+    return -1;
+  }
+  for (const Tree& standing : trees_) {
+    if (standing.node == node) {
+      return -1;
+    }
+  }
+  Tree tree;
+  tree.node = node;
+  const float* d = grid_->direction(node);
+  tree.dir[0] = d[0];
+  tree.dir[1] = d[1];
+  tree.dir[2] = d[2];
+  normalize3(tree.dir);
+  double side[3];
+  tangent_basis(tree.dir, tree.heading, side);
+  trees_.push_back(tree);
+  refresh_instances();
+  return count() - 1;
+}
+
 void TreeSet::clear() {
   trees_.clear();
   instances_.clear();
@@ -183,6 +210,19 @@ std::int32_t TreeSet::incoming(std::int32_t id) const {
 }
 
 std::int32_t TreeSet::order_chop_selected(std::int32_t id) {
+  if (followers_ == nullptr) {
+    return 0;
+  }
+  std::vector<std::int32_t> ids;
+  for (std::int32_t f = 0; f < followers_->count(); ++f) {
+    if (followers_->selected(f)) {
+      ids.push_back(f);
+    }
+  }
+  return order_chop(ids, id);
+}
+
+std::int32_t TreeSet::order_chop(const std::vector<std::int32_t>& ids, std::int32_t id) {
   if (followers_ == nullptr || grid_ == nullptr || !grid_->ready() || id < 0 || id >= count()) {
     return 0;
   }
@@ -192,11 +232,11 @@ std::int32_t TreeSet::order_chop_selected(std::int32_t id) {
     return 0;
   }
 
-  // Selected braves not already at this tree, nearest first. Warriors have
-  // better things to do, and the shaman has spells.
+  // Braves not already at this tree, nearest first. Warriors have better
+  // things to do, and the shaman has spells.
   std::vector<std::pair<double, std::int32_t>> candidates;
-  for (std::int32_t f = 0; f < followers_->count(); ++f) {
-    if (!followers_->selected(f) || !followers_->is_brave(f) || followers_->is_shaman(f) ||
+  for (const std::int32_t f : ids) {
+    if (!followers_->takes_orders(f) || !followers_->is_brave(f) || followers_->is_shaman(f) ||
         followers_->tree(f) == id) {
       continue;
     }

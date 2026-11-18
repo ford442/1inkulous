@@ -3,6 +3,7 @@ import createCoreModule, { type CoreModule } from '../wasm/core.js'
 import { HutKind, type HutSite } from './hutSite'
 import type { Spell, SpellResult } from './spell'
 import type { Role } from './role'
+import type { AiAction } from './ai'
 
 /**
  * The JS side of the WASM boundary.
@@ -35,6 +36,7 @@ export type NodeRange = { readonly first: number; readonly last: number }
 export { HutKind, HutSite } from './hutSite'
 export { Spell, SpellResult, SPELLS } from './spell'
 export { Role } from './role'
+export { AiAction } from './ai'
 
 /** A hut site as the core judged it. */
 export type HutSiteReport = {
@@ -224,6 +226,8 @@ export type Simulation = {
   orderChop: (id: number) => number
   /** 0..1 through chopping; -1 for a bad id. */
   treeProgress: (id: number) => number
+  /** Plants one tree on the walkable node nearest a direction. Its id, or -1. For tests and scenarios. */
+  plantTree: (direction: Vec3) => number
   /** Wood a felled tree gives, and the brave-seconds it takes. */
   readonly woodPerTree: number
   readonly chopSeconds: number
@@ -235,6 +239,8 @@ export type Simulation = {
   mana: (tribe: number) => number
   /** Mana a tribe is gaining per second right now. */
   manaIncome: (tribe: number) => number
+  /** Everyone of a tribe, walking or inside a hut, as of the last step. */
+  population: (tribe: number) => number
   setMana: (tribe: number, mana: number) => void
   readonly manaMax: number
   /** Each spell's rules, indexed by `Spell`. */
@@ -261,6 +267,28 @@ export type Simulation = {
   lastSpellEnd: (tribe: number) => SpellEnd
   /** The stamps of the last Land Bridge to land, or null if none has. */
   landBridgePlan: () => LandBridgePlan | null
+
+  /** True once the tribe's shaman has been killed: its people take no more orders. */
+  shamanFallen: (tribe: number) => boolean
+  /** True once a shaman has fallen and at most one still stands. */
+  readonly matchOver: boolean
+  /** The tribe whose shaman is left standing once the match is over; -1 until then. */
+  readonly matchWinner: number
+
+  /**
+   * Hands a tribe to the core's AI, which thinks every `aiThinkSeconds` and
+   * gives the same orders and casts the player's clicks do. False for a tribe
+   * with neither a hut nor a shaman.
+   */
+  enableAi: (tribe: number) => boolean
+  disableAi: (tribe: number) => void
+  aiEnabled: (tribe: number) => boolean
+  /** What the tribe's last think did. */
+  aiLastAction: (tribe: number) => AiAction
+  /** Thinks that did something, and thinks in all. */
+  aiActions: (tribe: number) => number
+  aiThinks: (tribe: number) => number
+  readonly aiThinkSeconds: number
 
   /** Escape hatch for future bulk reads straight out of linear memory. */
   readonly module: CoreModule
@@ -590,6 +618,10 @@ export async function createSimulation(
       return module._core_tree_progress(id)
     },
 
+    plantTree(direction: Vec3) {
+      return module._core_tree_plant(direction[0], direction[1], direction[2])
+    },
+
     woodPerTree: module._core_tree_wood(),
     chopSeconds: module._core_tree_chop_seconds(),
 
@@ -607,6 +639,10 @@ export async function createSimulation(
 
     manaIncome(tribe: number) {
       return module._core_mana_income(tribe)
+    },
+
+    population(tribe: number) {
+      return module._core_population(tribe)
     },
 
     setMana(tribe: number, mana: number) {
@@ -686,5 +722,42 @@ export async function createSimulation(
         height: module._core_land_bridge_height(),
       }
     },
+    shamanFallen(tribe: number) {
+      return module._core_shaman_fallen(tribe) !== 0
+    },
+
+    get matchOver() {
+      return module._core_match_over() !== 0
+    },
+
+    get matchWinner() {
+      return module._core_match_winner()
+    },
+
+    enableAi(tribe: number) {
+      return module._core_ai_enable(tribe) !== 0
+    },
+
+    disableAi(tribe: number) {
+      module._core_ai_disable(tribe)
+    },
+
+    aiEnabled(tribe: number) {
+      return module._core_ai_enabled(tribe) !== 0
+    },
+
+    aiLastAction(tribe: number) {
+      return module._core_ai_last_action(tribe) as AiAction
+    },
+
+    aiActions(tribe: number) {
+      return module._core_ai_actions(tribe)
+    },
+
+    aiThinks(tribe: number) {
+      return module._core_ai_thinks(tribe)
+    },
+
+    aiThinkSeconds: module._core_ai_think_seconds(),
   }
 }

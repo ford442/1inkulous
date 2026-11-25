@@ -1334,7 +1334,6 @@ ok('and reads its ceiling back', Math.abs(m._core_terrain_max_height() - CAP) < 
   m._core_terrain_clear_dirty()
   ok('and clears', isClean())
 
-  before = coreHeights()
   m._core_terrain_sculpt(...centre, brush, -1)
   ok('a deep stroke floods to exactly sea level', coreHeights()[centreNode] === 0)
   ok('which is water to the graph', m._core_nav_nearest_walkable(...centre) !== centreNode)

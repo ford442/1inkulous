@@ -560,8 +560,8 @@ export async function createSimulation(
       const centre: Vec3 | null =
         heap[at] === 0 && heap[at + 1] === 0 && heap[at + 2] === 0
           ? null
-          : [heap[at], heap[at + 1], heap[at + 2]]
-      return { site, centre, footprint: heap[at + 3] }
+          : [heap[at]!, heap[at + 1]!, heap[at + 2]!]
+      return { site, centre, footprint: heap[at + 3]! }
     },
 
     placeHut(direction: Vec3, heading: Vec3, tribe: number, kind: HutKind = HutKind.dwelling) {
@@ -729,8 +729,8 @@ export async function createSimulation(
       return {
         spell: spell as Spell,
         progress: module._core_spell_progress(tribe),
-        target: [heap[base], heap[base + 1], heap[base + 2]] as Vec3,
-        radius: heap[base + 3],
+        target: [heap[base]!, heap[base + 1]!, heap[base + 2]!],
+        radius: heap[base + 3]!,
       }
     },
 
@@ -756,7 +756,7 @@ export async function createSimulation(
       const stamps: Vec3[] = []
       for (let i = 0; i < count; i += 1) {
         const base = start + i * 3
-        stamps.push([module.HEAPF32[base], module.HEAPF32[base + 1], module.HEAPF32[base + 2]])
+        stamps.push([module.HEAPF32[base]!, module.HEAPF32[base + 1]!, module.HEAPF32[base + 2]!])
       }
       return {
         stamps,

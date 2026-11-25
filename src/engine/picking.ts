@@ -34,9 +34,9 @@ export function screenRay(
   // The view matrix' rows are the camera axes in world space, so reading them
   // back out transforms a camera-space direction into world space.
   const m = camera.viewMatrix
-  const x = cx * m[0] + cy * m[1] - m[2]
-  const y = cx * m[4] + cy * m[5] - m[6]
-  const z = cx * m[8] + cy * m[9] - m[10]
+  const x = cx * m[0]! + cy * m[1]! - m[2]!
+  const y = cx * m[4]! + cy * m[5]! - m[6]!
+  const z = cx * m[8]! + cy * m[9]! - m[10]!
 
   const length = Math.hypot(x, y, z) || 1
   return {
@@ -64,9 +64,9 @@ export function worldToNdc(
   const px = point[0]
   const py = point[1]
   const pz = point[2]
-  const cx = m[0] * px + m[4] * py + m[8] * pz + m[12]
-  const cy = m[1] * px + m[5] * py + m[9] * pz + m[13]
-  const cz = m[2] * px + m[6] * py + m[10] * pz + m[14]
+  const cx = m[0]! * px + m[4]! * py + m[8]! * pz + m[12]!
+  const cy = m[1]! * px + m[5]! * py + m[9]! * pz + m[13]!
+  const cz = m[2]! * px + m[6]! * py + m[10]! * pz + m[14]!
 
   // The view looks down camera -Z, so a point in front has negative cz.
   if (cz >= 0) {

@@ -110,9 +110,9 @@ export function createFollowers(
   )
 
   const nodeDirection = (node: number): Vec3 => [
-    graph.directions[node * 3],
-    graph.directions[node * 3 + 1],
-    graph.directions[node * 3 + 2],
+    graph.directions[node * 3]!,
+    graph.directions[node * 3 + 1]!,
+    graph.directions[node * 3 + 2]!,
   ]
 
   let homeDirection: Vec3 | null = null
@@ -120,12 +120,12 @@ export function createFollowers(
   // so she starts in the middle of her people.
   let first = 0
   if (shamanTribe !== null && spawnNodes.length > 0) {
-    simulation.spawnShaman(nodeDirection(spawnNodes[0]), shamanTribe)
+    simulation.spawnShaman(nodeDirection(spawnNodes[0]!), shamanTribe)
     first = 1
   }
   for (let i = first; i < spawnNodes.length; i += 1) {
     const tribe = options.tribe ?? (i - first) % 4
-    simulation.spawnFollower(nodeDirection(spawnNodes[i]), tribe)
+    simulation.spawnFollower(nodeDirection(spawnNodes[i]!), tribe)
   }
 
   if (spawnNodes.length > 0) {
@@ -135,9 +135,9 @@ export function createFollowers(
     let hy = 0
     let hz = 0
     for (const node of spawnNodes) {
-      hx += graph.directions[node * 3]
-      hy += graph.directions[node * 3 + 1]
-      hz += graph.directions[node * 3 + 2]
+      hx += graph.directions[node * 3]!
+      hy += graph.directions[node * 3 + 1]!
+      hz += graph.directions[node * 3 + 2]!
     }
     const length = Math.hypot(hx, hy, hz)
     if (length > 0) {
@@ -162,9 +162,9 @@ export function createFollowers(
         continue
       }
       const base = id * stride + OFFSET_POSITION
-      const px = data[base]
-      const py = data[base + 1]
-      const pz = data[base + 2]
+      const px = data[base]!
+      const py = data[base + 1]!
+      const pz = data[base + 2]!
 
       // Horizon test: on a sphere, a point is visible exactly when it faces the
       // eye. Cheaper and sharper than intersecting the terrain again.
@@ -207,7 +207,7 @@ export function createFollowers(
     const stride = simulation.followerInstanceFloats
     let total = 0
     for (let id = 0; id < data.length / stride; id += 1) {
-      if (data[id * stride + OFFSET_TRIBE] === PLAYER_TRIBE && test(data[id * stride + OFFSET_FLAGS])) {
+      if (data[id * stride + OFFSET_TRIBE] === PLAYER_TRIBE && test(data[id * stride + OFFSET_FLAGS]!)) {
         total += 1
       }
     }
@@ -332,7 +332,7 @@ export function createFollowers(
 
         const data = simulation.followerInstances()
         const flags = data[id * simulation.followerInstanceFloats + OFFSET_FLAGS]
-        simulation.setFollowerSelected(id, (flags & FLAG_SELECTED) === 0)
+        simulation.setFollowerSelected(id, (flags! & FLAG_SELECTED) === 0)
       }
     },
   }
@@ -355,25 +355,25 @@ export function findSpawnNodes(
   const { nodeCount, neighborOffsets, neighbors, directions } = graph
 
   const arcLength = (a: number, b: number) => {
-    const dx = directions[a * 3] - directions[b * 3]
-    const dy = directions[a * 3 + 1] - directions[b * 3 + 1]
-    const dz = directions[a * 3 + 2] - directions[b * 3 + 2]
+    const dx = directions[a * 3]! - directions[b * 3]!
+    const dy = directions[a * 3 + 1]! - directions[b * 3 + 1]!
+    const dz = directions[a * 3 + 2]! - directions[b * 3 + 2]!
     const chord = Math.hypot(dx, dy, dz)
     return 2 * Math.asin(Math.min(1, chord / 2)) * planetRadius
   }
 
   const steepestAround = (node: number): number => {
     let steepest = 0
-    for (let link = neighborOffsets[node]; link < neighborOffsets[node + 1]; link += 1) {
+    for (let link = neighborOffsets[node]!; link < neighborOffsets[node + 1]!; link += 1) {
       const neighbor = neighbors[link]
       // A shoreline node has ocean next door: not flat land, whatever its own
       // slope says.
-      if (heights[neighbor] <= 0) {
+      if (heights[neighbor!]! <= 0) {
         return Infinity
       }
-      const run = arcLength(node, neighbor)
+      const run = arcLength(node, neighbor!)
       if (run > 0) {
-        steepest = Math.max(steepest, Math.abs(heights[neighbor] - heights[node]) / run)
+        steepest = Math.max(steepest, Math.abs(heights[neighbor!]! - heights[node]!) / run)
       }
     }
     return steepest
@@ -387,7 +387,7 @@ export function findSpawnNodes(
   let shoreline = -1
 
   for (let node = 0; node < nodeCount; node += 1) {
-    if (heights[node] <= 0) {
+    if (heights[node]! <= 0) {
       continue
     }
     if (shoreline < 0) {
@@ -432,17 +432,17 @@ export function findSpawnNodes(
       chosen.push(node)
     }
 
-    for (let link = neighborOffsets[node]; link < neighborOffsets[node + 1]; link += 1) {
+    for (let link = neighborOffsets[node]!; link < neighborOffsets[node + 1]!; link += 1) {
       const neighbor = neighbors[link]
-      if (queued[neighbor] || heights[neighbor] <= 0) {
+      if (queued[neighbor!] || heights[neighbor!]! <= 0) {
         continue
       }
-      const run = arcLength(node, neighbor)
-      if (run > 0 && Math.abs(heights[neighbor] - heights[node]) / run > MAX_WALKABLE_SLOPE) {
+      const run = arcLength(node, neighbor!)
+      if (run > 0 && Math.abs(heights[neighbor!]! - heights[node]!) / run > MAX_WALKABLE_SLOPE) {
         continue
       }
-      queued[neighbor] = 1
-      queue.push(neighbor)
+      queued[neighbor!] = 1
+      queue.push(neighbor!)
     }
   }
 
@@ -477,9 +477,9 @@ export function followerIdsInDragRect(
 
   for (let id = 0; id < count; id += 1) {
     const base = id * stride + OFFSET_POSITION
-    const px = instances[base]
-    const py = instances[base + 1]
-    const pz = instances[base + 2]
+    const px = instances[base]!
+    const py = instances[base + 1]!
+    const pz = instances[base + 2]!
 
     const ex = eye[0] - px
     const ey = eye[1] - py

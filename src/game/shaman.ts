@@ -136,7 +136,7 @@ export function createShaman(planet: Planet, simulation: SimulationClient): Sham
     }
     const data = simulation.followerInstances()
     const base = id * simulation.followerInstanceFloats + OFFSET_POSITION
-    const point: Vec3 = [data[base], data[base + 1], data[base + 2]]
+    const point: Vec3 = [data[base]!, data[base + 1]!, data[base + 2]!]
     const length = Math.hypot(point[0], point[1], point[2])
     return length > 0 ? [point[0] / length, point[1] / length, point[2] / length] : null
   }
@@ -169,7 +169,7 @@ export function createShaman(planet: Planet, simulation: SimulationClient): Sham
   // as started, and a refusal still reaches the HUD when it arrives.
   const cast = (spell: Spell, to: Vec3, origin: Vec3 | null): boolean =>
     settle(simulation.castSpell(spell, tribe, to, origin), (result) => {
-      const cost = simulation.spellRules[spell].cost
+      const cost = simulation.spellRules[spell]!.cost
       if (result !== SpellResult.ok) {
         say(spellProblem(spell, result, cost))
         return false
@@ -181,7 +181,7 @@ export function createShaman(planet: Planet, simulation: SimulationClient): Sham
     spell,
     key: keyLabel(SPELL_KEYS[spell]),
     name: SPELL_NAMES[spell],
-    cost: simulation.spellRules[spell].cost,
+    cost: simulation.spellRules[spell]!.cost,
     get cooldown() {
       return simulation.spellCooldown(tribe, spell)
     },
@@ -236,7 +236,7 @@ export function createShaman(planet: Planet, simulation: SimulationClient): Sham
       const ended = simulation.lastSpellEnd(tribe)
       if (ended.count !== endsSeen) {
         endsSeen = ended.count
-        say(castEnding(ended.spell, ended.result, simulation.spellRules[ended.spell].cost))
+        say(castEnding(ended.spell, ended.result, simulation.spellRules[ended.spell]!.cost))
       }
 
       if (FIND_KEYS.some((code) => input.pressed.has(code))) {

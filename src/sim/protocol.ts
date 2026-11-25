@@ -251,12 +251,21 @@ export function createTripleBuffer(bytes: number): SharedSnapshots {
   return { control, slots: [0, 1, 2].map(() => new SharedArrayBuffer(bytes)) }
 }
 
+/** Slot `index`, which the control word keeps within 0..2. */
+function slotAt(shared: SharedSnapshots, index: number): SharedArrayBuffer {
+  const slot = shared.slots[index]
+  if (slot === undefined) {
+    throw new RangeError(`triple buffer has no slot ${index}`)
+  }
+  return slot
+}
+
 export function tripleBufferWriter(shared: SharedSnapshots) {
   const control = new Int32Array(shared.control)
   let writing = 0
   return {
     get slot() {
-      return shared.slots[writing]
+      return slotAt(shared, writing)
     },
     /** Publishes the slot just written and moves on to the free one. */
     publish() {
@@ -271,7 +280,7 @@ export function tripleBufferReader(shared: SharedSnapshots) {
   let reading = 2
   return {
     get slot() {
-      return shared.slots[reading]
+      return slotAt(shared, reading)
     },
     get sequence() {
       return Atomics.load(control, 1)
@@ -302,7 +311,7 @@ export function stateDigest(simulation: Simulation): number {
   const mixFloats = (data: Float32Array) => {
     const bits = new Int32Array(data.buffer, data.byteOffset, data.length)
     for (let i = 0; i < bits.length; i += 1) {
-      mix(bits[i])
+      mix(bits[i]!)
     }
   }
   mixFloats(simulation.followerInstances())

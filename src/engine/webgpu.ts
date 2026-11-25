@@ -68,7 +68,7 @@ export function planRequiredLimits(
       continue
     }
     const have = supported[key]
-    if (!(have >= need)) {
+    if (have === undefined || !(have >= need)) {
       shortfalls.push(`${key}: the game needs ${megabytes(need)} but this GPU allows ${megabytes(have ?? 0)}`)
       continue
     }

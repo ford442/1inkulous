@@ -130,14 +130,14 @@ export function directionToFaceCoords(x: number, y: number, z: number): FaceCoor
 
   for (let f = 0; f < 6; f += 1) {
     const up = FACE_UPS[f]
-    const dot = up[0] * x + up[1] * y + up[2] * z
+    const dot = up![0] * x + up![1] * y + up![2] * z
     if (dot > best) {
       best = dot
       face = f
     }
   }
 
-  const { axisA, axisB } = FACE_BASES[face]
+  const { axisA, axisB } = FACE_BASES[face]!
   // Dividing by the face-axis component projects onto the cube face; unwarping
   // then undoes the tangent spread applied at generation time.
   const scale = best !== 0 ? 1 / best : 0
@@ -184,7 +184,7 @@ export function createPlanetMesh(options: CubeSphereOptions = {}): PlanetMesh {
         const u = ix / resolution
         const a = warp(u * 2 - 1)
 
-        const [dx, dy, dz] = faceToDirection(basis, a, b)
+        const [dx, dy, dz] = faceToDirection(basis!, a, b)
 
         directions[vertexCursor * 3 + 0] = dx
         directions[vertexCursor * 3 + 1] = dy
@@ -233,8 +233,8 @@ export function createPlanetMesh(options: CubeSphereOptions = {}): PlanetMesh {
     if (!isOutwardFacing(directions, indices, faceIndexStart)) {
       for (let i = faceIndexStart; i < indexCursor; i += 3) {
         const swap = indices[i + 1]
-        indices[i + 1] = indices[i + 2]
-        indices[i + 2] = swap
+        indices[i + 1] = indices[i + 2]!
+        indices[i + 2] = swap!
       }
     }
   }
@@ -282,20 +282,20 @@ function buildWeldTriangles(
 ) {
   const counts = new Uint32Array(weldCount)
   for (let i = 0; i < indices.length; i += 1) {
-    counts[weldIds[indices[i]]] += 1
+    counts[weldIds[indices[i]!]!]! += 1
   }
 
   const weldTriangleOffsets = new Uint32Array(weldCount + 1)
   for (let w = 0; w < weldCount; w += 1) {
-    weldTriangleOffsets[w + 1] = weldTriangleOffsets[w] + counts[w]
+    weldTriangleOffsets[w + 1] = weldTriangleOffsets[w]! + counts[w]!
   }
 
   const cursor = weldTriangleOffsets.slice(0, weldCount)
   const weldTriangles = new Uint32Array(indices.length)
   for (let i = 0; i < indices.length; i += 1) {
-    const weld = weldIds[indices[i]]
-    weldTriangles[cursor[weld]] = (i / 3) | 0
-    cursor[weld] += 1
+    const weld = weldIds[indices[i]!]!
+    weldTriangles[cursor[weld]!] = (i / 3) | 0
+    cursor[weld]! += 1
   }
 
   return { weldTriangleOffsets, weldTriangles }
@@ -305,42 +305,42 @@ function buildWeldTriangles(
 function buildWeldVertices(weldIds: Uint32Array, weldCount: number) {
   const counts = new Uint32Array(weldCount)
   for (let i = 0; i < weldIds.length; i += 1) {
-    counts[weldIds[i]] += 1
+    counts[weldIds[i]!]! += 1
   }
 
   const weldVertexOffsets = new Uint32Array(weldCount + 1)
   for (let w = 0; w < weldCount; w += 1) {
-    weldVertexOffsets[w + 1] = weldVertexOffsets[w] + counts[w]
+    weldVertexOffsets[w + 1] = weldVertexOffsets[w]! + counts[w]!
   }
 
   const cursor = weldVertexOffsets.slice(0, weldCount)
   const weldVertices = new Uint32Array(weldIds.length)
   for (let i = 0; i < weldIds.length; i += 1) {
-    const weld = weldIds[i]
-    weldVertices[cursor[weld]] = i
-    cursor[weld] += 1
+    const weld = weldIds[i]!
+    weldVertices[cursor[weld]!] = i
+    cursor[weld]! += 1
   }
 
   return { weldVertexOffsets, weldVertices }
 }
 
 function isOutwardFacing(directions: Float32Array, indices: Uint32Array, at: number): boolean {
-  const a = indices[at] * 3
-  const b = indices[at + 1] * 3
-  const c = indices[at + 2] * 3
+  const a = indices[at]! * 3
+  const b = indices[at + 1]! * 3
+  const c = indices[at + 2]! * 3
 
-  const e1x = directions[b] - directions[a]
-  const e1y = directions[b + 1] - directions[a + 1]
-  const e1z = directions[b + 2] - directions[a + 2]
-  const e2x = directions[c] - directions[a]
-  const e2y = directions[c + 1] - directions[a + 1]
-  const e2z = directions[c + 2] - directions[a + 2]
+  const e1x = directions[b]! - directions[a]!
+  const e1y = directions[b + 1]! - directions[a + 1]!
+  const e1z = directions[b + 2]! - directions[a + 2]!
+  const e2x = directions[c]! - directions[a]!
+  const e2y = directions[c + 1]! - directions[a + 1]!
+  const e2z = directions[c + 2]! - directions[a + 2]!
 
   const nx = e1y * e2z - e1z * e2y
   const ny = e1z * e2x - e1x * e2z
   const nz = e1x * e2y - e1y * e2x
 
-  return nx * directions[a] + ny * directions[a + 1] + nz * directions[a + 2] > 0
+  return nx * directions[a]! + ny * directions[a + 1]! + nz * directions[a + 2]! > 0
 }
 
 /** Index of the vertex at a face grid cell corner. */
@@ -376,7 +376,7 @@ export function sampleHeight(mesh: PlanetMesh, x: number, y: number, z: number):
   const h11 = heights[vertexIndexAt(mesh, face, ix + 1, iy + 1)]
 
   return (
-    h00 * (1 - tx) * (1 - ty) + h10 * tx * (1 - ty) + h01 * (1 - tx) * ty + h11 * tx * ty
+    h00! * (1 - tx) * (1 - ty) + h10! * tx * (1 - ty) + h01! * (1 - tx) * ty + h11! * tx * ty
   )
 }
 
@@ -384,7 +384,7 @@ export function sampleHeight(mesh: PlanetMesh, x: number, y: number, z: number):
 export function applyHeightField(mesh: PlanetMesh, field: HeightField): void {
   const { directions, heights, vertexCount } = mesh
   for (let i = 0; i < vertexCount; i += 1) {
-    heights[i] = field(directions[i * 3], directions[i * 3 + 1], directions[i * 3 + 2], i)
+    heights[i] = field(directions[i * 3]!, directions[i * 3 + 1]!, directions[i * 3 + 2]!, i)
   }
   refreshGeometry(mesh)
 }
@@ -419,11 +419,11 @@ export function refreshGeometry(mesh: PlanetMesh): void {
   const { directions, heights, vertexData, vertexCount, radius } = mesh
 
   for (let i = 0; i < vertexCount; i += 1) {
-    const r = radius + heights[i]
+    const r = radius + heights[i]!
     const base = i * VERTEX_FLOATS
-    vertexData[base + 0] = directions[i * 3 + 0] * r
-    vertexData[base + 1] = directions[i * 3 + 1] * r
-    vertexData[base + 2] = directions[i * 3 + 2] * r
+    vertexData[base + 0] = directions[i * 3 + 0]! * r
+    vertexData[base + 1] = directions[i * 3 + 1]! * r
+    vertexData[base + 2] = directions[i * 3 + 2]! * r
   }
 
   recomputeAllNormals(mesh)
@@ -455,11 +455,11 @@ export function refreshVertices(mesh: PlanetMesh, vertices: readonly number[]): 
   } = mesh
 
   for (const i of vertices) {
-    const r = radius + heights[i]
+    const r = radius + heights[i]!
     const base = i * VERTEX_FLOATS
-    vertexData[base + 0] = directions[i * 3 + 0] * r
-    vertexData[base + 1] = directions[i * 3 + 1] * r
-    vertexData[base + 2] = directions[i * 3 + 2] * r
+    vertexData[base + 0] = directions[i * 3 + 0]! * r
+    vertexData[base + 1] = directions[i * 3 + 1]! * r
+    vertexData[base + 2] = directions[i * 3 + 2]! * r
     markDirty(mesh, i, i)
   }
 
@@ -467,12 +467,13 @@ export function refreshVertices(mesh: PlanetMesh, vertices: readonly number[]): 
   // normal rebuilt, including the ring of neighbours that did not move.
   const affected = new Set<number>()
   for (const vertex of vertices) {
-    const weld = weldIds[vertex]
-    for (let t = weldTriangleOffsets[weld]; t < weldTriangleOffsets[weld + 1]; t += 1) {
-      const triangle = weldTriangles[t] * 3
-      affected.add(weldIds[indices[triangle]])
-      affected.add(weldIds[indices[triangle + 1]])
-      affected.add(weldIds[indices[triangle + 2]])
+    const weld = weldIds[vertex]!
+    const end = weldTriangleOffsets[weld + 1]!
+    for (let t = weldTriangleOffsets[weld]!; t < end; t += 1) {
+      const triangle = weldTriangles[t]! * 3
+      affected.add(weldIds[indices[triangle]!]!)
+      affected.add(weldIds[indices[triangle + 1]!]!)
+      affected.add(weldIds[indices[triangle + 2]!]!)
     }
   }
 
@@ -481,18 +482,18 @@ export function refreshVertices(mesh: PlanetMesh, vertices: readonly number[]): 
     let ny = 0
     let nz = 0
 
-    for (let t = weldTriangleOffsets[weld]; t < weldTriangleOffsets[weld + 1]; t += 1) {
-      const triangle = weldTriangles[t] * 3
-      const ia = indices[triangle] * VERTEX_FLOATS
-      const ib = indices[triangle + 1] * VERTEX_FLOATS
-      const ic = indices[triangle + 2] * VERTEX_FLOATS
+    for (let t = weldTriangleOffsets[weld]!; t < weldTriangleOffsets[weld + 1]!; t += 1) {
+      const triangle = weldTriangles[t]! * 3
+      const ia = indices[triangle]! * VERTEX_FLOATS
+      const ib = indices[triangle + 1]! * VERTEX_FLOATS
+      const ic = indices[triangle + 2]! * VERTEX_FLOATS
 
-      const e1x = vertexData[ib] - vertexData[ia]
-      const e1y = vertexData[ib + 1] - vertexData[ia + 1]
-      const e1z = vertexData[ib + 2] - vertexData[ia + 2]
-      const e2x = vertexData[ic] - vertexData[ia]
-      const e2y = vertexData[ic + 1] - vertexData[ia + 1]
-      const e2z = vertexData[ic + 2] - vertexData[ia + 2]
+      const e1x = vertexData[ib]! - vertexData[ia]!
+      const e1y = vertexData[ib + 1]! - vertexData[ia + 1]!
+      const e1z = vertexData[ib + 2]! - vertexData[ia + 2]!
+      const e2x = vertexData[ic]! - vertexData[ia]!
+      const e2y = vertexData[ic + 1]! - vertexData[ia + 1]!
+      const e2z = vertexData[ic + 2]! - vertexData[ia + 2]!
 
       // Unnormalised cross product, so larger triangles weigh more.
       nx += e1y * e2z - e1z * e2y
@@ -501,24 +502,24 @@ export function refreshVertices(mesh: PlanetMesh, vertices: readonly number[]): 
     }
 
     const length = Math.hypot(nx, ny, nz)
-    const first = weldVertices[weldVertexOffsets[weld]]
+    const first = weldVertices[weldVertexOffsets[weld]!]!
     if (length > 1e-8) {
       nx /= length
       ny /= length
       nz /= length
     } else {
-      nx = directions[first * 3]
-      ny = directions[first * 3 + 1]
-      nz = directions[first * 3 + 2]
+      nx = directions[first * 3]!
+      ny = directions[first * 3 + 1]!
+      nz = directions[first * 3 + 2]!
     }
 
-    for (let v = weldVertexOffsets[weld]; v < weldVertexOffsets[weld + 1]; v += 1) {
+    for (let v = weldVertexOffsets[weld]!; v < weldVertexOffsets[weld + 1]!; v += 1) {
       const vertex = weldVertices[v]
-      const base = vertex * VERTEX_FLOATS
+      const base = vertex! * VERTEX_FLOATS
       vertexData[base + 3] = nx
       vertexData[base + 4] = ny
       vertexData[base + 5] = nz
-      markDirty(mesh, vertex, vertex)
+      markDirty(mesh, vertex!, vertex!)
     }
   }
 
@@ -530,40 +531,40 @@ function recomputeAllNormals(mesh: PlanetMesh): void {
   const accum = new Float32Array(weldCount * 3)
 
   for (let i = 0; i < indices.length; i += 3) {
-    const ia = indices[i] * VERTEX_FLOATS
-    const ib = indices[i + 1] * VERTEX_FLOATS
-    const ic = indices[i + 2] * VERTEX_FLOATS
+    const ia = indices[i]! * VERTEX_FLOATS
+    const ib = indices[i + 1]! * VERTEX_FLOATS
+    const ic = indices[i + 2]! * VERTEX_FLOATS
 
-    const e1x = vertexData[ib] - vertexData[ia]
-    const e1y = vertexData[ib + 1] - vertexData[ia + 1]
-    const e1z = vertexData[ib + 2] - vertexData[ia + 2]
-    const e2x = vertexData[ic] - vertexData[ia]
-    const e2y = vertexData[ic + 1] - vertexData[ia + 1]
-    const e2z = vertexData[ic + 2] - vertexData[ia + 2]
+    const e1x = vertexData[ib]! - vertexData[ia]!
+    const e1y = vertexData[ib + 1]! - vertexData[ia + 1]!
+    const e1z = vertexData[ib + 2]! - vertexData[ia + 2]!
+    const e2x = vertexData[ic]! - vertexData[ia]!
+    const e2y = vertexData[ic + 1]! - vertexData[ia + 1]!
+    const e2z = vertexData[ic + 2]! - vertexData[ia + 2]!
 
     const nx = e1y * e2z - e1z * e2y
     const ny = e1z * e2x - e1x * e2z
     const nz = e1x * e2y - e1y * e2x
 
     for (let k = 0; k < 3; k += 1) {
-      const weld = weldIds[indices[i + k]] * 3
-      accum[weld] += nx
-      accum[weld + 1] += ny
-      accum[weld + 2] += nz
+      const weld = weldIds[indices[i + k]!]! * 3
+      accum[weld]! += nx
+      accum[weld + 1]! += ny
+      accum[weld + 2]! += nz
     }
   }
 
   for (let i = 0; i < vertexCount; i += 1) {
-    const weld = weldIds[i] * 3
+    const weld = weldIds[i]! * 3
     let nx = accum[weld]
     let ny = accum[weld + 1]
     let nz = accum[weld + 2]
-    const length = Math.hypot(nx, ny, nz)
+    const length = Math.hypot(nx!, ny!, nz!)
 
     if (length > 1e-8) {
-      nx /= length
-      ny /= length
-      nz /= length
+      nx! /= length
+      ny! /= length
+      nz! /= length
     } else {
       nx = directions[i * 3]
       ny = directions[i * 3 + 1]
@@ -571,8 +572,8 @@ function recomputeAllNormals(mesh: PlanetMesh): void {
     }
 
     const base = i * VERTEX_FLOATS
-    vertexData[base + 3] = nx
-    vertexData[base + 4] = ny
-    vertexData[base + 5] = nz
+    vertexData[base + 3] = nx!
+    vertexData[base + 4] = ny!
+    vertexData[base + 5] = nz!
   }
 }

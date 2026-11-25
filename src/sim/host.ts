@@ -58,7 +58,7 @@ export function serveCore(port: HostPort): void {
     const sim = core!
     const shape = layout!
     const { header, floats } = viewSnapshot(buffer, shape)
-    header[H.seq] += 1
+    header[H.seq]! += 1
     header[H.stepMs] = sim.stepMs
     header[H.stepCount] = sim.stepCount
     header[H.elapsedMs] = sim.elapsedMs
@@ -177,7 +177,9 @@ export function serveCore(port: HostPort): void {
     switch (message.type) {
       case 'init': {
         manual = message.options.clock === 'manual'
-        core = await createSimulation({ stepMs: message.options.stepMs })
+        core = await createSimulation(
+          message.options.stepMs === undefined ? {} : { stepMs: message.options.stepMs },
+        )
         for (const command of message.log) {
           applyCommand(core, command)
         }
@@ -210,7 +212,7 @@ export function serveCore(port: HostPort): void {
         message.commands.forEach((command, i) => {
           const value = applyCommand(core!, command)
           const id = message.ids[i]
-          if (id !== null) {
+          if (id !== null && id !== undefined) {
             results.push({ id, value })
           }
         })

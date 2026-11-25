@@ -28,6 +28,7 @@ import type {
 } from './simulation'
 import { SpellResult, type Spell } from './spell'
 import type { Role } from './role'
+import type { Replay, StampedCommand } from './replay'
 
 /** The main thread's end: a Worker, or one side of a MessageChannel. */
 /**
@@ -62,7 +63,24 @@ export type WorkerSimulation = SimulationClient & {
   advance: (ms: number) => void
   /** Resolves once every command sent so far has run and its snapshot is out. */
   flush: () => Promise<void>
+  /** The match so far, from the host's log: after every command sent before the call. */
+  exportReplay: () => Promise<Replay>
   dispose: () => void
+}
+
+/**
+ * How far between poses to draw, from the worker's side of the clock: the
+ * host stamps when its clock last ran (`clockAt`, ms since the epoch, or
+ * negative on a manual clock) and the time it carried towards the next step;
+ * the time since then is ours to add. Held at 1 when the worker is late,
+ * rather than drawn past where it has got to.
+ */
+export function stepAlphaAt(pendingMs: number, clockAt: number, stepMs: number, now: number): number {
+  if (!(stepMs > 0)) {
+    return 0
+  }
+  const since = clockAt >= 0 ? Math.max(0, now - clockAt) : 0
+  return Math.min(1, Math.max(0, (pendingMs + since) / stepMs))
 }
 
 /**
@@ -77,10 +95,11 @@ export type WorkerSimulation = SimulationClient & {
 export function connectWorkerSimulation(
   port: ClientPort,
   shadow: Simulation,
-  log: readonly Command[],
+  log: readonly StampedCommand[],
   options: HostOptions = {},
 ): Promise<WorkerSimulation> {
   const expected = stateDigest(shadow)
+  const expectedHash = shadow.stateHash()
   const send = (message: ToHost, transfer: Transferable[] = []) => port.postMessage(message, transfer)
 
   let layout: SnapshotLayout | null = null
@@ -109,10 +128,11 @@ export function connectWorkerSimulation(
           incoming = message.buffer
           return
         case 'ready': {
-          if (message.digest !== expected) {
+          if (message.digest !== expected || message.hash !== expectedHash) {
             reject(
               new Error(
-                `The worker's core rebuilt a different world (digest ${message.digest} vs ${expected}).`,
+                `The worker's core rebuilt a different world (digest ${message.digest} vs ${expected}, ` +
+                  `state hash ${message.hash} vs ${expectedHash}).`,
               ),
             )
             return
@@ -299,9 +319,21 @@ export function connectWorkerSimulation(
         lastSteps = header(H.stepCount)
         return steps
       },
+      get stepAlpha() {
+        const h = header()
+        return stepAlphaAt(h[H.pendingMs], h[H.clockAt], h[H.stepMs], performance.timeOrigin + performance.now())
+      },
       reset() {
         command('reset', [], false)
       },
+      runSteps: offThread('runSteps') as (count: number) => number,
+      seedMatch: (...args) => command('seedMatch', args, false),
+      get matchSeed() {
+        return header()[H.matchSeed]
+      },
+      stateHash: offThread('stateHash') as () => number,
+      checkpoints: offThread('checkpoints') as () => { step: number; hash: number }[],
+      checkpointEvery: shadow.checkpointEvery,
       takeSimMsPerStep() {
         const steps = header(H.simStepsTotal) - simStepsSeen
         const ms = header(H.simMsTotal) - simMsSeen
@@ -324,6 +356,13 @@ export function connectWorkerSimulation(
           query: { op: 'checkSpell', args: [0 as Spell, -1, [0, 0, 1], null] },
         })
         return done
+      },
+      exportReplay() {
+        flushQueue()
+        const id = nextId++
+        const replay = new Promise<Replay>((done) => answers.set(id, (value) => done(value as Replay)))
+        send({ type: 'replay', id })
+        return replay
       },
       dispose() {
         flushQueue()

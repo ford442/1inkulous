@@ -28,7 +28,9 @@
     "test:economy": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-economy.ts",
     "test:ai": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-ai.ts",
     "test:memory": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-memory.ts",
-    "test:worker": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-worker.ts"
+    "test:worker": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-worker.ts",
+    "test:replay": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-replay.ts",
+    "test:interpolation": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-interpolation.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

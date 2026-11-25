@@ -1,10 +1,11 @@
 import './style.css'
 import { createRenderer } from './engine/renderer'
 import { deviceLossMessage, WebGpuUnavailableError } from './engine/webgpu'
-import { createGame } from './game/game'
+import { createGame, DEFAULT_MATCH_SEED } from './game/game'
 import { createHud, showFatal } from './ui/hud'
 import { createInput } from './input/input'
-import { createSimulationHandle } from './sim/handle'
+import { createSimulationHandle, type SimulationHandle } from './sim/handle'
+import { encodeReplay } from './sim/replay'
 import { createSimulation, type SimulationClient } from './sim/simulation'
 import type { WorkerSimulation } from './sim/workerClient'
 import { CANVAS_ASPECT } from './viewport'
@@ -32,7 +33,11 @@ async function main() {
   )
   hud.setStatus(`core ${simulation.version} loaded — building the world…`)
 
-  const game = createGame(simulation)
+  // `?seed=` replays a match's start; with its replay, the whole of it.
+  const seed = matchSeedFromUrl()
+  console.info(`[core] match seed ${seed}`)
+  const game = createGame(simulation, { seed })
+  exposeReplay(handle)
   const worker = await moveCoreToWorker(handle)
   const live: SimulationClient = handle.current
   hud.setStatus(
@@ -145,13 +150,38 @@ async function main() {
   frameHandle = requestAnimationFrame(frame)
 }
 
+function matchSeedFromUrl(): number {
+  const param = new URLSearchParams(location.search).get('seed')
+  const seed = param === null ? NaN : Number(param)
+  return Number.isInteger(seed) ? seed >>> 0 : DEFAULT_MATCH_SEED
+}
+
+/**
+ * `__1inkulous.saveReplay()` in the console downloads the match so far: its
+ * seed, the core's version and every command on the step it landed. What a
+ * bug report attaches; `npm run test:replay -- <file>` plays one back.
+ */
+function exposeReplay(handle: SimulationHandle) {
+  const saveReplay = async () => {
+    const replay = await handle.exportReplay()
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(new Blob([encodeReplay(replay)], { type: 'application/json' }))
+    link.download = `1inkulous-seed${replay.seed}-step${replay.final.step}.replay.json`
+    link.click()
+    // Not straight away: some browsers drop a download whose URL is revoked under it.
+    setTimeout(() => URL.revokeObjectURL(link.href), 10_000)
+    return { seed: replay.seed, step: replay.final.step, hash: replay.final.hash.toString(16) }
+  }
+  Object.assign(globalThis, { __1inkulous: { saveReplay, exportReplay: handle.exportReplay } })
+}
+
 /**
  * Hands the core to a worker, unless `?core=main` asks to keep it here or the
  * worker cannot start; either way the game plays on. Snapshots are shared
  * memory when the page is cross-origin isolated, posted copies otherwise.
  */
 async function moveCoreToWorker(
-  handle: ReturnType<typeof createSimulationHandle>,
+  handle: SimulationHandle,
 ): Promise<WorkerSimulation | null> {
   if (new URLSearchParams(location.search).get('core') === 'main') {
     return null

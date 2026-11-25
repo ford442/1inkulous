@@ -74,6 +74,9 @@ emcc -v   # confirm
 | `npm run test:economy` | Chopping, what huts cost, eject, training a warrior and a kill: on the core alone, then through the game modules |
 | `npm run test:ai` | The enemy tribe on its own: on a flat core with a few planted trees it chops, builds, trains a warrior and sends him at the player's shaman; bridges a strait only when it can pay; swamps a crowd but not its own people; then a shaman killed by a warrior ending the match, her people deaf to orders and the AI stopped; and the match the game opens on |
 | `npm run test:memory` | The core's heap holds the opening village and a full tribe without growing, and the module declares a ceiling |
+| `npm run test:worker` | The core moved to a worker over a MessageChannel, both transports: the log replays to the same world and state hash, commands and queries answer, and the host's replay plays back to the same hash |
+| `npm run test:replay` | Determinism: the opening match, both tribes on the AI, 10,000 steps on ragged frame times, replayed twice to the same state hash and every checkpoint; another seed, a nudged order and a late one are each caught; the checked-in recording still plays to its hash; no `Math.random` in `src/sim` or `src/game`. `-- file.replay.json` plays a saved replay instead; `-- --record` re-records the checked-in one |
+| `npm run test:interpolation` | Followers drawn between steps: at 144 Hz on a 30 Hz core a walker moves the same distance every frame (and would stutter without it), the previous pose is the one the step began from, someone set down is not slid, and the shader and renderer source say the same |
 | `npm run test:gpu` | Drawing-buffer sizing, limit planning, GPU error reporting and loss messages, and what the renderer's source must keep true |
 | `npm run clean:wasm` | Removes the CMake build directories and generated artifacts |
 
@@ -206,12 +209,99 @@ simulation.tick(deltaMs)                      // once per frame
 `tick` hands the frame's elapsed time to the core, which consumes whole fixed
 steps (50ms, 20Hz) so simulation behaviour does not depend on frame rate, and
 returns how many ran. A long stall is capped rather than replayed in a burst.
+`stepAlpha` is what is left over, as a fraction of a step; the renderer draws
+each follower that far between the pose the last step began from and the one it
+left (see [Smooth motion](#smooth-motion)). `runSteps(n)` runs exactly `n` steps
+whatever the frame time: what a replay drives the core with.
 
 Only scalars cross the boundary per frame. Bulk state is read directly out of
 the module's linear memory (`simulation.module.HEAPF32` and friends, exported
 for exactly this) rather than marshalled through call arguments — that is how
 follower positions reach the renderer, how the walkable graph gets in, and how
 the terrain heights come back out to the mesh.
+
+## Smooth motion
+
+The simulation steps at 20 Hz and the display runs at whatever it runs at, so
+drawing only what the last step left makes a walker stand still for several
+frames and then jump. Instead each follower's instance carries two poses — the
+position and heading the last step left, and the ones it began from (floats
+8–13, `kInstancePrevOffset`) — and `follower.wgsl` draws between them by the
+step alpha, handed over in `cameraPos.w`. The unit directions are blended and
+renormalised and the height blended on its own, so the path follows the planet;
+over one step a walker turns a few thousandths of a radian, where this and a
+true slerp differ by far less than a pixel. Someone put somewhere rather than
+walked there — spawned, set down off a hut's pad, thrown by a spell — has both
+poses equal and is drawn where they are.
+
+In-process the alpha is the core's leftover over the step. On a worker the host
+stamps each snapshot with the leftover and when its clock last ran, on the
+`performance.timeOrigin` timeline both threads share; the client adds the time
+since, and holds at 1 if the worker is late rather than drawing past it.
+Picking still reads the current pose, at most a step (a fifth of a pawn's width)
+ahead of the drawn one. Huts and trees do not move, so they have one pose.
+`npm run test:interpolation` checks the maths through `interpolatePose`
+(`src/game/followers.ts`), the TypeScript twin of the shader's blend.
+
+## Determinism and replays
+
+The core is deterministic: the same seed and the same commands, each landing
+between the same two steps, give the same match — bit for bit, in Node or a
+browser, on the main thread or a worker, in a release core or a debug one. That
+is the ground replays, reproducible bug reports and lockstep multiplayer stand
+on. What keeps it true:
+
+- **One source of chance.** `MatchRandom` (`cpp/include/1inkulous/random.hpp`,
+  xorshift32) is owned by the simulation and seeded once as the match starts
+  (`seedMatch`, the first thing `createGame` does). The forest is drawn from
+  it; anything else in the core that wants a random choice draws from it too.
+  Nothing on the TypeScript side of the simulation may call `Math.random`, and
+  `test:replay` fails if `src/sim` or `src/game` does.
+- **Commands land between steps.** Every change to the core is a command
+  (`COMMAND_OPS` in `src/sim/protocol.ts`), and every command is recorded
+  stamped with the step count it was applied at: by the handle while the core
+  is in-process, by the host once it is on the worker. The clock never stops
+  mid-step, so a command always lands on a step boundary. Frame ticks are not
+  recorded: the stamps already say how many steps ran.
+- **Strict floating point.** No `-ffast-math`, `-Ofast` or contraction into
+  fused multiply-adds: `cpp/CMakeLists.txt` passes `-fno-fast-math
+  -ffp-contract=off` and refuses to configure with relaxed flags. One wasm
+  build of libm serves every platform, so `sin` and `cos` agree too.
+
+**The state hash** (`core_state_hash`, `cpp/src/state_hash.cpp`) is FNV-1a over
+everything that decides the next step: every follower's position, route,
+timers and orders, the huts, trees, stores, mana, casts and cooldowns, the AI's
+minds, the ground, and the random state. Render buffers, scratch and the
+accumulator are left out. The core takes it every 100 steps as a checkpoint (5
+s at 20 Hz), kept for the match; two cores that part company say roughly when.
+It is the desync detector lockstep will compare and the regression oracle the
+tests use. A system that gains state deciding what it does next must add it in
+`state_hash.cpp`.
+
+**A replay** is `{ format, coreVersion, seed, stepMs, commands, checkpoints,
+final }` (`src/sim/replay.ts`): the stamped log from the first command, with the
+checkpoints and final hash it was recorded with. `playReplay` runs it on a fresh
+core in exact steps and reports whether every checkpoint and the final hash
+agree, and if not, the first checkpoint that did not. Its text form is JSON,
+with the graph upload's typed arrays in base64; the opening match's is about
+280 KB.
+
+- `?seed=1234` starts a match from that seed; the console logs the seed of
+  every match.
+- `__1inkulous.saveReplay()` in the browser console downloads the match so far,
+  wherever the core is running. That file is the bug report.
+- `npm run test:replay -- that.replay.json` plays one back and says whether it
+  still holds.
+- `scripts/replays/opening.replay.json.gz` is a 10,000-step recording of the
+  opening match with both tribes on the AI. `test:replay` holds the core to its
+  hash, so **any change to what the simulation does fails it**. When the change
+  is meant, re-record with `npm run test:replay -- --record` and commit the new
+  file with the change that moved it. Run `CORE_WASM_DIR=cpp/build-wasm-debug/out
+  npm run test:replay` to hold the debug build to the same numbers.
+
+Not done yet: commands still apply on the step they arrive at. Lockstep will
+want them scheduled a few steps ahead (stamped with a future step, held by the
+host until the clock reaches it), and a peer to compare checkpoints with.
 
 ## Controls
 
@@ -336,7 +426,9 @@ crowd waits up to 20 seconds per stall before that counts, and one stopped at
 the edge of its own formation has arrived.
 
 **Rendering is one instanced draw**, however many followers there are. The core
-keeps a packed instance buffer (position, heading, tribe, flags); the renderer
+keeps a packed instance buffer (position, heading, tribe, flags, and the
+position and heading the last step began from — see [Smooth
+motion](#smooth-motion)); the renderer
 copies it out of linear memory once per frame and draws the whole tribe in a
 single call. The selection ring is part of the same mesh and collapses to a
 degenerate point in the vertex shader when the follower is not selected, which
@@ -483,8 +575,8 @@ starts at nothing. Only buildings spend it.
 **Trees.** At match start the core scatters 140 trees over dry land above
 the shore — walkable nodes with no water next door — from the heights it
 already owns (`TreeSet::spawn`, `cpp/src/trees.cpp`), keeping a node clear
-round each, chosen by a seeded generator so a match starts the same way
-twice. A tree is a point, not an obstacle, with a packed instance buffer of
+round each, drawn from the match's generator so the same seed starts a match
+the same way twice (see [Determinism and replays](#determinism-and-replays)). A tree is a point, not an obstacle, with a packed instance buffer of
 its own (position, heading, size, chop progress) and one more instanced
 draw. A hut raised over a tree clears it, and ground sculpted under the sea
 drowns it; neither gives wood.

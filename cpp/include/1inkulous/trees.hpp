@@ -5,6 +5,8 @@
 
 #include "1inkulous/followers.hpp"
 #include "1inkulous/nav.hpp"
+#include "1inkulous/random.hpp"
+#include "1inkulous/state_hash.hpp"
 #include "1inkulous/tribes.hpp"
 
 // Trees: where wood comes from.
@@ -56,11 +58,11 @@ class TreeSet {
     stores_ = stores;
   }
 
-  // Scatters up to `how_many` trees over dry land above the shore, chosen by a
-  // generator seeded with `seed` so a match starts the same way twice. No
-  // two stand on neighbouring nodes, none under a hut. Replaces any trees
-  // already standing. Returns how many were planted.
-  std::int32_t spawn(std::int32_t how_many, std::uint32_t seed);
+  // Scatters up to `how_many` trees over dry land above the shore, drawn from
+  // the match's generator, so the same seed starts a match the same way
+  // twice. No two stand on neighbouring nodes, none under a hut. Replaces any
+  // trees already standing. Returns how many were planted.
+  std::int32_t spawn(std::int32_t how_many, MatchRandom& random);
 
   void clear();
 
@@ -92,6 +94,9 @@ class TreeSet {
 
   const float* instances() const { return instances_.data(); }
   void refresh_instances();
+
+  // Mixes in everything of this that decides the next step. See state_hash.hpp.
+  void hash(StateHash& out) const;
 
  private:
   struct Tree {

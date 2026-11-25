@@ -3,6 +3,8 @@
 #include <array>
 #include <cstdint>
 
+#include "1inkulous/state_hash.hpp"
+
 // What a tribe holds in common, apart from its people: for now, wood.
 //
 // Mana lives with the shamans (shaman.hpp), because only a shaman spends it.
@@ -48,6 +50,12 @@ class Stockpile {
   }
 
   void clear() { wood_.fill(0); }
+
+  void hash(StateHash& out) const {
+    for (const std::int32_t wood : wood_) {
+      out.add(wood);
+    }
+  }
 
  private:
   std::array<std::int32_t, kMaxTribes> wood_{};

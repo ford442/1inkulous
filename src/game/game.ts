@@ -31,11 +31,28 @@ export type Game = {
 }
 
 /**
+ * The seed a match starts from unless told otherwise: the forest the game has
+ * always opened on.
+ */
+export const DEFAULT_MATCH_SEED = 1
+
+export type GameOptions = {
+  /**
+   * Seeds the core's random generator before anything draws from it. The same
+   * seed and the same commands give the same match, so this, with the command
+   * log, is all a bug report or a replay needs.
+   */
+  seed?: number
+}
+
+/**
  * `simulation` is the C++ core, taken at construction rather than reached for
  * later: the world it owns — the terrain, the navigation graph over it and
  * every follower standing on it — has to exist before the first frame.
  */
-export function createGame(simulation: Simulation): Game {
+export function createGame(simulation: Simulation, options: GameOptions = {}): Game {
+  // First, so it is the first thing a replay of this match does.
+  simulation.seedMatch(options.seed ?? DEFAULT_MATCH_SEED)
   const planet = createPlanet()
   // The planet generated the land; from here on the core owns it.
   const terrain = createTerrain(planet, simulation)

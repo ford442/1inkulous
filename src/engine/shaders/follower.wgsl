@@ -9,16 +9,8 @@
 // way (the clock's leftover over the step length), and a walker glides rather
 // than jumping once a step and standing still between.
 
-struct Uniforms {
-  viewProj: mat4x4f,
-  model: mat4x4f,
-  lightDir: vec4f,
-  cameraPos: vec4f,
-  params: vec4f,
-  brush: vec4f,
-}
-
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+#include "lib/lighting.wgsl"
+#include "lib/surface.wgsl"
 
 const FLAG_SELECTED: u32 = 1u;
 const FLAG_SHAMAN: u32 = 4u;
@@ -74,16 +66,6 @@ fn interpolateHeading(previous: vec3f, current: vec3f, alpha: f32) -> vec3f {
   return normalize(blended);
 }
 
-// Placeholder tribe colours, in the spirit of the four warring tribes. Real art
-// replaces these later.
-fn tribeColor(tribe: f32) -> vec3f {
-  let index = i32(round(tribe)) % 4;
-  if (index == 1) { return vec3f(0.78, 0.20, 0.18); }
-  if (index == 2) { return vec3f(0.86, 0.74, 0.20); }
-  if (index == 3) { return vec3f(0.24, 0.62, 0.28); }
-  return vec3f(0.24, 0.44, 0.82);
-}
-
 @vertex
 fn vs_main(
   @location(0) position: vec3f,
@@ -98,7 +80,7 @@ fn vs_main(
 ) -> VertexOutput {
   var output: VertexOutput;
 
-  let alpha = clamp(uniforms.cameraPos.w, 0.0, 1.0);
+  let alpha = clamp(frame.cameraPos.w, 0.0, 1.0);
   let instancePosition = interpolatePosition(previousPosition, currentPosition, alpha);
   let instanceHeading = interpolateHeading(previousHeading, currentHeading, alpha);
 
@@ -114,7 +96,7 @@ fn vs_main(
   // a point costs one vertex shader invocation and rasterises nothing —
   // cheaper than a second pipeline or a discard in the fragment stage.
   if ((part == PART_RING && selected < 0.5) || (gear && warrior < 0.5)) {
-    output.clipPosition = uniforms.viewProj * vec4f(instancePosition, 1.0);
+    output.clipPosition = frame.viewProj * vec4f(instancePosition, 1.0);
     output.worldPosition = instancePosition;
     output.worldNormal = vec3f(0.0, 1.0, 0.0);
     output.tint = vec3f(0.0);
@@ -124,15 +106,7 @@ fn vs_main(
   }
 
   // Stand the model up on the sphere: y out of the surface, z along the heading.
-  let up = normalize(instancePosition);
-  var forward = instanceHeading - up * dot(up, instanceHeading);
-  if (length(forward) < 1e-5) {
-    // Heading parallel to up should not happen, but a degenerate frame would
-    // collapse the model, so fall back to any tangent.
-    forward = normalize(cross(up, vec3f(0.0, 0.0, 1.0)) + vec3f(1e-4, 0.0, 0.0));
-  }
-  forward = normalize(forward);
-  let right = cross(up, forward);
+  let basis = surfaceFrame(instancePosition, instanceHeading);
 
   // The shaman is the same pawn, taller and a little broader, so she reads
   // apart from her people at any zoom. Normals are left alone: the stretch is
@@ -143,10 +117,10 @@ fn vs_main(
   // The ring widens with her but stays on the ground.
   let stature = select(mix(1.0, 1.7, shaman), 1.0, part == PART_RING);
   let scaled = vec3f(position.x * girth, position.y * stature, position.z * girth);
-  let world = instancePosition + right * scaled.x + up * scaled.y + forward * scaled.z;
-  let worldNormal = right * normal.x + up * normal.y + forward * normal.z;
+  let world = instancePosition + toWorld(basis, scaled);
+  let worldNormal = toWorld(basis, normal);
 
-  output.clipPosition = uniforms.viewProj * vec4f(world, 1.0);
+  output.clipPosition = frame.viewProj * vec4f(world, 1.0);
   output.worldPosition = world;
   output.worldNormal = worldNormal;
   // A pale robe over the tribe colour: still her tribe's, plainly not a brave.
@@ -168,33 +142,20 @@ fn vs_main(
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let normal = normalize(input.worldNormal);
-  let lightDir = normalize(uniforms.lightDir.xyz);
-  let viewDir = normalize(uniforms.cameraPos.xyz - input.worldPosition);
 
   if (input.part == PART_RING) {
     // Flat, bright and unlit, so a selection reads at a glance against any
-    // terrain colour underneath it.
+    // terrain colour underneath it, by day or night.
     return vec4f(mix(input.tint, vec3f(1.0), 0.65), 1.0);
   }
-
-  let diffuse = max(dot(normal, lightDir), 0.0);
-  let skyMix = normal.y * 0.5 + 0.5;
-  let ambient = mix(vec3f(0.12, 0.13, 0.18), vec3f(0.30, 0.34, 0.42), skyMix);
 
   // Selected followers are lifted towards white so they stand out from their
   // tribe-mates without changing the tribe colour's meaning.
   let albedo = mix(input.tint, mix(input.tint, vec3f(1.0), 0.45), input.selected);
 
-  let halfway = normalize(lightDir + viewDir);
-  let specular = pow(max(dot(normal, halfway), 0.0), 32.0) * 0.12 * step(0.0, diffuse);
-
+  var color = litSurface(albedo, normal, input.worldPosition, vec2f(32.0, 0.12));
   // A rim keeps a follower legible against terrain of a similar tone when the
   // camera is pulled back and the unit is only a few pixels across.
-  let rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.5) * (0.18 + 0.5 * input.selected);
-
-  var color = albedo * (ambient + vec3f(1.0, 0.97, 0.90) * diffuse);
-  color += vec3f(specular) + albedo * rim;
-  color = vec3f(1.0) - exp(-1.35 * color);
-
+  color += albedo * rimLight(normal, input.worldPosition, 2.5) * (0.18 + 0.5 * input.selected);
   return vec4f(color, 1.0);
 }

@@ -2,8 +2,85 @@ export type WebGpuContext = {
   device: GPUDevice
   context: GPUCanvasContext
   format: GPUTextureFormat
+  /** The optional features this device was created with. */
+  features: GpuFeatures
   /** Settles once, when the device is lost. Never rejects. */
   lost: Promise<DeviceLoss>
+}
+
+/**
+ * The optional features the renderer can use, each with what it is for. None
+ * is required: every one has a path that works without it, so asking for one
+ * the adapter lacks would only shut out machines that run the game fine.
+ *
+ * - `timestamp-query`: GPU time per pass, for the perf line in the HUD.
+ * - `shader-f16`: particles stored at half precision (32 bytes, not 48).
+ * - `float32-filterable`: requested so float textures can be filtered when a
+ *   later pass needs it; nothing reads one filtered yet.
+ */
+export const OPTIONAL_FEATURES = ['timestamp-query', 'shader-f16', 'float32-filterable'] as const
+export type OptionalFeature = (typeof OPTIONAL_FEATURES)[number]
+
+export type GpuFeatures = {
+  readonly timestampQuery: boolean
+  readonly shaderF16: boolean
+  readonly float32Filterable: boolean
+}
+
+export type FeaturePlan = {
+  /** What to pass to requestDevice: only features the adapter has. */
+  requiredFeatures: OptionalFeature[]
+  enabled: GpuFeatures
+}
+
+/**
+ * Decides which optional features to request. Pure, so it can be checked
+ * without a GPU: the adapter's features come in as plain names.
+ *
+ * `withheld` turns features off even where the adapter has them — `?features=`
+ * in the URL uses it to try the paths a lesser adapter would take.
+ */
+export function planFeatures(
+  supported: Iterable<string>,
+  withheld: Iterable<string> = [],
+): FeaturePlan {
+  const have = new Set(supported)
+  const off = new Set(withheld)
+  const requiredFeatures = OPTIONAL_FEATURES.filter((name) => have.has(name) && !off.has(name))
+  const on = (name: OptionalFeature) => requiredFeatures.includes(name)
+  return {
+    requiredFeatures,
+    enabled: {
+      timestampQuery: on('timestamp-query'),
+      shaderF16: on('shader-f16'),
+      float32Filterable: on('float32-filterable'),
+    },
+  }
+}
+
+/**
+ * `?features=` in the URL: `none` withholds every optional feature, and a list
+ * like `-timestamp-query,-shader-f16` withholds those. Anything else, or no
+ * parameter, withholds nothing.
+ */
+export function withheldFeatures(param: string | null): OptionalFeature[] {
+  if (!param) {
+    return []
+  }
+  if (param.trim() === 'none') {
+    return [...OPTIONAL_FEATURES]
+  }
+  return param
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith('-'))
+    .map((part) => part.slice(1))
+    .filter((name): name is OptionalFeature => (OPTIONAL_FEATURES as readonly string[]).includes(name))
+}
+
+export type WebGpuOptions = {
+  /** Optional features to leave off even where the adapter has them. */
+  withhold?: readonly string[]
 }
 
 export type DeviceLoss = {
@@ -29,7 +106,7 @@ export class WebGpuUnavailableError extends Error {
 export type FrameNeeds = {
   /** The largest single buffer: the biggest instance buffer or the planet mesh. */
   maxBufferSize: number
-  /** The frame's uniform block. */
+  /** The largest uniform block: the frame's, or the particle step's. */
   maxUniformBufferBindingSize: number
 }
 
@@ -167,6 +244,7 @@ async function requestAdapter(gpu: GPU): Promise<GPUAdapter> {
 export async function initWebGpu(
   canvas: HTMLCanvasElement,
   needs: FrameNeeds,
+  options: WebGpuOptions = {},
 ): Promise<WebGpuContext> {
   if (!navigator.gpu) {
     throw new WebGpuUnavailableError(unsupportedMessage(window.isSecureContext !== false))
@@ -199,10 +277,19 @@ export async function initWebGpu(
       `${needs.maxUniformBufferBindingSize} bytes of uniforms)`,
   )
 
-  // No `requiredFeatures`: none of the shaders use an optional feature.
+  const featurePlan = planFeatures(adapter.features, options.withhold)
+  console.info(
+    '[webgpu] requiredFeatures',
+    featurePlan.requiredFeatures.length > 0 ? featurePlan.requiredFeatures : 'none',
+    options.withhold && options.withhold.length > 0 ? `(withheld: ${options.withhold.join(', ')})` : '',
+  )
+
   let device: GPUDevice
   try {
-    device = await adapter.requestDevice({ requiredLimits: plan.requiredLimits })
+    device = await adapter.requestDevice({
+      requiredLimits: plan.requiredLimits,
+      requiredFeatures: featurePlan.requiredFeatures,
+    })
   } catch (cause) {
     throw new WebGpuUnavailableError(
       'The GPU would not create a device for the game. Reload the page; if it keeps happening, ' +
@@ -237,10 +324,10 @@ export async function initWebGpu(
     // The canvas is the whole frame: the page behind it never shows through,
     // and nothing it composites needs an alpha channel.
     alphaMode: 'opaque',
-    // `toneMapping` stays unset on purpose. The shaders apply their own
-    // exposure curve (1 - exp(-1.35 * color)); anything the canvas added on top
-    // would be a second curve over the first.
+    // `toneMapping` stays unset on purpose. The frame is drawn linear and the
+    // composite pass applies the one exposure curve (1 - exp(-1.35 * color));
+    // anything the canvas added on top would be a second curve over the first.
   })
 
-  return { device, context, format, lost }
+  return { device, context, format, features: featurePlan.enabled, lost }
 }

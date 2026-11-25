@@ -71,7 +71,32 @@ export type MatchReadout = {
   readonly enemy: TribeReadout
 }
 
-/** Smoothed frame timing. `drawMs` is CPU time in `renderer.render`, not a GPU query. */
+/** GPU time per pass from timestamp queries, averaged like the rest of the line. */
+export type GpuPerf = {
+  readonly totalMs: number
+  readonly passes: readonly { readonly name: string; readonly ms: number }[]
+}
+
+/**
+ * The GPU part of the perf line. Pure. `supported` false says so plainly
+ * rather than leaving a gap; null timings with support means none came back
+ * in this window yet.
+ */
+export function gpuLine(gpu: GpuPerf | null, supported: boolean): string {
+  if (!supported) {
+    return 'gpu n/a (no timestamp-query)'
+  }
+  if (!gpu) {
+    return 'gpu —'
+  }
+  const parts = gpu.passes.filter((pass) => pass.ms > 0).map((pass) => `${pass.name} ${pass.ms.toFixed(2)}`)
+  return `gpu ${gpu.totalMs.toFixed(2)}ms` + (parts.length > 0 ? ` (${parts.join(' · ')})` : '')
+}
+
+/**
+ * Smoothed frame timing. `drawMs` is CPU time in `renderer.render`; `gpu` is
+ * the GPU's own time, when the device can measure it.
+ */
 export type FramePerf = {
   readonly fps: number
   /**
@@ -84,6 +109,8 @@ export type FramePerf = {
   readonly syncMs: number
   readonly gameMs: number
   readonly drawMs: number
+  readonly gpu: GpuPerf | null
+  readonly gpuSupported: boolean
 }
 
 export type Hud = {
@@ -293,6 +320,7 @@ export function createHud(): Hud {
       <p class="hint">A brave sent into a training hut, with wood to spare, comes out a warrior · warriors strike enemies next to them</p>
       <p class="hint">F finds the shaman · L aims a Land Bridge: click across water from her, or drag shore to shore</p>
       <p class="hint">Red plays itself: kill its shaman to win, and keep yours alive · warriors are the way to do it</p>
+      <p class="hint">N turns the day: the sun stops following the camera and the night side goes dark · N again brings it back</p>
       <p class="hint">X Blast raises a hill and throws people off it · V Flatten levels a hut pad · M Swamp sinks the ground · a cast takes a moment: move her or cast again to cancel</p>
     </div>
   `
@@ -328,7 +356,8 @@ export function createHud(): Hud {
             ? `sim ${perf.simMs === null ? '—' : perf.simMs.toFixed(2)}ms/step (worker) · ` +
               `sync ${perf.syncMs.toFixed(2)}ms · `
             : `sim ${(perf.simMs ?? 0).toFixed(2)}ms · `) +
-          `game ${perf.gameMs.toFixed(2)}ms · draw ${perf.drawMs.toFixed(2)}ms`
+          `game ${perf.gameMs.toFixed(2)}ms · draw ${perf.drawMs.toFixed(2)}ms · ` +
+          gpuLine(perf.gpu, perf.gpuSupported)
       }
     },
     setBrush(brush: BrushReadout) {

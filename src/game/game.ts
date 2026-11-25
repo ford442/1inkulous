@@ -7,6 +7,8 @@ import { createPlanet, type Planet } from './planet'
 import { createMatch, type Match } from './scenario'
 import { createSculptor, isSculptModifierHeld, type Sculptor } from './sculpt'
 import { createShaman, type Shaman } from './shaman'
+import { createSpellEvents, type SpellLanding } from './spellEffects'
+import { createSun, type Sun } from './sun'
 import { createTerrain, type Terrain } from './terrain'
 import { createTrees, type Trees } from './trees'
 
@@ -23,6 +25,13 @@ export type Game = {
   trees: Trees
   /** Who is playing whom, and how it is going. */
   match: Match
+  /** Where the light comes from: riding with the camera, or a turning day. */
+  sun: Sun
+  /**
+   * Spells that landed (either tribe's) since the last call, for the renderer
+   * to turn into effects. Each is handed out once.
+   */
+  takeSpellLandings: () => SpellLanding[]
   /**
    * `aspect` is the viewport's width / height, needed to turn the cursor into a
    * world-space ray for terrain picking.
@@ -77,6 +86,10 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
   const huts = createHuts(planet, simulation)
   const shaman = createShaman(planet, simulation)
 
+  const sun = createSun()
+  const spellEvents = createSpellEvents(simulation, [match.playerTribe, match.enemyTribe])
+  let landings: SpellLanding[] = []
+
   // Open on the player's tribe. The starting village is wherever the flattest
   // land turned out to be, which is as likely to be behind the planet as in front.
   if (match.playerHome) {
@@ -97,6 +110,12 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
     shaman,
     trees,
     match,
+    sun,
+    takeSpellLandings() {
+      const taken = landings
+      landings = []
+      return taken
+    },
     get clearColor() {
       return state.clearColor
     },
@@ -160,6 +179,11 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
       // sculpt stroke is filtered out on the gesture itself, not only by the
       // `sculpting` flag above.
       followers.update(deltaMs, forFollowers, { camera, aspect })
+
+      sun.update(deltaMs, input, camera.eye)
+      // Capped, so a backgrounded tab that comes back to a dozen landings
+      // does not keep them all; the renderer drains this every frame.
+      landings = [...landings, ...spellEvents.poll()].slice(-16)
 
       // Last: whatever moved the ground this frame — the brush, a spell, the
       // core's own steps before this update — reaches the mesh before drawing.

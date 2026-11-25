@@ -1,0 +1,201 @@
+/**
+ * The browser half of `npm run check:webgpu` (scripts/check-webgpu.mjs runs
+ * it in headless Chromium). Builds the real game on the real core, draws it
+ * with the real renderer — offscreen, so it works where a headless browser
+ * cannot present to a canvas — and reports to `window.__check`:
+ *
+ * - every shader module's compilation messages (an error fails the check);
+ * - which optional features the device got, and GPU pass timings when it can
+ *   measure them;
+ * - after a sculpt, whether the normals the GPU rebuilt match the CPU's;
+ * - that a spell landing puts particles on screen, and the day–night sun;
+ * - the frames themselves, as RGBA, for the runner to save as PNGs.
+ *
+ * `?features=` withholds optional features, as in the game.
+ */
+import type { ShaderDiagnostic } from '../../src/engine/materials'
+import { createRenderer } from '../../src/engine/renderer'
+import { withheldFeatures } from '../../src/engine/webgpu'
+import { refreshGeometry, VERTEX_FLOATS } from '../../src/engine/mesh/cubeSphere'
+import { createGame } from '../../src/game/game'
+import type { InputSnapshot } from '../../src/input/input'
+import { createSimulation } from '../../src/sim/simulation'
+import { Spell } from '../../src/sim/spell'
+import { CANVAS_ASPECT } from '../../src/viewport'
+
+type Frame = { name: string; width: number; height: number; rgba: string }
+type Result = {
+  ok: boolean
+  failures: string[]
+  notes: string[]
+  features: Record<string, boolean>
+  status: string
+  diagnostics: ShaderDiagnostic[]
+  gpu: unknown
+  normals: { compared: number; worstDegrees: number } | null
+  frames: Frame[]
+}
+
+const failures: string[] = []
+const notes: string[] = []
+const check = (name: string, condition: boolean, detail = '') => {
+  if (!condition) failures.push(detail ? `${name} — ${detail}` : name)
+  else notes.push(detail ? `ok ${name} — ${detail}` : `ok ${name}`)
+}
+
+const idle = (pressed: string[] = []): InputSnapshot => ({
+  keys: new Set(),
+  pressed: new Set(pressed),
+  pointer: {
+    position: null,
+    ndc: null,
+    delta: { x: 0, y: 0 },
+    buttons: { left: false, middle: false, right: false },
+    wheel: 0,
+    dragging: false,
+    dragRect: null,
+    drags: [],
+    clicks: [],
+  },
+})
+
+const base64 = (bytes: Uint8Array) => {
+  let out = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    out += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  }
+  return btoa(out)
+}
+
+async function run(): Promise<Result> {
+  const params = new URLSearchParams(location.search)
+  const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas')!
+  const core = await createSimulation()
+  const game = createGame(core, { seed: 1 })
+  const renderer = await createRenderer(canvas, game, {
+    offscreen: true,
+    withholdFeatures: withheldFeatures(params.get('features')),
+  })
+
+  const frames: Frame[] = []
+  const draw = async (count: number, input: InputSnapshot = idle()) => {
+    for (let i = 0; i < count; i += 1) {
+      core.tick(16)
+      game.update(16, i === 0 ? input : idle(), CANVAS_ASPECT)
+      renderer.render(game)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+  }
+  const capture = async (name: string) => {
+    const shot = await renderer.capture()
+    frames.push({ name, width: shot.width, height: shot.height, rgba: base64(shot.pixels) })
+    return shot
+  }
+
+  // --- shaders -----------------------------------------------------------------
+  await draw(3)
+  const diagnostics = await renderer.diagnostics()
+  const errors = diagnostics.flatMap((d) => d.messages.filter((m) => m.type === 'error').map((m) => `${d.label}:${m.line} ${m.message}`))
+  check('every shader compiles', errors.length === 0, errors.join('\n') || `${diagnostics.length} modules`)
+  const labels = new Set(diagnostics.map((d) => d.label))
+  for (const expected of ['planet', 'water', 'atmosphere', 'followers', 'huts', 'hut-ghost', 'trees', 'particles', 'particle-step', 'terrain-normals', 'composite']) {
+    check(`the ${expected} shader was built`, labels.has(expected))
+  }
+
+  // --- a frame, and that it shows something -----------------------------------
+  await draw(20)
+  const day = await capture('follow-sun')
+  const at = (x: number, y: number) => {
+    const i = (Math.floor(y) * day.width + Math.floor(x)) * 4
+    return [day.pixels[i]!, day.pixels[i + 1]!, day.pixels[i + 2]!]
+  }
+  const centre = at(day.width / 2, day.height / 2)
+  const corner = at(4, 4)
+  check('the planet is drawn at the centre of the frame', centre.some((c, i) => Math.abs(c - corner[i]!) > 20),
+    `centre ${centre}, corner ${corner}`)
+  check('the background keeps the game\'s clear colour through the exposure curve',
+    corner.every((c, i) => Math.abs(c - [10, 13, 23][i]!) <= 3), `corner ${corner}`)
+
+  // --- GPU normals match the CPU's after a sculpt -------------------------------
+  const home = game.match.playerHome ?? [0, 1, 0]
+  await game.terrain.sculpt(home, 0.12, game.planet.maxHeight * 0.6)
+  await draw(4)
+  let normals: Result['normals'] = null
+  if (game.planet.mesh.normalsOnGpu) {
+    const gpu = await renderer.readPlanetVertices()
+    const reference = structuredClone(game.planet.mesh)
+    reference.normalsOnGpu = false
+    refreshGeometry(reference)
+    let worst = 0
+    let compared = 0
+    for (let v = 0; v < reference.vertexCount; v += 1) {
+      const b = v * VERTEX_FLOATS
+      const dot = gpu[b + 3]! * reference.vertexData[b + 3]! + gpu[b + 4]! * reference.vertexData[b + 4]! +
+        gpu[b + 5]! * reference.vertexData[b + 5]!
+      worst = Math.max(worst, Math.acos(Math.min(1, Math.max(-1, dot))) * 180 / Math.PI)
+      compared += 1
+    }
+    normals = { compared, worstDegrees: worst }
+    check('GPU normals after a sculpt match the CPU\'s to within 0.1°', worst < 0.1, `worst ${worst.toFixed(4)}° over ${compared} vertices`)
+  }
+  await capture('after-sculpt')
+
+  // --- a spell landing puts particles up ---------------------------------------
+  const before = await renderer.capture()
+  const take = game.takeSpellLandings
+  let once = true
+  game.takeSpellLandings = () => {
+    const real = take()
+    if (once) {
+      once = false
+      real.push({ spell: Spell.blast, tribe: 0, target: home, radius: 0.08 })
+    }
+    return real
+  }
+  await draw(12)
+  const blast = await capture('blast')
+  let changed = 0
+  for (let i = 0; i < blast.pixels.length; i += 4) {
+    if (Math.abs(blast.pixels[i]! - before.pixels[i]!) > 24) changed += 1
+  }
+  check('a blast landing changes the picture (particles)', changed > 200, `${changed} pixels changed`)
+
+  // --- the day turns ------------------------------------------------------------
+  game.sun.update(0, idle(['KeyN']), game.camera.eye)
+  check('N turns the sun to the day cycle', game.sun.mode === 'cycle')
+  await draw(4)
+  await capture('day-cycle')
+
+  // --- GPU timings ---------------------------------------------------------------
+  await draw(10)
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  const gpu = renderer.takeGpuTimings()
+  if (renderer.features.timestampQuery) {
+    check('timestamp-query gives GPU pass timings', gpu !== null && gpu.totalMs > 0,
+      gpu ? `${gpu.totalMs.toFixed(3)}ms over ${gpu.frames} frames` : 'none')
+  } else {
+    check('without timestamp-query there are no GPU timings, and nothing pretends otherwise',
+      gpu === null && !renderer.gpuTimingSupported)
+  }
+
+  return {
+    ok: failures.length === 0,
+    failures,
+    notes,
+    features: { ...renderer.features },
+    status: renderer.statusMessage,
+    diagnostics,
+    gpu,
+    normals,
+    frames,
+  }
+}
+
+const target = window as unknown as { __check?: Result | { ok: false; failures: string[] } }
+run()
+  .then((result) => {
+    target.__check = result
+  })
+  .catch((error: unknown) => {
+    target.__check = { ok: false, failures: [`the check threw: ${error instanceof Error ? error.stack ?? error.message : String(error)}`] }
+  })

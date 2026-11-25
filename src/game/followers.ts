@@ -63,18 +63,20 @@ export function interpolatePose(
   const prev = base + FOLLOWER_PREVIOUS_OFFSET
   const a = Math.min(1, Math.max(0, alpha))
   const mix = (from: number, to: number) => from + (to - from) * a
+  // In range by construction: `id` is a follower the buffer holds.
+  const at = (index: number) => instances[index]!
 
   // Unit directions blended, radius (ground height) blended on its own.
-  const from = Math.hypot(instances[prev], instances[prev + 1], instances[prev + 2])
-  const to = Math.hypot(instances[base], instances[base + 1], instances[base + 2])
-  const px = from > 1e-6 ? mix(instances[prev] / from, instances[base] / to) : 0
-  const py = from > 1e-6 ? mix(instances[prev + 1] / from, instances[base + 1] / to) : 0
-  const pz = from > 1e-6 ? mix(instances[prev + 2] / from, instances[base + 2] / to) : 0
+  const from = Math.hypot(at(prev), at(prev + 1), at(prev + 2))
+  const to = Math.hypot(at(base), at(base + 1), at(base + 2))
+  const px = from > 1e-6 ? mix(at(prev) / from, at(base) / to) : 0
+  const py = from > 1e-6 ? mix(at(prev + 1) / from, at(base + 1) / to) : 0
+  const pz = from > 1e-6 ? mix(at(prev + 2) / from, at(base + 2) / to) : 0
   const blended = Math.hypot(px, py, pz)
   if (from < 1e-6 || to < 1e-6 || blended < 1e-6) {
-    out[0] = instances[base]
-    out[1] = instances[base + 1]
-    out[2] = instances[base + 2]
+    out[0] = at(base)
+    out[1] = at(base + 1)
+    out[2] = at(base + 2)
   } else {
     const radius = mix(from, to)
     out[0] = (px / blended) * radius
@@ -82,14 +84,14 @@ export function interpolatePose(
     out[2] = (pz / blended) * radius
   }
 
-  const hx = mix(instances[prev + 3], instances[base + 3])
-  const hy = mix(instances[prev + 4], instances[base + 4])
-  const hz = mix(instances[prev + 5], instances[base + 5])
+  const hx = mix(at(prev + 3), at(base + 3))
+  const hy = mix(at(prev + 4), at(base + 4))
+  const hz = mix(at(prev + 5), at(base + 5))
   const turn = Math.hypot(hx, hy, hz)
   if (turn < 1e-4) {
-    out[3] = instances[base + 3]
-    out[4] = instances[base + 4]
-    out[5] = instances[base + 5]
+    out[3] = at(base + 3)
+    out[4] = at(base + 4)
+    out[5] = at(base + 5)
   } else {
     out[3] = hx / turn
     out[4] = hy / turn

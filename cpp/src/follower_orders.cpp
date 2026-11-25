@@ -22,6 +22,7 @@ void FollowerSet::set_down(Follower& follower, std::int32_t node) {
   follower.node = node;
   follower.height = grid_->height(node);
   follower.grounded = true;
+  follower.placed = true;
   flatten(follower.heading, follower.dir);
   if (!normalize3(follower.heading)) {
     double e2[3];
@@ -154,6 +155,8 @@ std::int32_t FollowerSet::shove(const double centre_in[3], double angular_radius
       follower.node = node;
       follower.height = ground.height;
       follower.grounded = true;
+      // Thrown, not walked: drawn where it lands.
+      follower.placed = true;
     } else {
       const std::int32_t free = grid_->nearest_walkable_node(landing[0], landing[1], landing[2]);
       if (free < 0) {

@@ -2,16 +2,8 @@
 // straight out of the core's buffer. The build ghost is one more instance on
 // the end, drawn by a second, blended pipeline over the same shader.
 
-struct Uniforms {
-  viewProj: mat4x4f,
-  model: mat4x4f,
-  lightDir: vec4f,
-  cameraPos: vec4f,
-  params: vec4f,
-  brush: vec4f,
-}
-
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+#include "lib/lighting.wgsl"
+#include "lib/surface.wgsl"
 
 const PART_DOOR: f32 = 1.0;
 const PART_ROOF: f32 = 2.0;
@@ -29,14 +21,6 @@ struct VertexOutput {
   @location(5) @interpolate(flat) training: f32,
 }
 
-fn tribeColor(tribe: f32) -> vec3f {
-  let index = i32(round(tribe)) % 4;
-  if (index == 1) { return vec3f(0.78, 0.20, 0.18); }
-  if (index == 2) { return vec3f(0.86, 0.74, 0.20); }
-  if (index == 3) { return vec3f(0.24, 0.62, 0.28); }
-  return vec3f(0.24, 0.44, 0.82);
-}
-
 @vertex
 fn vs_main(
   @location(0) position: vec3f,
@@ -49,13 +33,7 @@ fn vs_main(
   @location(7) instanceKind: f32,
 ) -> VertexOutput {
   let training = f32(abs(instanceKind - KIND_TRAINING) < 0.5);
-  let up = normalize(instancePosition);
-  var forward = instanceHeading - up * dot(up, instanceHeading);
-  if (length(forward) < 1e-5) {
-    forward = normalize(cross(up, vec3f(0.0, 0.0, 1.0)) + vec3f(1e-4, 0.0, 0.0));
-  }
-  forward = normalize(forward);
-  let right = cross(up, forward);
+  let basis = surfaceFrame(instancePosition, instanceHeading);
 
   // A training hut is the same mesh drawn taller and a little narrower, so
   // its silhouette is a tower against a dwelling's dome. The faceted normals
@@ -63,12 +41,12 @@ fn vs_main(
   let shaped = vec3f(position.x * mix(1.0, 0.9, training),
                      position.y * mix(1.0, 1.45, training),
                      position.z * mix(1.0, 0.9, training));
-  let world = instancePosition + right * shaped.x + up * shaped.y + forward * shaped.z;
+  let world = instancePosition + toWorld(basis, shaped);
 
   var output: VertexOutput;
-  output.clipPosition = uniforms.viewProj * vec4f(world, 1.0);
+  output.clipPosition = frame.viewProj * vec4f(world, 1.0);
   output.worldPosition = world;
-  output.worldNormal = right * normal.x + up * normal.y + forward * normal.z;
+  output.worldNormal = toWorld(basis, normal);
   output.tribe = instanceTribe;
   output.occupants = instanceOccupants;
   output.part = part;
@@ -79,17 +57,15 @@ fn vs_main(
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let normal = normalize(input.worldNormal);
-  let lightDir = normalize(uniforms.lightDir.xyz);
-  let viewDir = normalize(uniforms.cameraPos.xyz - input.worldPosition);
-  let diffuse = max(dot(normal, lightDir), 0.0);
-  let skyMix = normal.y * 0.5 + 0.5;
-  let ambient = mix(vec3f(0.12, 0.13, 0.18), vec3f(0.30, 0.34, 0.42), skyMix);
 
   if (input.occupants < -0.5) {
     // Build ghost: green where the core would build, red where it would not.
+    // Lit only from the sky and the sun's angle, never shadowed: it has to
+    // read wherever the cursor is.
     let tint = select(vec3f(1.00, 0.32, 0.25), vec3f(0.35, 0.95, 0.45), input.occupants > -1.5);
+    let diffuse = max(dot(normal, frame.sunDir.xyz), 0.0);
     let lit = tint * (0.55 + 0.45 * diffuse);
-    return vec4f(lit, 0.5);
+    return vec4f(lit * 0.5, 0.5);
   }
 
   // Mud walls and straw thatch; a claimed hut's roof takes its tribe colour.
@@ -101,18 +77,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     albedo = select(thatch, mix(thatch, tribeColor(input.tribe), claim), input.tribe > -0.5);
   }
 
-  var color = albedo * (ambient + vec3f(1.0, 0.97, 0.90) * diffuse);
+  var color = litSurface(albedo, normal, input.worldPosition, vec2f(16.0, 0.0));
   if (input.part == PART_DOOR) {
     // Dark while empty; firelight inside once someone lives there, brighter
-    // with each occupant, so a working hut reads from orbit.
+    // with each occupant, so a working hut reads from orbit — and at night,
+    // where it is most of what there is to see.
     let glow = clamp(input.occupants / 3.0, 0.0, 1.0);
     color = select(vec3f(0.05, 0.035, 0.025),
-                   vec3f(1.00, 0.68, 0.30) * (0.55 + 0.6 * glow),
+                   vec3f(1.00, 0.68, 0.30) * (0.55 + 0.6 * glow) * 1.6,
                    input.occupants > 0.5);
   }
 
-  let rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.5) * 0.15;
-  color += albedo * rim;
-  color = vec3f(1.0) - exp(-1.35 * color);
+  color += albedo * rimLight(normal, input.worldPosition, 2.5) * 0.15;
   return vec4f(color, 1.0);
 }

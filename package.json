@@ -16,6 +16,7 @@
     "preview": "vite preview",
     "deploy": "python3 deploy.py",
     "lint": "eslint .",
+    "check:webgpu": "node scripts/check-webgpu.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:lint": "eslint .",
     "test:abi": "node scripts/test-abi.mjs",

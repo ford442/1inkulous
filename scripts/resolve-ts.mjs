@@ -1,5 +1,5 @@
 import { extname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { coreDir, coreRedirected } from './core-dir.mjs'
 
 /**
@@ -16,4 +16,18 @@ export async function resolve(specifier, context, nextResolve) {
     return nextResolve(`${specifier}.ts`, context)
   }
   return nextResolve(specifier, context)
+}
+
+/**
+ * `.wgsl` imports, the way the Vite plugin gives them: the shader's composed
+ * source as the default export (scripts/wgsl.mjs). So a test can import a
+ * module that imports a shader, and sees the same code the GPU is given.
+ */
+export async function load(url, context, nextLoad) {
+  if (url.endsWith('.wgsl')) {
+    const { composeWgsl } = await import('./wgsl.mjs')
+    const { code } = composeWgsl(fileURLToPath(url))
+    return { format: 'module', source: `export default ${JSON.stringify(code)};`, shortCircuit: true }
+  }
+  return nextLoad(url, context)
 }

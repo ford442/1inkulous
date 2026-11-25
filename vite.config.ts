@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { defineConfig } from 'vite'
+import { assetsIndexPlugin } from './scripts/assets-index.mjs'
 import { coreDir, coreRedirected } from './scripts/core-dir.mjs'
 import { wgslPlugin } from './scripts/wgsl.mjs'
 
@@ -11,8 +12,9 @@ const ISOLATION_HEADERS = {
 export default defineConfig({
   // Relative asset URLs so the build works under test.1ink.us/1inkulous/
   base: './',
-  // `import shader from './x.wgsl'` is the shader with its #includes resolved.
-  plugins: [wgslPlugin()],
+  // `import shader from './x.wgsl'` is the shader with its #includes resolved;
+  // assets-index.json lists what public/models and public/audio hold.
+  plugins: [wgslPlugin(), assetsIndexPlugin()],
   resolve: {
     // `npm run dev:debug` loads the opt-in debug core from its own directory
     // (CORE_WASM_DIR); the source imports stay pointed at src/wasm/ throughout.

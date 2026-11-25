@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   # The game: the core compiled to WebAssembly, every test:* script (lint and
-  # the ABI check included), then the production build.
+  # the ABI check included), then the production build and its size report.
   web:
     runs-on: ubuntu-latest
     steps:
@@ -46,6 +46,19 @@ jobs:
       # it (src/wasm/core-abi.d.ts) and core_abi.cpp disagree.
       - run: npm test
       - run: npm run build
+      # What the build weighs, by category and file, in the job summary; fails
+      # when a category passes its budget in bundle-budget.json (raising one is
+      # a deliberate edit in the pull request that needs it). The JSON is kept
+      # even when the budget fails, so the overage can be read.
+      - name: Bundle size
+        run: npm run report:bundle -- --json bundle-report.json
+      - name: Keep the bundle report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-report
+          path: bundle-report.json
+          if-no-files-found: ignore
 
   # The core as a plain library with the doctest unit tests in cpp/tests: once
   # as a debug build, and once under AddressSanitizer and UBSan, which find

@@ -125,3 +125,102 @@ body {
 #hud .fatal-reload:focus-visible {
   background: rgba(232, 228, 220, 0.25);
 }
+
+/* The loading screen: over everything until the renderer is up. It fades in
+   after a beat, so a start that is over at once never shows it. */
+#hud .loading {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  background: #0a0a12;
+  pointer-events: auto;
+  animation: loading-in 250ms ease 300ms backwards;
+}
+
+#hud .loading-title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+#hud .loading-label {
+  margin: 0;
+  font-size: 0.9rem;
+  opacity: 0.75;
+}
+
+#hud .loading-bar {
+  width: min(22rem, 70vw);
+  height: 0.4rem;
+  border-radius: 0.2rem;
+  background: rgba(232, 228, 220, 0.15);
+  overflow: hidden;
+}
+
+#hud .loading-fill {
+  width: 0;
+  height: 100%;
+  background: #9ec8ff;
+  transition: width 120ms linear;
+}
+
+@keyframes loading-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #hud .loading,
+  #hud .loading-fill {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Sound controls: the one part of the HUD the pointer can reach. */
+#hud .audio {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  pointer-events: auto;
+}
+
+#hud .audio-mute {
+  min-width: 5.5rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid rgba(232, 228, 220, 0.5);
+  border-radius: 4px;
+  background: rgba(10, 10, 18, 0.55);
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+#hud .audio-mute[aria-pressed='true'] {
+  color: #ff8a7a;
+  border-color: rgba(255, 138, 122, 0.6);
+}
+
+#hud .audio-mute:hover:not(:disabled),
+#hud .audio-mute:focus-visible {
+  background: rgba(232, 228, 220, 0.2);
+}
+
+#hud .audio-mute:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#hud .audio-volume {
+  width: 7rem;
+  accent-color: #9ec8ff;
+}

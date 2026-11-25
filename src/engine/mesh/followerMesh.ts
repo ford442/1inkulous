@@ -139,6 +139,55 @@ export function createBuilder(): Builder {
   }
 }
 
+/**
+ * The selection ring: a flat annulus lying on the ground, facing up, sized from
+ * the follower's `radius`. Part of every follower mesh, procedural or loaded —
+ * it is the selection's indicator, not the follower's art.
+ */
+export function addSelectionRing(builder: Builder, radius: number): void {
+  const ringY = RING_OUTER * radius * RING_LIFT
+  for (let segment = 0; segment < RING_SEGMENTS; segment += 1) {
+    const a0 = (segment / RING_SEGMENTS) * Math.PI * 2
+    const a1 = ((segment + 1) / RING_SEGMENTS) * Math.PI * 2
+
+    const inner0: [number, number, number] = [
+      Math.cos(a0) * RING_INNER * radius,
+      ringY,
+      Math.sin(a0) * RING_INNER * radius,
+    ]
+    const inner1: [number, number, number] = [
+      Math.cos(a1) * RING_INNER * radius,
+      ringY,
+      Math.sin(a1) * RING_INNER * radius,
+    ]
+    const outer0: [number, number, number] = [
+      Math.cos(a0) * RING_OUTER * radius,
+      ringY,
+      Math.sin(a0) * RING_OUTER * radius,
+    ]
+    const outer1: [number, number, number] = [
+      Math.cos(a1) * RING_OUTER * radius,
+      ringY,
+      Math.sin(a1) * RING_OUTER * radius,
+    ]
+
+    builder.push(inner0, outer1, outer0, FOLLOWER_PART_RING)
+    builder.push(inner0, inner1, outer1, FOLLOWER_PART_RING)
+  }
+}
+
+/** Seals a builder's triangles into the mesh the renderer draws. */
+export function finishFollowerMesh(builder: Builder): FollowerMesh {
+  const vertexData = new Float32Array(builder.data)
+  const vertexCount = vertexData.length / FOLLOWER_VERTEX_FLOATS
+
+  return {
+    vertexData,
+    vertexCount,
+    triangleCount: vertexCount / 3,
+  }
+}
+
 export function createFollowerMesh(options: FollowerMeshOptions): FollowerMesh {
   const { height, radius } = options
   const segments = Math.max(3, options.segments ?? 8)
@@ -217,43 +266,7 @@ export function createFollowerMesh(options: FollowerMeshOptions): FollowerMesh {
   box(CLUB_X, CLUB_BOTTOM, CLUB_HEAD, CLUB_HALF * 0.6)
   box(CLUB_X, CLUB_HEAD, CLUB_TOP, CLUB_HALF)
 
-  // Selection ring: a flat annulus lying on the ground, facing up.
-  const ringY = RING_OUTER * radius * RING_LIFT
-  for (let segment = 0; segment < RING_SEGMENTS; segment += 1) {
-    const a0 = (segment / RING_SEGMENTS) * Math.PI * 2
-    const a1 = ((segment + 1) / RING_SEGMENTS) * Math.PI * 2
+  addSelectionRing(builder, radius)
 
-    const inner0: [number, number, number] = [
-      Math.cos(a0) * RING_INNER * radius,
-      ringY,
-      Math.sin(a0) * RING_INNER * radius,
-    ]
-    const inner1: [number, number, number] = [
-      Math.cos(a1) * RING_INNER * radius,
-      ringY,
-      Math.sin(a1) * RING_INNER * radius,
-    ]
-    const outer0: [number, number, number] = [
-      Math.cos(a0) * RING_OUTER * radius,
-      ringY,
-      Math.sin(a0) * RING_OUTER * radius,
-    ]
-    const outer1: [number, number, number] = [
-      Math.cos(a1) * RING_OUTER * radius,
-      ringY,
-      Math.sin(a1) * RING_OUTER * radius,
-    ]
-
-    builder.push(inner0, outer1, outer0, FOLLOWER_PART_RING)
-    builder.push(inner0, inner1, outer1, FOLLOWER_PART_RING)
-  }
-
-  const vertexData = new Float32Array(builder.data)
-  const vertexCount = vertexData.length / FOLLOWER_VERTEX_FLOATS
-
-  return {
-    vertexData,
-    vertexCount,
-    triangleCount: vertexCount / 3,
-  }
+  return finishFollowerMesh(builder)
 }

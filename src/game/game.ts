@@ -2,6 +2,7 @@ import type { InputSnapshot, PointerClick } from '../input/input'
 import type { Simulation } from '../sim/simulation'
 import { createCamera, type Camera } from './camera'
 import { createFollowers, type Followers } from './followers'
+import { createGameEvents, type GameEvent } from './gameEvents'
 import { createHuts, type Huts } from './huts'
 import { createPlanet, type Planet } from './planet'
 import { createMatch, type Match } from './scenario'
@@ -32,6 +33,13 @@ export type Game = {
    * to turn into effects. Each is handed out once.
    */
   takeSpellLandings: () => SpellLanding[]
+  /**
+   * Everything that happened in the world since the last call — a chop, a hut
+   * going up, a spell cast or landing, a death — for the speakers. Each is
+   * handed out once, and by a drain of its own, so it does not compete with
+   * `takeSpellLandings` for the same landings.
+   */
+  takeEvents: () => GameEvent[]
   /**
    * `aspect` is the viewport's width / height, needed to turn the cursor into a
    * world-space ray for terrain picking.
@@ -89,6 +97,11 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
   const sun = createSun()
   const spellEvents = createSpellEvents(simulation, [match.playerTribe, match.enemyTribe])
   let landings: SpellLanding[] = []
+  const gameEvents = createGameEvents(simulation, {
+    tribes: [match.playerTribe, match.enemyTribe],
+    planetRadius: planet.radius,
+  })
+  let events: GameEvent[] = []
 
   // Open on the player's tribe. The starting village is wherever the flattest
   // land turned out to be, which is as likely to be behind the planet as in front.
@@ -114,6 +127,11 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
     takeSpellLandings() {
       const taken = landings
       landings = []
+      return taken
+    },
+    takeEvents() {
+      const taken = events
+      events = []
       return taken
     },
     get clearColor() {
@@ -184,6 +202,9 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
       // Capped, so a backgrounded tab that comes back to a dozen landings
       // does not keep them all; the renderer drains this every frame.
       landings = [...landings, ...spellEvents.poll()].slice(-16)
+      // The same, for sound: capped so a long-backgrounded tab does not replay
+      // a crowd's worth of chopping when it returns.
+      events = [...events, ...gameEvents.poll()].slice(-64)
 
       // Last: whatever moved the ground this frame — the brush, a spell, the
       // core's own steps before this update — reaches the mesh before drawing.

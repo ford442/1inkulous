@@ -32,7 +32,7 @@ import {
   type Vec3,
 } from './math'
 import { consumeDirtyRange, VERTEX_BYTES, VERTEX_FLOATS } from './mesh/cubeSphere'
-import { createFollowerMesh, FOLLOWER_VERTEX_BYTES } from './mesh/followerMesh'
+import { createFollowerMesh, FOLLOWER_VERTEX_BYTES, type FollowerMesh } from './mesh/followerMesh'
 import { createHutMesh, HUT_VERTEX_BYTES } from './mesh/hutMesh'
 import { createTreeMesh, TREE_VERTEX_BYTES } from './mesh/treeMesh'
 import { burstsForLanding, createParticles, STEP_FLOATS } from './particles'
@@ -117,6 +117,12 @@ export type RendererOptions = {
   offscreen?: boolean
   /** Rebuilds sculpted normals on the GPU (the default) or leaves them to the CPU. */
   gpuNormals?: boolean
+  /**
+   * The follower to draw, in place of the procedural pawn — a loaded glTF made
+   * into a mesh (src/assets/followerModel.ts). The renderer neither knows nor
+   * cares where it came from; the simulation never does.
+   */
+  followerMesh?: FollowerMesh
 }
 
 export type Renderer = {
@@ -250,10 +256,12 @@ export async function createRenderer(
     { shaderLocation: 2, offset: 24, format: 'float32' },
   ]
 
-  const followerMesh = createFollowerMesh({
-    height: planet.radius * FOLLOWER_HEIGHT_FRACTION,
-    radius: planet.radius * FOLLOWER_RADIUS_FRACTION,
-  })
+  const followerMesh =
+    options.followerMesh ??
+    createFollowerMesh({
+      height: planet.radius * FOLLOWER_HEIGHT_FRACTION,
+      radius: planet.radius * FOLLOWER_RADIUS_FRACTION,
+    })
   const followers = createInstancedMesh(factory, {
     label: 'followers',
     code: followerShader,

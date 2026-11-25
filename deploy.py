@@ -20,6 +20,15 @@ Optional env overrides:
 
 Requirements:
   pip install requests
+
+Response headers on test.1ink.us/1inkulous/ (set on the web server; this script
+only uploads files):
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+They make the page cross-origin isolated, so the simulation worker can publish
+its steps through a SharedArrayBuffer. Without them the game still runs, on
+snapshots posted between threads; the console says which with
+"[core] running on a worker, shared|transfer snapshots".
 """
 
 from __future__ import annotations

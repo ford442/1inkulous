@@ -2,6 +2,11 @@ import { join } from 'node:path'
 import { defineConfig } from 'vite'
 import { coreDir, coreRedirected } from './scripts/core-dir.mjs'
 
+const ISOLATION_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+}
+
 export default defineConfig({
   // Relative asset URLs so the build works under test.1ink.us/1inkulous/
   base: './',
@@ -12,9 +17,20 @@ export default defineConfig({
       ? [{ find: /^\.\.\/wasm\/core\.js$/, replacement: join(coreDir(), 'core.js') }]
       : [],
   },
+  // Cross-origin isolation, so the core's worker can publish its steps into a
+  // SharedArrayBuffer. Without these the game still runs, on posted copies.
+  // The same two headers belong on the deploy: see deploy.py.
   server: {
     port: 5173,
     open: false,
+    headers: ISOLATION_HEADERS,
+  },
+  preview: {
+    headers: ISOLATION_HEADERS,
+  },
+  worker: {
+    // The core's worker imports the Emscripten glue as a module.
+    format: 'es',
   },
   build: {
     target: 'esnext',

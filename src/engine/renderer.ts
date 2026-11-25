@@ -1,6 +1,7 @@
 import type { Game } from '../game/game'
 import {
   FOLLOWER_HEIGHT_FRACTION,
+  FOLLOWER_PREVIOUS_OFFSET,
   FOLLOWER_RADIUS_FRACTION,
 } from '../game/followers'
 import type { PlanetMesh } from './mesh/cubeSphere'
@@ -226,7 +227,8 @@ export async function createRenderer(
         },
         {
           // Written straight from the core's instance buffer: position(3),
-          // heading(3), tribe, flags.
+          // heading(3), tribe, flags, then the position(3) and heading(3) the
+          // last step began from, which the shader draws between.
           arrayStride: game.followers.instanceFloats * 4,
           stepMode: 'instance',
           attributes: [
@@ -234,6 +236,8 @@ export async function createRenderer(
             { shaderLocation: 4, offset: 12, format: 'float32x3' },
             { shaderLocation: 5, offset: 24, format: 'float32' },
             { shaderLocation: 6, offset: 28, format: 'float32' },
+            { shaderLocation: 7, offset: FOLLOWER_PREVIOUS_OFFSET * 4, format: 'float32x3' },
+            { shaderLocation: 8, offset: FOLLOWER_PREVIOUS_OFFSET * 4 + 12, format: 'float32x3' },
           ],
         },
       ],
@@ -516,7 +520,8 @@ export async function createRenderer(
       uniformData[36] = eye[0]
       uniformData[37] = eye[1]
       uniformData[38] = eye[2]
-      uniformData[39] = 0
+      // How far between their two poses the followers are drawn this frame.
+      uniformData[39] = currentGame.followers.stepAlpha
       const { sculptor, huts, shaman } = currentGame
       // The brush cursor while sculpting; otherwise, while a spell is aimed,
       // the disc it would write (a bridge's far end, at the strip's width),

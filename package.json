@@ -12,7 +12,6 @@
     "build:wasm": "bash scripts/build-wasm.sh",
     "build:wasm:debug": "bash scripts/build-wasm.sh debug",
     "clean:wasm": "rm -rf cpp/build-wasm cpp/build-wasm-debug src/wasm/core.js src/wasm/core.wasm",
-    
     "preview": "vite preview",
     "deploy": "python3 deploy.py",
     "test": "node scripts/run-tests.mjs",
@@ -26,7 +25,9 @@
     "test:economy": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-economy.ts",
     "test:ai": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-ai.ts",
     "test:memory": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-memory.ts",
-    "test:worker": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-worker.ts"
+    "test:worker": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-worker.ts",
+    "test:replay": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-replay.ts",
+    "test:interpolation": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-interpolation.ts"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.71",

@@ -1,5 +1,11 @@
-// Simulation core: the fixed-step clock everything else will hang off.
-// Pathfinding, AI and sphere maths land here next.
+// Simulation core: the fixed-step clock everything else hangs off.
+//
+// Determinism rules, which replays and lockstep depend on:
+// - Every step runs the same systems in the same order, and commands from
+//   outside only ever land between steps (the clock never stops mid-step).
+// - Chance comes only from `random_`, seeded by `seed_match`.
+// - No -ffast-math or any other licence to reorder floating point (see
+//   CMakeLists.txt), and one wasm build of libm for sin/cos/sqrt.
 
 #include "1inkulous/core.hpp"
 
@@ -10,9 +16,9 @@ namespace {
 // which keeps core_version_text() safe to hand across the WASM boundary.
 #define INKULOUS_STRINGIFY_(x) #x
 #define INKULOUS_STRINGIFY(x) INKULOUS_STRINGIFY_(x)
-constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(10) "." INKULOUS_STRINGIFY(0);
+constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(11) "." INKULOUS_STRINGIFY(0);
 
-static_assert(kVersionMajor == 0 && kVersionMinor == 10 && kVersionPatch == 0,
+static_assert(kVersionMajor == 0 && kVersionMinor == 11 && kVersionPatch == 0,
               "kVersionText must be kept in step with the version constants");
 
 }  // namespace
@@ -29,6 +35,7 @@ Simulation::Simulation(double step_ms)
   trees_.attach(&nav_, &followers_, &stores_);
   shamans_.attach(&nav_, &terrain_, &followers_, &huts_);
   ai_.attach(&nav_, &followers_, &huts_, &trees_, &shamans_, &stores_);
+  checkpoints_.reserve(static_cast<std::size_t>(kMaxCheckpoints));
 }
 
 void Simulation::set_step_ms(double step_ms) {
@@ -47,29 +54,15 @@ std::int32_t Simulation::advance(double delta_ms) {
   // stall in one go.
   accumulator_ms_ += delta_ms < kMaxFrameMs ? delta_ms : kMaxFrameMs;
 
-  const double dt_seconds = step_ms_ / 1000.0;
-
   std::int32_t steps = 0;
   while (accumulator_ms_ >= step_ms_) {
     accumulator_ms_ -= step_ms_;
-    ++step_count_;
+    step_once();
     ++steps;
-    followers_.step(dt_seconds);
-    // After the followers have moved, so someone who reached a door this step
-    // goes in on it.
-    huts_.step(dt_seconds);
-    // After huts, so a tree a hut has just been raised over is cleared before
-    // anyone chops at it.
-    trees_.step(dt_seconds);
-    // Last, so mana counts the tribe as this step left it: births and all.
-    shamans_.step(dt_seconds);
-    // After everything, so a tribe's AI decides on the world this step left:
-    // a hut that has just gone up, a cast that has just landed.
-    ai_.step(dt_seconds);
   }
 
   // One rebuild per frame rather than per step: the renderer only ever sees the
-  // state the last step left behind.
+  // state the last step left behind, and each follower's pose before it.
   if (steps > 0) {
     followers_.refresh_instances();
     huts_.refresh_instances();
@@ -79,9 +72,48 @@ std::int32_t Simulation::advance(double delta_ms) {
   return steps;
 }
 
+std::int32_t Simulation::run_steps(std::int32_t count) {
+  std::int32_t steps = 0;
+  for (; steps < count; ++steps) {
+    step_once();
+  }
+  if (steps > 0) {
+    followers_.refresh_instances();
+    huts_.refresh_instances();
+    trees_.refresh_instances();
+  }
+  return steps;
+}
+
+void Simulation::step_once() {
+  const double dt_seconds = step_ms_ / 1000.0;
+  ++step_count_;
+  // Before anyone moves: the pose each follower is drawn from towards the one
+  // this step leaves.
+  followers_.mark_step();
+  followers_.step(dt_seconds);
+  // After the followers have moved, so someone who reached a door this step
+  // goes in on it.
+  huts_.step(dt_seconds);
+  // After huts, so a tree a hut has just been raised over is cleared before
+  // anyone chops at it.
+  trees_.step(dt_seconds);
+  // Last, so mana counts the tribe as this step left it: births and all.
+  shamans_.step(dt_seconds);
+  // After everything, so a tribe's AI decides on the world this step left:
+  // a hut that has just gone up, a cast that has just landed.
+  ai_.step(dt_seconds);
+
+  if (step_count_ % kCheckpointEverySteps == 0 &&
+      checkpoints_.size() < static_cast<std::size_t>(kMaxCheckpoints)) {
+    checkpoints_.push_back({step_count_, state_hash()});
+  }
+}
+
 void Simulation::reset() {
   accumulator_ms_ = 0.0;
   step_count_ = 0;
+  checkpoints_.clear();
 }
 
 }  // namespace inkulous

@@ -39,8 +39,9 @@ for (const name of names) {
 }
 
 console.log('\n=== summary')
+const width = Math.max(...results.map(({ name }) => name.length))
 for (const { name, passed, seconds } of results) {
-  console.log(`${passed ? 'PASS' : 'FAIL'}  ${name.padEnd(14)} ${seconds.toFixed(1)}s`)
+  console.log(`${passed ? 'PASS' : 'FAIL'}  ${name.padEnd(width)} ${seconds.toFixed(1)}s`)
 }
 const failed = results.filter((result) => !result.passed)
 if (failed.length > 0) {

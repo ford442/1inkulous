@@ -13,7 +13,8 @@ import { createGame } from '../src/game/game.ts'
 import type { InputSnapshot, PointerSnapshot } from '../src/input/input.ts'
 import { createSimulationHandle } from '../src/sim/handle.ts'
 import { serveCore, type HostPort } from '../src/sim/host.ts'
-import { applyCommand, stateDigest } from '../src/sim/protocol.ts'
+import { stateDigest } from '../src/sim/protocol.ts'
+import { decodeReplay, encodeReplay, playCommands, playReplay } from '../src/sim/replay.ts'
 import { createSimulation, HutKind, HutSite, Spell, type Simulation } from '../src/sim/simulation.ts'
 import type { ClientPort, WorkerSimulation } from '../src/sim/workerClient.ts'
 
@@ -58,8 +59,11 @@ async function run(shared: boolean) {
 
   // The lockstep reference: the same log on another in-process core.
   const reference = await createSimulation()
-  for (const command of handle.log) applyCommand(reference, command)
-  check(`${label}: the log rebuilds the same world in-process`, stateDigest(reference) === stateDigest(core))
+  playCommands(reference, handle.log)
+  check(`${label}: the log rebuilds the same world in-process`, stateDigest(reference) === stateDigest(core) &&
+    reference.stateHash() === core.stateHash(), `state hash ${core.stateHash().toString(16)}`)
+  check(`${label}: the match was seeded first, and frame ticks were not logged`,
+    handle.log[0]?.op === 'seedMatch' && !handle.log.some((c) => c.op === 'tick' || c.op === 'takeTerrainDirty'))
 
   const channel = new MessageChannel()
   serveCore(channel.port2 as unknown as HostPort)
@@ -165,6 +169,22 @@ async function run(shared: boolean) {
     check(`${label}: two edits between frames are covered`, missed !== null)
   }
   same('both sculpted worlds agree')
+
+  // The host carried the log on: the setup, then every command it took, on
+  // the step it took it. Played back on a fresh core, it is the same match.
+  const replay = await worker.exportReplay()
+  check(`${label}: the host's replay ends where the reference is`,
+    replay.final.step === reference.stepCount && replay.final.hash === reference.stateHash(),
+    `step ${replay.final.step}, ${replay.final.hash.toString(16)} vs ${reference.stateHash().toString(16)}`)
+  check(`${label}: with the live commands stamped after the setup`,
+    replay.commands.length > handle.log.length &&
+    replay.commands.slice(handle.log.length).some((c) => c.op === 'orderFollowerMove' && c.step > 0) &&
+    replay.commands.every((c, i) => i === 0 || c.step >= replay.commands[i - 1].step))
+  const played = playReplay(await createSimulation(), decodeReplay(encodeReplay(replay)))
+  check(`${label}: and replays to the same hash on a fresh core`, played.matches,
+    `${played.final.hash.toString(16)}, diverged at ${played.divergedAt?.step ?? 'none'}`)
+  check(`${label}: the snapshot carries the match seed`,
+    worker.matchSeed === reference.matchSeed && replay.seed === reference.matchSeed, `${worker.matchSeed}`)
 
   // A frame of the game itself: build mode hovering, a spell aimed, an order.
   // The main thread must make no call into its own core, bar the height mirror.

@@ -27,7 +27,6 @@ export const MAX_TREES = 512
  * planet has inland space for about 216.
  */
 const DEFAULT_TREE_COUNT = 140
-const DEFAULT_SEED = 1
 
 /** Instance layout, in floats: position(3), heading(3), size, chop progress. */
 const OFFSET_POSITION = 0
@@ -36,10 +35,11 @@ const OFFSET_SIZE = 6
 const NOTICE_MS = 2500
 
 export type TreesOptions = {
-  /** How many to plant at match start. */
+  /**
+   * How many to plant at match start. Where they stand is drawn from the
+   * match's generator, so the match seed (`createGame`) decides the forest.
+   */
   count?: number
-  /** Seeds the core's scatter: the same seed plants the same forest. */
-  seed?: number
 }
 
 export type TreeViewContext = {
@@ -68,7 +68,7 @@ export type Trees = {
 }
 
 export function createTrees(planet: Planet, simulation: SimulationClient, options: TreesOptions = {}): Trees {
-  simulation.spawnTrees(Math.min(options.count ?? DEFAULT_TREE_COUNT, MAX_TREES), options.seed ?? DEFAULT_SEED)
+  simulation.spawnTrees(Math.min(options.count ?? DEFAULT_TREE_COUNT, MAX_TREES))
 
   const height = planet.radius * TREE_HEIGHT_FRACTION
   const radius = planet.radius * TREE_RADIUS_FRACTION

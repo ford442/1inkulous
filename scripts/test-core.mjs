@@ -30,8 +30,8 @@ const budget = (name, pass, detail = '') =>
 
 const m = await createCoreModule()
 const version = m.UTF8ToString(m._core_version_text())
-ok('version string', version === '0.10.0', version)
-ok('encoded version matches', m._core_version() === 1000, String(m._core_version()))
+ok('version string', version === '0.11.0', version)
+ok('encoded version matches', m._core_version() === 1100, String(m._core_version()))
 
 // default step
 m._core_init(0)
@@ -354,7 +354,7 @@ ok('follower spawned', id === 0 && m._core_follower_count() === 1, `id ${id}`)
 // at spawn time, or this reads past the end of it.
 ok('spawns on its node, readable before the first step',
    angleTo(followerPosition(id), corner) < 1e-5)
-ok('instance stride is 8 floats', m._core_follower_instance_floats() === 8)
+ok('instance stride is 14 floats: two poses, tribe, flags', m._core_follower_instance_floats() === 14)
 
 ok('nothing selected yet', m._core_follower_selected_count() === 0)
 ok('order with no selection routes nobody', m._core_follower_order_move(...far) === 0)
@@ -455,8 +455,8 @@ ok('nobody in the crowd stands on anybody else', crowdGap > SPACING * 0.8,
    `closest pair ${crowdGap.toFixed(4)} apart, spacing ${SPACING}`)
 
 const packed = instances()
-ok('instance buffer is packed and sized', packed.data.length === 64 * 8)
-ok('tribe survives the round trip', packed.data[6] === 0 && packed.data[8 + 6] === 1)
+ok('instance buffer is packed and sized', packed.data.length === 64 * 14)
+ok('tribe survives the round trip', packed.data[6] === 0 && packed.data[14 + 6] === 1)
 
 // ---------------------------------------------------------------------------
 // Smoothing. A grid A* walks the links, so anything that is not a row, a column

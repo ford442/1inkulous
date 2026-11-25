@@ -8,6 +8,7 @@
 #include "1inkulous/huts.hpp"
 #include "1inkulous/nav.hpp"
 #include "1inkulous/shaman.hpp"
+#include "1inkulous/state_hash.hpp"
 #include "1inkulous/trees.hpp"
 #include "1inkulous/tribes.hpp"
 
@@ -105,6 +106,9 @@ class TribeAi {
   void step(double dt_seconds);
 
   void clear();
+
+  // Mixes in everything of this that decides the next step. See state_hash.hpp.
+  void hash(StateHash& out) const;
 
  private:
   struct Mind {

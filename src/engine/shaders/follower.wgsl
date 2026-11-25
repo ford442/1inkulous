@@ -2,6 +2,12 @@
 // buffer in linear memory, the renderer uploads it whole and this vertex shader
 // turns each instance into a frame on the sphere. Whether there are five units
 // or a thousand, it stays one draw.
+//
+// Each instance carries two poses: the one the last fixed step left, and the
+// one it began from. The simulation steps at 20Hz; the display may run at 144.
+// So each frame draws every follower between the two, `cameraPos.w` of the
+// way (the clock's leftover over the step length), and a walker glides rather
+// than jumping once a step and standing still between.
 
 struct Uniforms {
   viewProj: mat4x4f,
@@ -37,6 +43,37 @@ struct VertexOutput {
   @location(4) @interpolate(flat) part: f32,
 }
 
+// Between the pose a follower began the step in and the one it ended it in.
+// On the sphere: the unit directions are blended and renormalised, the radius
+// (ground height) blended on its own, so the path bows with the planet instead
+// of cutting the chord, and a climb does not drag the direction uphill. Over
+// one step a walker turns through a few thousandths of a radian, where this
+// and a true slerp differ by far less than a pixel. Mirrored by
+// interpolatePose in src/game/followers.ts, which test:interpolation holds to.
+fn interpolatePosition(previous: vec3f, current: vec3f, alpha: f32) -> vec3f {
+  let fromRadius = length(previous);
+  let toRadius = length(current);
+  if (fromRadius < 1e-6 || toRadius < 1e-6) {
+    return current;
+  }
+  let blended = mix(previous / fromRadius, current / toRadius, alpha);
+  let len = length(blended);
+  if (len < 1e-6) {
+    return current;
+  }
+  return blended * (mix(fromRadius, toRadius, alpha) / len);
+}
+
+// Headings are unit tangents: blended and renormalised. One that turned right
+// round in a step has no halfway, and is drawn facing its new way.
+fn interpolateHeading(previous: vec3f, current: vec3f, alpha: f32) -> vec3f {
+  let blended = mix(previous, current, alpha);
+  if (length(blended) < 1e-4) {
+    return current;
+  }
+  return normalize(blended);
+}
+
 // Placeholder tribe colours, in the spirit of the four warring tribes. Real art
 // replaces these later.
 fn tribeColor(tribe: f32) -> vec3f {
@@ -52,12 +89,18 @@ fn vs_main(
   @location(0) position: vec3f,
   @location(1) normal: vec3f,
   @location(2) part: f32,
-  @location(3) instancePosition: vec3f,
-  @location(4) instanceHeading: vec3f,
+  @location(3) currentPosition: vec3f,
+  @location(4) currentHeading: vec3f,
   @location(5) instanceTribe: f32,
   @location(6) instanceFlags: f32,
+  @location(7) previousPosition: vec3f,
+  @location(8) previousHeading: vec3f,
 ) -> VertexOutput {
   var output: VertexOutput;
+
+  let alpha = clamp(uniforms.cameraPos.w, 0.0, 1.0);
+  let instancePosition = interpolatePosition(previousPosition, currentPosition, alpha);
+  let instanceHeading = interpolateHeading(previousHeading, currentHeading, alpha);
 
   let flags = u32(instanceFlags);
   let selected = f32((flags & FLAG_SELECTED) != 0u);

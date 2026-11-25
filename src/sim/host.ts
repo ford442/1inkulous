@@ -18,6 +18,7 @@ import {
   type SnapshotLayout,
   type ToHost,
 } from './protocol'
+import { createRecorder, exportReplay, playCommands, type CommandRecorder } from './replay'
 import { createSimulation, type Simulation } from './simulation'
 import type { HutKind } from './hutSite'
 import type { Spell } from './spell'
@@ -36,11 +37,15 @@ export type HostPort = {
  */
 export function serveCore(port: HostPort): void {
   let core: Simulation | null = null
+  // The match so far: the world-building log, then every command since.
+  let recorder: CommandRecorder | null = null
   let layout: SnapshotLayout | null = null
   let manual = false
   let paused = false
   let timer: ReturnType<typeof setTimeout> | null = null
   let lastTime = 0
+  // When the clock last ran, on the epoch timeline both threads share.
+  let clockAt = -1
   let simMsTotal = 0
   let simStepsTotal = 0
   // Terrain edits are sticky in the header: see H.terrainRev.
@@ -84,6 +89,12 @@ export function serveCore(port: HostPort): void {
     header[H.dirtyLast] = dirtyLast
     header[H.simMsTotal] = simMsTotal
     header[H.simStepsTotal] = simStepsTotal
+    header[H.pendingMs] = sim.module._core_pending_ms()
+    header[H.clockAt] = manual ? -1 : clockAt
+    header[H.matchSeed] = sim.matchSeed
+    const checkpoints = sim.module._core_checkpoint_count()
+    header[H.checkpointStep] = checkpoints > 0 ? sim.module._core_checkpoint_step(checkpoints - 1) : 0
+    header[H.checkpointHash] = checkpoints > 0 ? sim.module._core_checkpoint_hash(checkpoints - 1) >>> 0 : 0
 
     for (let tribe = 0; tribe < MAX_TRIBES; tribe += 1) {
       const at = H.tribes + tribe * T.size
@@ -146,6 +157,7 @@ export function serveCore(port: HostPort): void {
   const advance = (ms: number) => {
     const started = performance.now()
     const steps = core!.tick(ms)
+    clockAt = performance.timeOrigin + started
     if (steps > 0) {
       simMsTotal += performance.now() - started
       simStepsTotal += steps
@@ -178,11 +190,12 @@ export function serveCore(port: HostPort): void {
       case 'init': {
         manual = message.options.clock === 'manual'
         core = await createSimulation({ stepMs: message.options.stepMs })
-        for (const command of message.log) {
-          applyCommand(core, command)
-        }
+        // Each command after exactly the steps it was stamped with.
+        playCommands(core, message.log)
+        recorder = createRecorder(core, message.log)
         // Digest before the snapshot's first fill clears the terrain's dirty range.
         const digest = stateDigest(core)
+        const hash = core.stateHash()
         layout = snapshotLayout(
           core.navHeights().length,
           core.followerInstanceFloats,
@@ -197,8 +210,9 @@ export function serveCore(port: HostPort): void {
         // The first snapshot goes out before `ready`, so the client never has
         // a frame with nothing to read.
         publish()
-        send({ type: 'ready', digest, layout, shared })
+        send({ type: 'ready', digest, hash, layout, shared })
         lastTime = performance.now()
+        clockAt = performance.timeOrigin + lastTime
         schedule()
         while (backlog.length > 0) {
           await handle(backlog.shift()!)
@@ -208,6 +222,8 @@ export function serveCore(port: HostPort): void {
       case 'commands': {
         const results: { id: number; value: unknown }[] = []
         message.commands.forEach((command, i) => {
+          // Between steps, always: the clock only runs in `advance`.
+          recorder!.record(command)
           const value = applyCommand(core!, command)
           const id = message.ids[i]
           if (id !== null) {
@@ -229,6 +245,9 @@ export function serveCore(port: HostPort): void {
         send({ type: 'answer', id: message.id, value })
         return
       }
+      case 'replay':
+        send({ type: 'answer', id: message.id, value: exportReplay(core!, recorder!.commands) })
+        return
       case 'advance':
         if (advance(message.ms) > 0) {
           publish()
@@ -246,6 +265,7 @@ export function serveCore(port: HostPort): void {
           paused = false
           // A hidden tab is not owed the time it was away.
           lastTime = performance.now()
+          clockAt = performance.timeOrigin + lastTime
           schedule()
         }
         return

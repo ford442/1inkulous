@@ -43,8 +43,46 @@ double core_elapsed_ms(void);
 // Time accumulated towards the next step, in milliseconds.
 double core_pending_ms(void);
 
-// Clears the clock, keeping the step length.
+// Clears the clock and its checkpoints, keeping the step length.
 void core_reset(void);
+
+// Runs exactly `count` fixed steps, leaving the accumulator alone: how a
+// replay or a lockstep peer drives the core, by step number rather than by
+// frame time. Returns how many ran.
+int core_steps(int count);
+
+// How far the clock has got from the last step towards the next, in [0, 1):
+// core_pending_ms over core_step_ms. The renderer draws each follower that far
+// from its previous pose to its current one (see core_follower_instances).
+double core_step_alpha(void);
+
+// --- determinism ----------------------------------------------------------
+//
+// The same seed and the same commands, landing on the same steps, give the
+// same match: the same state hash after every step, in Node or a browser, in
+// a release core or a debug one. Replays and lockstep both rest on it.
+
+// Seeds the match's random generator — the only source of chance in the
+// core. Call it as the match starts, before anything draws from it (the
+// forest). The seed is a uint32 crossing as an int.
+void core_match_seed(int seed);
+// The seed the generator was last seeded with (a uint32, as an int; read it
+// with `>>> 0`). A fresh core holds the default seed.
+int core_match_seed_value(void);
+
+// FNV-1a over everything that decides the next step — followers and their
+// routes, huts, trees, stores, mana, casts, the AI, the ground, the random
+// state — but not render buffers or scratch. A uint32 crossing as an int.
+int core_state_hash(void);
+
+// The hash is also taken every core_checkpoint_every() steps, as that step
+// ends, and kept since the clock was last cleared. Index 0 is the oldest.
+int core_checkpoint_every(void);
+int core_checkpoint_count(void);
+// The step a checkpoint was taken on (a double, like core_step_count), and its
+// hash (a uint32 as an int). 0 for a bad index.
+double core_checkpoint_step(int index);
+int core_checkpoint_hash(int index);
 
 // --- navigation grid ------------------------------------------------------
 //
@@ -138,7 +176,10 @@ int core_follower_count(void);
 void core_followers_clear(void);
 
 // Packed render instances: core_follower_instance_floats() floats each, in id
-// order. The pointer moves when the population grows, so re-read it per frame.
+// order — position(3), heading(3), tribe, flags, then the position(3) and
+// heading(3) the follower had as the last step began. Draw it between the two
+// by core_step_alpha(). The pointer moves when the population grows, so
+// re-read it per frame.
 float* core_follower_instances(void);
 int core_follower_instance_floats(void);
 
@@ -268,9 +309,10 @@ double core_train_seconds(void);
 int core_wood(int tribe);
 void core_wood_set(int tribe, int wood);
 
-// Scatters up to `count` trees, chosen by a generator seeded with `seed`,
-// replacing any standing. Needs the nav graph. Returns how many stand.
-int core_trees_spawn(int count, int seed);
+// Scatters up to `count` trees, drawn from the match's generator (see
+// core_match_seed), replacing any standing. Needs the nav graph. Returns how
+// many stand.
+int core_trees_spawn(int count);
 int core_tree_count(void);
 void core_trees_clear(void);
 

@@ -39,6 +39,65 @@ export const FOLLOWER_RADIUS_FRACTION = 0.008
 const MAX_FOLLOWERS = 1024
 const DEFAULT_SPAWN_COUNT = 60
 
+/**
+ * Where an instance's previous pose starts, in floats: kInstancePrevOffset in
+ * cpp/include/1inkulous/followers.hpp. Position(3) then heading(3), as the
+ * last step began.
+ */
+export const FOLLOWER_PREVIOUS_OFFSET = 8
+
+/**
+ * Where follower `id` is drawn `alpha` of the way through to the next step:
+ * the vertex shader's interpolatePosition and interpolateHeading
+ * (src/engine/shaders/follower.wgsl), here for picking and for the tests that
+ * hold the shader's maths to account. Writes position(3) then heading(3).
+ */
+export function interpolatePose(
+  instances: Float32Array,
+  stride: number,
+  id: number,
+  alpha: number,
+  out: Float32Array | number[] = new Float32Array(6),
+): Float32Array | number[] {
+  const base = id * stride
+  const prev = base + FOLLOWER_PREVIOUS_OFFSET
+  const a = Math.min(1, Math.max(0, alpha))
+  const mix = (from: number, to: number) => from + (to - from) * a
+
+  // Unit directions blended, radius (ground height) blended on its own.
+  const from = Math.hypot(instances[prev], instances[prev + 1], instances[prev + 2])
+  const to = Math.hypot(instances[base], instances[base + 1], instances[base + 2])
+  const px = from > 1e-6 ? mix(instances[prev] / from, instances[base] / to) : 0
+  const py = from > 1e-6 ? mix(instances[prev + 1] / from, instances[base + 1] / to) : 0
+  const pz = from > 1e-6 ? mix(instances[prev + 2] / from, instances[base + 2] / to) : 0
+  const blended = Math.hypot(px, py, pz)
+  if (from < 1e-6 || to < 1e-6 || blended < 1e-6) {
+    out[0] = instances[base]
+    out[1] = instances[base + 1]
+    out[2] = instances[base + 2]
+  } else {
+    const radius = mix(from, to)
+    out[0] = (px / blended) * radius
+    out[1] = (py / blended) * radius
+    out[2] = (pz / blended) * radius
+  }
+
+  const hx = mix(instances[prev + 3], instances[base + 3])
+  const hy = mix(instances[prev + 4], instances[base + 4])
+  const hz = mix(instances[prev + 5], instances[base + 5])
+  const turn = Math.hypot(hx, hy, hz)
+  if (turn < 1e-4) {
+    out[3] = instances[base + 3]
+    out[4] = instances[base + 4]
+    out[5] = instances[base + 5]
+  } else {
+    out[3] = hx / turn
+    out[4] = hy / turn
+    out[5] = hz / turn
+  }
+  return out
+}
+
 /** Pick radius around a follower, as a fraction of the viewport's half-height. */
 const PICK_SCREEN_FRACTION = 0.025
 
@@ -80,6 +139,8 @@ export type Followers = {
   /** Live view of the core's instance buffer. Re-read every frame. */
   instances: () => Float32Array
   readonly instanceFloats: number
+  /** How far between each follower's previous pose and current one to draw this frame, 0..1. */
+  readonly stepAlpha: number
   /** How many followers are walking a path right now. */
   readonly walkingCount: number
   /** How many of them are warriors. */
@@ -252,6 +313,9 @@ export function createFollowers(
       return simulation.followerInstances()
     },
     instanceFloats: simulation.followerInstanceFloats,
+    get stepAlpha() {
+      return simulation.stepAlpha
+    },
     get selectionBand() {
       return selectionBand
     },

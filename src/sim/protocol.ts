@@ -1,3 +1,4 @@
+import type { StampedCommand } from './replay'
 import type { Simulation } from './simulation'
 
 /**
@@ -17,6 +18,7 @@ import type { Simulation } from './simulation'
 export const COMMAND_OPS = [
   'tick',
   'reset',
+  'seedMatch',
   'uploadNavGraph',
   'sculptTerrain',
   'flattenTerrain',
@@ -81,10 +83,13 @@ export type HostOptions = {
 }
 
 export type ToHost =
-  | { readonly type: 'init'; readonly options: HostOptions; readonly log: readonly Command[] }
+  /** `log` is every command that built the world, stamped with its step: see replay.ts. */
+  | { readonly type: 'init'; readonly options: HostOptions; readonly log: readonly StampedCommand[] }
   /** `ids[i]` asks for the result of `commands[i]`; null wants none. */
   | { readonly type: 'commands'; readonly commands: readonly Command[]; readonly ids: readonly (number | null)[] }
   | { readonly type: 'query'; readonly id: number; readonly query: Query }
+  /** The match so far as a Replay, answered with that id. */
+  | { readonly type: 'replay'; readonly id: number }
   | { readonly type: 'advance'; readonly ms: number }
   | { readonly type: 'pause' }
   | { readonly type: 'resume' }
@@ -101,6 +106,8 @@ export type FromHost =
   | {
       readonly type: 'ready'
       readonly digest: number
+      /** The core's own state hash once the log was replayed: stricter than the digest. */
+      readonly hash: number
       readonly layout: SnapshotLayout
       readonly shared: SharedSnapshots | null
     }
@@ -140,7 +147,19 @@ export const H = {
   /** Milliseconds inside `core_tick`, and steps run, since the host started. */
   simMsTotal: 14,
   simStepsTotal: 15,
-  tribes: 16,
+  /**
+   * The clock as the host last ran it: time carried towards the next step,
+   * and when, in ms since the epoch (`performance.timeOrigin + now()`, so the
+   * main thread can read it against its own clock); -1 on a manual clock.
+   * From these the client works out how far to draw between poses.
+   */
+  pendingMs: 16,
+  clockAt: 17,
+  matchSeed: 18,
+  /** The newest state-hash checkpoint: its step (0 before the first) and hash. */
+  checkpointStep: 19,
+  checkpointHash: 20,
+  tribes: 21,
 } as const
 
 /** Per-tribe fields, offsets inside one tribe's block. */

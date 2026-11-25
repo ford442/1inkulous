@@ -1,12 +1,14 @@
 import { isCommandOp, type Command, type HostOptions } from './protocol'
+import { createRecorder, exportReplay, type Replay, type StampedCommand } from './replay'
 import type { Simulation, SimulationClient } from './simulation'
 import { connectWorkerSimulation, type ClientPort, type WorkerSimulation } from './workerClient'
 
 export type SimulationHandle = {
   /**
-   * The simulation the game is built on. While the world is being set up it is
-   * the in-process core, and every command it takes is recorded; `moveToWorker`
-   * then swaps what stands behind it, so the game keeps the same object.
+   * The simulation the game is built on. While the core is in-process every
+   * command it takes is recorded, stamped with its step; `moveToWorker` then
+   * swaps what stands behind it, so the game keeps the same object, and the
+   * worker's host carries the log on from there.
    *
    * Typed as the in-process `Simulation` because setup code reads command
    * results synchronously; frame-time code takes it as a `SimulationClient`.
@@ -14,18 +16,21 @@ export type SimulationHandle = {
   readonly simulation: Simulation
   /** Where the core runs now. */
   readonly current: SimulationClient
-  /** The commands that built the world so far. */
-  readonly log: readonly Command[]
+  /** The commands recorded in-process: the world's building, and the match if it stays here. */
+  readonly log: readonly StampedCommand[]
   /**
    * Replays the world onto a core behind `port` and switches to it. Rejects,
    * and leaves the in-process core in charge, if the replay does not match.
    */
   moveToWorker: (port: ClientPort, options?: HostOptions) => Promise<WorkerSimulation>
+  /** The match so far, wherever the core is running. */
+  exportReplay: () => Promise<Replay>
 }
 
 export function createSimulationHandle(core: Simulation): SimulationHandle {
-  const log: Command[] = []
+  const recorder = createRecorder(core)
   let current: SimulationClient = core
+  let worker: WorkerSimulation | null = null
   let recording = true
 
   const simulation = new Proxy(core, {
@@ -36,8 +41,7 @@ export function createSimulationHandle(core: Simulation): SimulationHandle {
       }
       if (recording && isCommandOp(name)) {
         return (...args: unknown[]) => {
-          // A copy: the caller may reuse its vectors.
-          log.push({ op: name, args: structuredClone(args) } as unknown as Command)
+          recorder.record({ op: name, args } as unknown as Command)
           return (value as (...a: unknown[]) => unknown).apply(current, args)
         }
       }
@@ -50,19 +54,22 @@ export function createSimulationHandle(core: Simulation): SimulationHandle {
     get current() {
       return current
     },
-    log,
+    log: recorder.commands,
     async moveToWorker(port, options) {
       // Nothing may change the in-process core between here and the switch,
       // or the worker would start from a world we have moved on from.
       recording = false
       try {
-        const worker = await connectWorkerSimulation(port, core, log, options)
+        worker = await connectWorkerSimulation(port, core, recorder.commands, options)
         current = worker
         return worker
       } catch (error) {
         recording = true
         throw error
       }
+    },
+    exportReplay() {
+      return worker ? worker.exportReplay() : Promise.resolve(exportReplay(core, recorder.commands))
     },
   }
 }

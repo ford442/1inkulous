@@ -40,3 +40,4 @@ src/wasm/core.wasm.map
 # Python bytecode (deploy.py)
 __pycache__/
 *.pyc
+webgpu-check-out/

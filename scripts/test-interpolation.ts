@@ -205,7 +205,7 @@ check('drawn where the step left it, it would stutter: still most frames, then a
   check('follower.wgsl takes both poses as instance attributes',
     /@location\(7\)\s+previousPosition:\s*vec3f/.test(shader) && /@location\(8\)\s+previousHeading:\s*vec3f/.test(shader))
   check('and draws between them by cameraPos.w',
-    /let alpha = clamp\(uniforms\.cameraPos\.w, 0\.0, 1\.0\)/.test(shader) &&
+    /let alpha = clamp\(frame\.cameraPos\.w, 0\.0, 1\.0\)/.test(shader) &&
     /interpolatePosition\(previousPosition, currentPosition, alpha\)/.test(shader) &&
     /interpolateHeading\(previousHeading, currentHeading, alpha\)/.test(shader))
   check('with the blend interpolatePose mirrors: unit directions renormalised, radius on its own',
@@ -214,7 +214,7 @@ check('drawn where the step left it, it would stutter: still most frames, then a
 
   const renderer = read('src/engine/renderer.ts')
   check('the renderer hands the shader the alpha every frame',
-    /uniformData\[39\] = currentGame\.followers\.stepAlpha/.test(renderer))
+    /frameData\.set\(\[eye\[0\], eye\[1\], eye\[2\], currentGame\.followers\.stepAlpha\], FRAME\.cameraPos\)/.test(renderer))
   check('and the previous pose at the core\'s offset',
     /shaderLocation: 7, offset: FOLLOWER_PREVIOUS_OFFSET \* 4/.test(renderer) &&
     /shaderLocation: 8, offset: FOLLOWER_PREVIOUS_OFFSET \* 4 \+ 12/.test(renderer))

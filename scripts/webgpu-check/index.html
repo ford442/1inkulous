@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>1inkulous — headless WebGPU check</title>
+  </head>
+  <body>
+    <!-- Sized like the game's canvas; the renderer draws offscreen, so it is never presented. -->
+    <canvas id="game-canvas" width="1024" height="768"></canvas>
+    <div id="hud" hidden></div>
+    <script type="module" src="./check.ts"></script>
+  </body>
+</html>

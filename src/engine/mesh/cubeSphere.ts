@@ -49,6 +49,13 @@ export type PlanetMesh = {
   readonly weldVertices: Uint32Array
   /** Bumped whenever `vertexData` changes, so consumers can detect edits. */
   revision: number
+  /**
+   * Set by a renderer that rebuilds normals on the GPU. refreshVertices then
+   * moves vertices and marks every vertex whose normal would change dirty,
+   * but leaves the normal itself alone: the copy in `vertexData` goes stale,
+   * and the GPU's pass over the dirty range writes the real one.
+   */
+  normalsOnGpu: boolean
   /** Vertex range of `vertexData` written since the last consumeDirtyRange(). */
   dirtyMin: number
   dirtyMax: number
@@ -262,6 +269,7 @@ export function createPlanetMesh(options: CubeSphereOptions = {}): PlanetMesh {
     weldVertexOffsets,
     weldVertices,
     revision: 0,
+    normalsOnGpu: false,
     dirtyMin: 0,
     dirtyMax: vertexCount - 1,
   }
@@ -475,6 +483,16 @@ export function refreshVertices(mesh: PlanetMesh, vertices: readonly number[]): 
       affected.add(weldIds[indices[triangle + 1]!]!)
       affected.add(weldIds[indices[triangle + 2]!]!)
     }
+  }
+
+  if (mesh.normalsOnGpu) {
+    for (const weld of affected) {
+      for (let v = weldVertexOffsets[weld]!; v < weldVertexOffsets[weld + 1]!; v += 1) {
+        markDirty(mesh, weldVertices[v]!, weldVertices[v]!)
+      }
+    }
+    mesh.revision += 1
+    return
   }
 
   for (const weld of affected) {

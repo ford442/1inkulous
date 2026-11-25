@@ -1,6 +1,6 @@
 import './style.css'
 import { createRenderer } from './engine/renderer'
-import { deviceLossMessage, WebGpuUnavailableError } from './engine/webgpu'
+import { deviceLossMessage, WebGpuUnavailableError, withheldFeatures } from './engine/webgpu'
 import { createGame, DEFAULT_MATCH_SEED } from './game/game'
 import { createHud, showFatal } from './ui/hud'
 import { createInput } from './input/input'
@@ -49,7 +49,14 @@ async function main() {
     `core ${simulation.version} · ${game.followers.count} followers against ${game.match.enemy.name} — starting renderer…`,
   )
 
-  const renderer = await createRenderer(canvas, game)
+  // `?features=none` (or `-timestamp-query,-shader-f16`) runs the paths an
+  // adapter without them would take; `?normals=cpu` keeps sculpted normals on
+  // the CPU, for comparing the two.
+  const params = new URLSearchParams(location.search)
+  const renderer = await createRenderer(canvas, game, {
+    withholdFeatures: withheldFeatures(params.get('features')),
+    gpuNormals: params.get('normals') !== 'cpu',
+  })
   hud.setStatus(`${renderer.statusMessage} · core ${simulation.version}`)
 
   // One way out of the frame loop, whatever the reason: the loop stops, the
@@ -120,6 +127,8 @@ async function main() {
           syncMs: perfSyncMs / perfFrames,
           gameMs: perfGameMs / perfFrames,
           drawMs: perfDrawMs / perfFrames,
+          gpu: renderer.takeGpuTimings(),
+          gpuSupported: renderer.gpuTimingSupported,
         })
         perfWindowStart = now
         perfFrames = 0

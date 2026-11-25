@@ -16,8 +16,8 @@ Node tests drive it. Serve with `Cross-Origin-Opener-Policy: same-origin` and
 `vite preview` already do.
 
 ```
-src/engine/   WebGPU device, planet + follower meshes, renderer, picking, math
-src/engine/shaders/   the WGSL, one file per pipeline, imported as source
+src/engine/   WebGPU device and features, materials, renderer, particles, GPU timer, picking, math
+src/engine/shaders/   the WGSL; shaders/lib/ holds what they #include
 src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers, huts, trees
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
@@ -77,7 +77,8 @@ emcc -v   # confirm
 | `npm run test:worker` | The core moved to a worker over a MessageChannel, both transports: the log replays to the same world and state hash, commands and queries answer, and the host's replay plays back to the same hash |
 | `npm run test:replay` | Determinism: the opening match, both tribes on the AI, 10,000 steps on ragged frame times, replayed twice to the same state hash and every checkpoint; another seed, a nudged order and a late one are each caught; the checked-in recording still plays to its hash; no `Math.random` in `src/sim` or `src/game`. `-- file.replay.json` plays a saved replay instead; `-- --record` re-records the checked-in one |
 | `npm run test:interpolation` | Followers drawn between steps: at 144 Hz on a 30 Hz core a walker moves the same distance every frame (and would stutter without it), the previous pose is the one the step began from, someone set down is not slid, and the shader and renderer source say the same |
-| `npm run test:gpu` | Drawing-buffer sizing, limit planning, GPU error reporting and loss messages, and what the renderer's source must keep true |
+| `npm run test:gpu` | Drawing-buffer sizing, limit and feature planning, GPU error reporting and loss messages, GPU timings, WGSL `#include`/`#ifdef`, the frame and particle layouts shader and CPU share, the particle ring, reversed Z, the shadow box, the sun, spell landings, and what the renderer's source must keep true |
+| `npm run check:webgpu` | The real game drawn in headless Chromium on a software GPU: every shader compiles, no validation errors, GPU normals match the CPU's, particles and timings work, with and without optional features. Needs the core built and Playwright; not part of `npm test` (see [Headless WebGPU check](#headless-webgpu-check)) |
 | `npm run clean:wasm` | Removes the CMake build directories and generated artifacts |
 
 `npm test` finds the `test:*` scripts in `package.json` itself, so a new one is
@@ -173,20 +174,91 @@ tree a follower is sent to; `follower_combat.cpp` health and the fight. Likewise
 
 ## Rendering
 
-The frame is drawn into 4x multisampled colour and depth targets and resolved to
-the canvas, so the planet's limb and the instanced pawns do not shimmer as the
-camera moves. Around that:
+A frame is four passes:
 
+1. **compute** — only when there is work: normals for the terrain a sculpt or
+   spell just moved, and the spell particles.
+2. **shadow** — the planet, followers, trees and huts into a 2048² depth map
+   from the sun: one orthographic cascade around the whole planet, where a
+   follower is about 20 texels tall.
+3. **scene** — into 4x multisampled `rgba16float` colour over a reversed-Z
+   `depth32float` buffer: the planet; followers, trees and huts; then, blended
+   (premultiplied alpha), the sea, the air, the build ghost and the particles.
+4. **post** — the resolved scene through the exposure curve
+   (`1 - exp(-1.35 * color)`) onto the canvas. This is the only tone mapping:
+   everything before it is linear, so the air and the particles add light
+   rather than painting over a finished picture.
+
+What is on the planet:
+
+- **Sun and shadows.** The sun follows the camera as a three-quarter key light
+  by default, so whichever side the player orbits to is lit. `N` stops it
+  there and turns the planet under it instead (`src/game/sun.ts`): a
+  two-minute day, a night side lit only by moonlight and hut doors, dusk along
+  the terminator. Shadows are 9 taps of a hardware comparison filter, with
+  slope-scaled bias and a normal offset against acne on the curved ground.
+- **Sea.** A second sphere just above sea level, drawn from the planet's own
+  vertex and index buffers (`water.wgsl`), so it follows every edit with no
+  buffer of its own. Each vertex reads the ground beneath it from the planet
+  vertex it is built on: shallows and a band of moving foam appear exactly
+  where the ground nears the surface, which is what makes a Swamp or Flatten
+  read. Swell, a sun glint and sky reflection at grazing angles.
+- **Air.** A shell drawn inside out (`atmosphere.wgsl`): each pixel marches its
+  view ray through it, blue where the sun is high, warmer where sunlight has
+  come a long way through the air. A thin veil over the ground, a glow past
+  the limb.
+- **Spell effects.** When a spell lands (either tribe's; `src/game/spellEffects.ts`
+  hears it from the core), a compute pass spawns particles into an 8192-slot
+  ring and moves them every frame (`particle_step.wgsl`); the scene draws them
+  from the same buffer. The CPU sends only where and what — debris and sparks
+  for Blast, rising bubbles for Swamp, dust for Flatten, sand for a bridge
+  (`burstsForLanding` in `particles.ts`). No particle comes back to the CPU.
+- **Terrain normals on the GPU.** After a sculpt the CPU moves the vertices
+  (picking and the core need positions) and leaves normals to a compute pass
+  over the dirty range (`terrain_normals.wgsl`), the same area-weighted sum
+  across welded seams the CPU made. `?normals=cpu` keeps them on the CPU.
+
+How it is put together:
+
+- **Materials.** `src/engine/materials.ts` builds every scene pipeline from a
+  short description (shader, vertex layout, blend, culling, whether it casts a
+  shadow). Bind groups follow one convention: `@group(0)` is the frame
+  (camera, sun, shadow map; `shaders/lib/frame.wgsl`), set once per pass;
+  `@group(1)` is a material's own resources; `@group(2)` is per draw. A mesh
+  drawn once per core instance is `createInstancedMesh`, about twenty lines.
+  A material that casts shadows gets a depth-only pipeline over the same
+  vertex shader; the shadow pass binds a copy of the frame whose `viewProj` is
+  the sun's.
+- **Shaders** are `.wgsl` files in `src/engine/shaders/`. `#include "lib/x.wgsl"`
+  pulls in shared code — `frame.wgsl` (the uniform block), `lighting.wgsl`
+  (sun, sky, shadow), `surface.wgsl` (standing things up on the sphere),
+  `tonemap.wgsl` — each at most once per shader. Includes are resolved at
+  build time by a Vite plugin (`scripts/wgsl.mjs`; the Node tests' loader uses
+  the same code). `#ifdef NAME` / `#else` / `#endif` are resolved at runtime
+  from the device's features (`src/engine/wgsl.ts`), keeping line numbers.
 - **Device.** `src/engine/webgpu.ts` asks for the high-performance adapter and
   falls back to the default one. When neither exists, or the browser has no
   WebGPU at all, the page says so in a sentence instead of a stack trace. The
-  adapter and its limits are logged at startup. Limits are requested only where
-  the frame needs more than WebGPU guarantees (today it does not, so none are),
-  and no optional features are. If the GPU cannot meet a need, startup says
-  which.
-- **Canvas.** Opaque: the canvas is the whole frame. Its tone mapping is left
-  alone, because the shaders apply their own exposure curve
-  (`1 - exp(-1.35 * color)`) and a second one on top would wash it out.
+  adapter, its limits and the features requested are logged at startup.
+  Limits are requested only where the frame needs more than WebGPU guarantees
+  (today it does not, so none are). If the GPU cannot meet a need, startup
+  says which.
+- **Optional features**, each requested only when the adapter has it, and none
+  needed:
+  - `timestamp-query`: GPU time per pass in the HUD's perf line
+    (`gpu 1.84ms (compute 0.02 · shadow 0.31 · scene 1.32 · post 0.19)`).
+    Without it the line says `gpu n/a` rather than showing a CPU number.
+  - `shader-f16`: particles stored at half precision, 32 bytes instead of 48.
+  - `float32-filterable`: requested for a later pass that filters a float
+    texture; nothing reads one filtered yet.
+
+  `?features=none` (or `?features=-timestamp-query,-shader-f16`) withholds
+  them, to run the paths an adapter without them takes.
+- **Depth.** Reversed Z into `depth32float`: near is 1, far is 0, so the
+  float's precision lands where perspective needs it and the planet's limb
+  does not fight with the sea at any zoom.
+- **Canvas.** Opaque: the canvas is the whole frame. Its own tone mapping is
+  left alone; the composite's exposure curve is the one.
 - **Resolution.** The canvas is laid out at 1024x768 CSS pixels and its drawing
   buffer follows `devicePixelRatio`, capped at 2: 2048x1536 on a 2x display. It
   is checked every frame, so zooming the page or moving the window to another
@@ -194,8 +266,35 @@ camera moves. Around that:
 - **Failure.** If the GPU device is lost the frame loop stops and the HUD is
   replaced with what happened and a Reload button. A GPU validation error is
   logged once per distinct message rather than every frame.
-- **Shaders** are plain `.wgsl` files in `src/engine/shaders/`, imported with
-  Vite's `?raw`. The renderer keeps pipeline creation.
+
+### Headless WebGPU check
+
+`npm run check:webgpu` (`scripts/check-webgpu.mjs`) serves the repo with Vite
+and opens `scripts/webgpu-check/` in headless Chromium on its software WebGPU
+adapter (SwiftShader, via `--enable-unsafe-webgpu --enable-features=Vulkan
+--use-angle=swiftshader --use-webgpu-adapter=swiftshader`). The page builds
+the real game on the real core and draws it with the real renderer, then
+checks:
+
+- every shader module compiles (`getCompilationInfo`), and nothing raises a
+  GPU validation error;
+- the frame shows the planet, and the background survives the exposure curve;
+- after a sculpt, the normals the GPU rebuilt match the CPU's (to within 0.1°);
+- a Blast landing puts particles on screen; `N` turns the day;
+- with `timestamp-query`, GPU pass timings come back; without, none are claimed.
+
+It runs twice: with every optional feature the adapter has, and with
+`?features=none`. The frames are saved as PNGs (to `webgpu-check-out/`, or
+the directory given as an argument) to look at.
+
+Two things to know about it. Headless Chromium here cannot present to a
+canvas: the first frame drawn to `getCurrentTexture()` loses the device. So
+the check renders with `offscreen: true`, which draws the final pass into a
+texture of its own that `capture()` reads back; everything before that is the
+game's own path. And SwiftShader has no `shader-f16`, so the half-precision
+particle path is checked only by `test:gpu`'s layout and `#ifdef` checks, not
+compiled. It needs Playwright with Chromium, which the repo does not install;
+without it the script says so and exits 2, and it is not in `npm test`.
 
 ## The JS/WASM boundary
 
@@ -333,6 +432,7 @@ host until the clock reaches it), and a peer to compare checkpoints with.
 | Click, while aiming | Cast there: a disc spell on the click, a bridge from the shaman to it (Shift keeps aiming) |
 | Drag, while aiming a bridge | Raise land from where the drag began to where it ends |
 | Order the shaman, while she casts | Cancels the cast; so does casting another spell |
+| `N` | Turn the day: the sun stops following the camera and the planet turns under it (`N` again brings it back) |
 
 Shift-click toggles one follower; Shift-drag adds everyone in the box. A plain
 drag replaces the selection, and a click that does not move stays a single

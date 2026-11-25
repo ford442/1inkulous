@@ -37,6 +37,54 @@ export function mat4Perspective(
   return out
 }
 
+/**
+ * Right-handed perspective with reversed Z: the near plane maps to depth 1 and
+ * the far plane to 0. Floating point is densest near 0, which is where reversed
+ * Z puts the distant part of the frustum, so a depth32float buffer keeps
+ * nearly constant relative precision across the whole range instead of
+ * spending it all within a few units of the eye. Pair it with a depth clear of
+ * 0 and a `greater` depth test.
+ */
+export function mat4PerspectiveReversedZ(
+  fovYRadians: number,
+  aspect: number,
+  near: number,
+  far: number,
+  out: Mat4 = new Float32Array(16),
+): Mat4 {
+  const f = 1 / Math.tan(fovYRadians / 2)
+  const range = 1 / (far - near)
+
+  out.fill(0)
+  out[0] = f / aspect
+  out[5] = f
+  out[10] = near * range
+  out[11] = -1
+  out[14] = far * near * range
+  return out
+}
+
+/**
+ * Right-handed orthographic projection onto WebGPU's [0, 1] depth range (near
+ * at 0): a box `halfWidth` either side of the view axis, from `near` to `far`
+ * in front of the eye. The sun's shadow map uses it.
+ */
+export function mat4Orthographic(
+  halfWidth: number,
+  halfHeight: number,
+  near: number,
+  far: number,
+  out: Mat4 = new Float32Array(16),
+): Mat4 {
+  out.fill(0)
+  out[0] = 1 / halfWidth
+  out[5] = 1 / halfHeight
+  out[10] = 1 / (near - far)
+  out[14] = near / (near - far)
+  out[15] = 1
+  return out
+}
+
 export function mat4LookAt(eye: Vec3, target: Vec3, up: Vec3, out: Mat4 = new Float32Array(16)): Mat4 {
   // Forward points from the target back towards the eye (right-handed view basis).
   let zx = eye[0] - target[0]

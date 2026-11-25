@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { defineConfig } from 'vite'
 import { coreDir, coreRedirected } from './scripts/core-dir.mjs'
+import { wgslPlugin } from './scripts/wgsl.mjs'
 
 const ISOLATION_HEADERS = {
   'Cross-Origin-Opener-Policy': 'same-origin',
@@ -10,6 +11,8 @@ const ISOLATION_HEADERS = {
 export default defineConfig({
   // Relative asset URLs so the build works under test.1ink.us/1inkulous/
   base: './',
+  // `import shader from './x.wgsl'` is the shader with its #includes resolved.
+  plugins: [wgslPlugin()],
   resolve: {
     // `npm run dev:debug` loads the opt-in debug core from its own directory
     // (CORE_WASM_DIR); the source imports stay pointed at src/wasm/ throughout.

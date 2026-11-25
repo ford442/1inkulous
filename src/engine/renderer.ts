@@ -4,48 +4,55 @@ import {
   FOLLOWER_PREVIOUS_OFFSET,
   FOLLOWER_RADIUS_FRACTION,
 } from '../game/followers'
-import type { PlanetMesh } from './mesh/cubeSphere'
-import { consumeDirtyRange, VERTEX_BYTES, VERTEX_FLOATS } from './mesh/cubeSphere'
-import { createFollowerMesh, FOLLOWER_VERTEX_BYTES } from './mesh/followerMesh'
-import { createHutMesh, HUT_VERTEX_BYTES } from './mesh/hutMesh'
-import { createTreeMesh, TREE_VERTEX_BYTES } from './mesh/treeMesh'
 import { HUT_HEIGHT_RATIO } from '../game/huts'
 import { MAX_TREES } from '../game/trees'
 import { HutSite } from '../sim/hutSite'
 import { SpellResult } from '../sim/spell'
+import { CANVAS_ASPECT, drawingBufferSize, effectivePixelRatio } from '../viewport'
+import { createGpuTimer, type GpuTimings } from './gpuTimer'
 import {
-  mat4Identity,
+  createInstancedMesh,
+  createPipelineFactory,
+  DEPTH_FORMAT,
+  FRAME,
+  FRAME_BYTES,
+  FRAME_FLOATS,
+  SAMPLE_COUNT,
+  SCENE_DEPTH_CLEAR,
+  SCENE_FORMAT,
+  SHADOW_FORMAT,
+  type ShaderDiagnostic,
+} from './materials'
+import {
+  mat4LookAt,
   mat4Multiply,
-  mat4Perspective,
-  normalize,
+  mat4Orthographic,
+  mat4PerspectiveReversedZ,
+  type Mat4,
   type Vec3,
 } from './math'
-import followerShader from './shaders/follower.wgsl?raw'
-import hutShader from './shaders/hut.wgsl?raw'
-import planetShader from './shaders/planet.wgsl?raw'
-import treeShader from './shaders/tree.wgsl?raw'
-import { type DeviceLoss, initWebGpu } from './webgpu'
-import { CANVAS_ASPECT, drawingBufferSize, effectivePixelRatio } from '../viewport'
-
-const DEPTH_FORMAT: GPUTextureFormat = 'depth24plus'
-
-/**
- * 4x is the one multisample count WebGPU guarantees for every renderable
- * format, so there is nothing to probe for. The planet's limb and the instanced
- * pawns are what shimmer as the camera orbits; the shading inside them does not
- * need it.
- */
-const SAMPLE_COUNT = 4
+import { consumeDirtyRange, VERTEX_BYTES, VERTEX_FLOATS } from './mesh/cubeSphere'
+import { createFollowerMesh, FOLLOWER_VERTEX_BYTES } from './mesh/followerMesh'
+import { createHutMesh, HUT_VERTEX_BYTES } from './mesh/hutMesh'
+import { createTreeMesh, TREE_VERTEX_BYTES } from './mesh/treeMesh'
+import { burstsForLanding, createParticles, STEP_FLOATS } from './particles'
+import atmosphereShader from './shaders/atmosphere.wgsl'
+import compositeShader from './shaders/composite.wgsl'
+import followerShader from './shaders/follower.wgsl'
+import hutShader from './shaders/hut.wgsl'
+import planetShader from './shaders/planet.wgsl'
+import treeShader from './shaders/tree.wgsl'
+import waterShader from './shaders/water.wgsl'
+import { createTerrainNormals } from './terrainNormals'
+import { type DeviceLoss, type GpuFeatures, initWebGpu } from './webgpu'
 
 /**
  * Near plane is close enough for the tightest zoom, far plane loose enough for
- * the widest, while keeping the depth range tight for precision.
+ * the widest. With reversed Z into a float depth buffer the ratio between them
+ * hardly matters for precision any more.
  */
 const NEAR_PLANE = 0.05
 const FAR_PLANE = 100
-
-/** viewProj(64) + model(64) + lightDir(16) + cameraPos(16) + params(16) + brush(16) */
-const UNIFORM_BYTES = 192
 
 /** Mirrors kMaxFollowers in cpp/include/1inkulous/followers.hpp. */
 const MAX_FOLLOWER_INSTANCES = 1024
@@ -56,88 +63,108 @@ const MAX_HUT_INSTANCES = 256
 /** Mirrors kMaxTrees in cpp/include/1inkulous/trees.hpp. */
 const MAX_TREE_INSTANCES = MAX_TREES
 
+/** One cascade over the whole planet: at 2048 a follower is ~20 texels tall. */
+const SHADOW_SIZE = 2048
+/** How much of the sun a shadow takes away; the sky still lights the rest. */
+const SHADOW_STRENGTH = 0.85
+/** The air's outer edge, in planet radii. */
+const AIR_RADIUS = 1.12
+/** The sea's surface above the sea bed, in max land heights. */
+const WATER_LIFT = 0.04
+/** Noon sunlight. The same warm white the shaders used before the sun moved. */
+const SUN_COLOR: Vec3 = [1.0, 0.97, 0.9]
+
+/** The passes the GPU timer reports, in frame order. */
+const TIMED_PASSES = ['compute', 'shadow', 'scene', 'post'] as const
 
 /**
- * The sun follows the camera as a three-quarter key light (up and to the right of
- * the viewer) rather than sitting fixed in world space. A fixed sun would leave
- * the half of the planet the player orbits round to in unplayable darkness.
+ * The colour to clear the linear scene to so that, after the exposure curve,
+ * the background is `display`: the inverse of 1 - exp(-1.35 x).
  */
-function sunDirection(eye: Vec3): Vec3 {
-  const forward = normalize([-eye[0], -eye[1], -eye[2]])
-  // Camera right, from the world up axis. Falls back near the poles, where the
-  // orbit pitch is clamped short of straight down anyway.
-  const right = normalize([forward[2], 0, -forward[0]])
-  const up: Vec3 = [
-    right[1] * forward[2] - right[2] * forward[1],
-    right[2] * forward[0] - right[0] * forward[2],
-    right[0] * forward[1] - right[1] * forward[0],
-  ]
+export function linearClear(display: readonly [number, number, number]): [number, number, number] {
+  const inverse = (c: number) => -Math.log(1 - Math.min(Math.max(c, 0), 0.999)) / 1.35
+  return [inverse(display[0]), inverse(display[1]), inverse(display[2])]
+}
 
-  // Negated forward, so the light points from the viewer towards the planet.
-  return normalize([
-    -forward[0] * 0.6 + right[0] * 0.55 + up[0] * 0.5,
-    -forward[1] * 0.6 + right[1] * 0.55 + up[1] * 0.5,
-    -forward[2] * 0.6 + right[2] * 0.55 + up[2] * 0.5,
-  ])
+/**
+ * The sun's view of the planet for the shadow map: an orthographic box that
+ * just holds the planet and its highest peaks, looking along the sunlight.
+ * Ordinary Z (near 0, far 1).
+ */
+export function sunShadowMatrix(
+  sun: Vec3,
+  radius: number,
+  maxHeight: number,
+  out: Mat4 = new Float32Array(16),
+): Mat4 {
+  const extent = (radius + maxHeight) * 1.05
+  const distance = radius * 4
+  const eye: Vec3 = [sun[0] * distance, sun[1] * distance, sun[2] * distance]
+  const up: Vec3 = Math.abs(sun[1]) > 0.99 ? [1, 0, 0] : [0, 1, 0]
+  const view = mat4LookAt(eye, [0, 0, 0], up)
+  const projection = mat4Orthographic(extent, extent, distance - extent * 1.2, distance + extent * 1.2)
+  return mat4Multiply(projection, view, out)
+}
+
+export type RendererOptions = {
+  /** Optional device features to leave off even where the adapter has them. */
+  withholdFeatures?: readonly string[]
+  /**
+   * Draws the final frame into a texture of its own instead of the canvas, so
+   * `capture` can read it back. For the headless check, where presenting to a
+   * canvas is not always possible.
+   */
+  offscreen?: boolean
+  /** Rebuilds sculpted normals on the GPU (the default) or leaves them to the CPU. */
+  gpuNormals?: boolean
 }
 
 export type Renderer = {
   statusMessage: string
+  features: GpuFeatures
   render: (game: Game) => void
   /**
    * Settles once, when the GPU device is lost. After that every call to
    * `render` is wasted work, so the caller should stop its frame loop.
    */
   lost: Promise<DeviceLoss>
-}
-
-type PlanetBuffers = {
-  vertexBuffer: GPUBuffer
-  indexBuffer: GPUBuffer
-  indexCount: number
-}
-
-function createPlanetBuffers(device: GPUDevice, mesh: PlanetMesh): PlanetBuffers {
-  const vertexBuffer = device.createBuffer({
-    label: 'planet-vertices',
-    size: mesh.vertexData.byteLength,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-  })
-
-  const indexBuffer = device.createBuffer({
-    label: 'planet-indices',
-    size: mesh.indices.byteLength,
-    usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
-  })
-
-  device.queue.writeBuffer(indexBuffer, 0, mesh.indices)
-
-  return {
-    vertexBuffer,
-    indexBuffer,
-    indexCount: mesh.indices.length,
-  }
+  /** GPU time per pass since the last call, or null without timestamp-query. */
+  takeGpuTimings: () => GpuTimings | null
+  readonly gpuTimingSupported: boolean
+  /** Every shader's compilation messages. */
+  diagnostics: () => Promise<ShaderDiagnostic[]>
+  /** The last frame as RGBA8 rows, top first. Offscreen renderers only. */
+  capture: () => Promise<{ width: number; height: number; pixels: Uint8Array }>
+  /** The planet's vertex buffer as the GPU has it, for checking GPU normals. */
+  readPlanetVertices: () => Promise<Float32Array>
 }
 
 export async function createRenderer(
   canvas: HTMLCanvasElement,
   game: Game,
+  options: RendererOptions = {},
 ): Promise<Renderer> {
   // What the frame asks of the device, worked out from the buffers it will
-  // make: the planet mesh and the two instance buffers are sized for the cores'
-  // ceilings, and one uniform block is shared by every pipeline.
+  // make: the planet mesh and the instance buffers are sized for the core's
+  // ceilings; the largest uniform block is the particle step's.
   const hutInstanceStride = game.huts.instanceFloats * 4
   const treeInstanceStride = game.trees.instanceFloats * 4
-  const { device, context, format, lost } = await initWebGpu(canvas, {
-    maxBufferSize: Math.max(
-      game.planet.mesh.vertexData.byteLength,
-      game.planet.mesh.indices.byteLength,
-      MAX_FOLLOWER_INSTANCES * game.followers.instanceFloats * 4,
-      (MAX_HUT_INSTANCES + 1) * hutInstanceStride,
-      MAX_TREE_INSTANCES * treeInstanceStride,
-    ),
-    maxUniformBufferBindingSize: UNIFORM_BYTES,
-  })
+  const followerInstanceStride = game.followers.instanceFloats * 4
+  const { device, context, format, features, lost } = await initWebGpu(
+    canvas,
+    {
+      maxBufferSize: Math.max(
+        game.planet.mesh.vertexData.byteLength,
+        game.planet.mesh.indices.byteLength,
+        MAX_FOLLOWER_INSTANCES * followerInstanceStride,
+        (MAX_HUT_INSTANCES + 1) * hutInstanceStride,
+        MAX_TREE_INSTANCES * treeInstanceStride,
+      ),
+      maxUniformBufferBindingSize: Math.max(FRAME_BYTES, STEP_FLOATS * 4),
+    },
+    options.withholdFeatures ? { withhold: options.withholdFeatures } : {},
+  )
+  const outputFormat: GPUTextureFormat = options.offscreen ? 'rgba8unorm' : format
 
   // The drawing buffer is in device pixels; everything else is in CSS pixels.
   // Checked every frame rather than on a resize event: dragging the window to a
@@ -152,349 +179,331 @@ export async function createRenderer(
   }
   sizeDrawingBuffer()
 
-  const shaderModule = device.createShaderModule({
-    label: 'planet-shader',
-    code: planetShader,
+  const factory = createPipelineFactory(device, { SHADER_F16: features.shaderF16 })
+  const timer = createGpuTimer(device, features.timestampQuery, TIMED_PASSES)
+
+  // --- the planet, and the two shells drawn from its buffers ----------------
+
+  const { planet } = game
+  const mesh = planet.mesh
+  const gpuNormals = options.gpuNormals ?? true
+  mesh.normalsOnGpu = gpuNormals
+  const planetVertices = device.createBuffer({
+    label: 'planet-vertices',
+    size: mesh.vertexData.byteLength,
+    usage:
+      GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   })
-
-  const pipeline = device.createRenderPipeline({
-    label: 'planet-pipeline',
-    layout: 'auto',
-    vertex: {
-      module: shaderModule,
-      entryPoint: 'vs_main',
-      buffers: [
-        {
-          arrayStride: VERTEX_BYTES,
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x3' },
-            { shaderLocation: 1, offset: 12, format: 'float32x3' },
-            { shaderLocation: 2, offset: 24, format: 'float32x2' },
-          ],
-        },
-      ],
-    },
-    fragment: {
-      module: shaderModule,
-      entryPoint: 'fs_main',
-      targets: [{ format }],
-    },
-    primitive: {
-      topology: 'triangle-list',
-      cullMode: 'back',
-      frontFace: 'ccw',
-    },
-    depthStencil: {
-      format: DEPTH_FORMAT,
-      depthWriteEnabled: true,
-      depthCompare: 'less',
-    },
-    multisample: { count: SAMPLE_COUNT },
+  const planetIndices = device.createBuffer({
+    label: 'planet-indices',
+    size: mesh.indices.byteLength,
+    usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
   })
+  device.queue.writeBuffer(planetIndices, 0, mesh.indices)
+  const normals = gpuNormals
+    ? createTerrainNormals(factory, mesh, { vertices: planetVertices, indices: planetIndices })
+    : null
 
-  const uniformBuffer = device.createBuffer({
-    label: 'planet-uniforms',
-    size: UNIFORM_BYTES,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  })
-
-  const bindGroup = device.createBindGroup({
-    layout: pipeline.getBindGroupLayout(0),
-    entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
-  })
-
-  const planetBuffers = createPlanetBuffers(device, game.planet.mesh)
-
-  const followerShaderModule = device.createShaderModule({
-    label: 'follower-shader',
-    code: followerShader,
-  })
-
-  const followerPipeline = device.createRenderPipeline({
-    label: 'follower-pipeline',
-    layout: 'auto',
-    vertex: {
-      module: followerShaderModule,
-      entryPoint: 'vs_main',
-      buffers: [
-        {
-          arrayStride: FOLLOWER_VERTEX_BYTES,
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x3' },
-            { shaderLocation: 1, offset: 12, format: 'float32x3' },
-            { shaderLocation: 2, offset: 24, format: 'float32' },
-          ],
-        },
-        {
-          // Written straight from the core's instance buffer: position(3),
-          // heading(3), tribe, flags, then the position(3) and heading(3) the
-          // last step began from, which the shader draws between.
-          arrayStride: game.followers.instanceFloats * 4,
-          stepMode: 'instance',
-          attributes: [
-            { shaderLocation: 3, offset: 0, format: 'float32x3' },
-            { shaderLocation: 4, offset: 12, format: 'float32x3' },
-            { shaderLocation: 5, offset: 24, format: 'float32' },
-            { shaderLocation: 6, offset: 28, format: 'float32' },
-            { shaderLocation: 7, offset: FOLLOWER_PREVIOUS_OFFSET * 4, format: 'float32x3' },
-            { shaderLocation: 8, offset: FOLLOWER_PREVIOUS_OFFSET * 4 + 12, format: 'float32x3' },
-          ],
-        },
-      ],
-    },
-    fragment: {
-      module: followerShaderModule,
-      entryPoint: 'fs_main',
-      targets: [{ format }],
-    },
-    primitive: {
-      topology: 'triangle-list',
-      cullMode: 'back',
-      frontFace: 'ccw',
-    },
-    depthStencil: {
-      format: DEPTH_FORMAT,
-      depthWriteEnabled: true,
-      depthCompare: 'less',
-    },
-    multisample: { count: SAMPLE_COUNT },
-  })
-
-  // `layout: 'auto'` gives each pipeline its own bind group layout, so the two
-  // passes need two bind groups — over the same uniform buffer.
-  const followerBindGroup = device.createBindGroup({
-    layout: followerPipeline.getBindGroupLayout(0),
-    entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
-  })
-
-  const followerMesh = createFollowerMesh({
-    height: game.planet.radius * FOLLOWER_HEIGHT_FRACTION,
-    radius: game.planet.radius * FOLLOWER_RADIUS_FRACTION,
-  })
-
-  const followerVertexBuffer = device.createBuffer({
-    label: 'follower-vertices',
-    size: followerMesh.vertexData.byteLength,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-  })
-  device.queue.writeBuffer(followerVertexBuffer, 0, followerMesh.vertexData)
-
-  // Sized once for the core's population ceiling, so growing the tribe never
-  // reallocates a GPU buffer mid-match.
-  const followerInstanceBuffer = device.createBuffer({
-    label: 'follower-instances',
-    size: MAX_FOLLOWER_INSTANCES * game.followers.instanceFloats * 4,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-  })
-
-  const hutShaderModule = device.createShaderModule({
-    label: 'hut-shader',
-    code: hutShader,
-  })
-
-  const hutVertexBuffers: GPUVertexBufferLayout[] = [
+  const planetLayout: GPUVertexBufferLayout[] = [
     {
-      arrayStride: HUT_VERTEX_BYTES,
+      arrayStride: VERTEX_BYTES,
       attributes: [
         { shaderLocation: 0, offset: 0, format: 'float32x3' },
         { shaderLocation: 1, offset: 12, format: 'float32x3' },
-        { shaderLocation: 2, offset: 24, format: 'float32' },
-      ],
-    },
-    {
-      // Straight from the core's hut buffer: position(3), heading(3), tribe,
-      // occupants, kind.
-      arrayStride: game.huts.instanceFloats * 4,
-      stepMode: 'instance',
-      attributes: [
-        { shaderLocation: 3, offset: 0, format: 'float32x3' },
-        { shaderLocation: 4, offset: 12, format: 'float32x3' },
-        { shaderLocation: 5, offset: 24, format: 'float32' },
-        { shaderLocation: 6, offset: 28, format: 'float32' },
-        { shaderLocation: 7, offset: 32, format: 'float32' },
+        { shaderLocation: 2, offset: 24, format: 'float32x2' },
       ],
     },
   ]
-
-  const hutPipeline = device.createRenderPipeline({
-    label: 'hut-pipeline',
-    layout: 'auto',
-    vertex: { module: hutShaderModule, entryPoint: 'vs_main', buffers: hutVertexBuffers },
-    fragment: { module: hutShaderModule, entryPoint: 'fs_main', targets: [{ format }] },
-    primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
-    depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
-    multisample: { count: SAMPLE_COUNT },
+  const planetMaterial = factory.material({
+    label: 'planet',
+    code: planetShader,
+    vertexBuffers: planetLayout,
+    castsShadow: true,
   })
-
-  // The ghost is see-through, so it is blended and leaves depth alone: the
-  // ground and anyone standing on the site still show through it.
-  const ghostPipeline = device.createRenderPipeline({
-    label: 'hut-ghost-pipeline',
-    layout: 'auto',
-    vertex: { module: hutShaderModule, entryPoint: 'vs_main', buffers: hutVertexBuffers },
-    fragment: {
-      module: hutShaderModule,
-      entryPoint: 'fs_main',
-      targets: [
-        {
-          format,
-          blend: {
-            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          },
-        },
-      ],
-    },
-    primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
-    depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'less' },
-    multisample: { count: SAMPLE_COUNT },
+  const waterMaterial = factory.material({
+    label: 'water',
+    code: waterShader,
+    vertexBuffers: planetLayout,
+    blend: 'premultiplied',
   })
-
-  const hutBindGroup = device.createBindGroup({
-    layout: hutPipeline.getBindGroupLayout(0),
-    entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+  // Inside out, and over everything: see atmosphere.wgsl.
+  const airMaterial = factory.material({
+    label: 'atmosphere',
+    code: atmosphereShader,
+    vertexBuffers: planetLayout,
+    blend: 'premultiplied',
+    cullMode: 'front',
+    depthCompare: 'always',
   })
-  const ghostBindGroup = device.createBindGroup({
-    layout: ghostPipeline.getBindGroupLayout(0),
-    entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+  const drawPlanetMesh = (pass: GPURenderPassEncoder, pipeline: GPURenderPipeline) => {
+    pass.setPipeline(pipeline)
+    pass.setVertexBuffer(0, planetVertices)
+    pass.setIndexBuffer(planetIndices, 'uint32')
+    pass.drawIndexed(mesh.indices.length)
+  }
+
+  // --- the instanced meshes --------------------------------------------------
+
+  const meshAttributes: GPUVertexAttribute[] = [
+    { shaderLocation: 0, offset: 0, format: 'float32x3' },
+    { shaderLocation: 1, offset: 12, format: 'float32x3' },
+    { shaderLocation: 2, offset: 24, format: 'float32' },
+  ]
+
+  const followerMesh = createFollowerMesh({
+    height: planet.radius * FOLLOWER_HEIGHT_FRACTION,
+    radius: planet.radius * FOLLOWER_RADIUS_FRACTION,
+  })
+  const followers = createInstancedMesh(factory, {
+    label: 'followers',
+    code: followerShader,
+    mesh: followerMesh,
+    vertexStride: FOLLOWER_VERTEX_BYTES,
+    vertexAttributes: meshAttributes,
+    // Straight from the core's instance buffer: position(3), heading(3),
+    // tribe, flags, then the position(3) and heading(3) the last step began
+    // from, which the shader draws between.
+    instanceStride: followerInstanceStride,
+    instanceAttributes: [
+      { shaderLocation: 3, offset: 0, format: 'float32x3' },
+      { shaderLocation: 4, offset: 12, format: 'float32x3' },
+      { shaderLocation: 5, offset: 24, format: 'float32' },
+      { shaderLocation: 6, offset: 28, format: 'float32' },
+      { shaderLocation: 7, offset: FOLLOWER_PREVIOUS_OFFSET * 4, format: 'float32x3' },
+      { shaderLocation: 8, offset: FOLLOWER_PREVIOUS_OFFSET * 4 + 12, format: 'float32x3' },
+    ],
+    maxInstances: MAX_FOLLOWER_INSTANCES,
   })
 
   const hutMesh = createHutMesh({
     radius: game.huts.radius,
     height: game.huts.radius * HUT_HEIGHT_RATIO,
   })
-  const hutVertexBuffer = device.createBuffer({
-    label: 'hut-vertices',
-    size: hutMesh.vertexData.byteLength,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  const huts = createInstancedMesh(factory, {
+    label: 'huts',
+    code: hutShader,
+    mesh: hutMesh,
+    vertexStride: HUT_VERTEX_BYTES,
+    vertexAttributes: meshAttributes,
+    // Straight from the core's hut buffer: position(3), heading(3), tribe,
+    // occupants, kind.
+    instanceStride: hutInstanceStride,
+    instanceAttributes: [
+      { shaderLocation: 3, offset: 0, format: 'float32x3' },
+      { shaderLocation: 4, offset: 12, format: 'float32x3' },
+      { shaderLocation: 5, offset: 24, format: 'float32' },
+      { shaderLocation: 6, offset: 28, format: 'float32' },
+      { shaderLocation: 7, offset: 32, format: 'float32' },
+    ],
+    maxInstances: MAX_HUT_INSTANCES + 1,
   })
-  device.queue.writeBuffer(hutVertexBuffer, 0, hutMesh.vertexData)
+  // The ghost is see-through, so it is blended and leaves depth alone: the
+  // ground and anyone standing on the site still show through it.
+  const ghostMaterial = factory.material({
+    label: 'hut-ghost',
+    code: hutShader,
+    vertexBuffers: huts.vertexBuffers,
+    blend: 'premultiplied',
+  })
 
-  const hutInstanceBytes = hutInstanceStride
-  const hutInstanceBuffer = device.createBuffer({
-    label: 'hut-instances',
-    size: (MAX_HUT_INSTANCES + 1) * hutInstanceBytes,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-  })
-
-  const treeShaderModule = device.createShaderModule({
-    label: 'tree-shader',
-    code: treeShader,
-  })
-  const treePipeline = device.createRenderPipeline({
-    label: 'tree-pipeline',
-    layout: 'auto',
-    vertex: {
-      module: treeShaderModule,
-      entryPoint: 'vs_main',
-      buffers: [
-        {
-          arrayStride: TREE_VERTEX_BYTES,
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x3' },
-            { shaderLocation: 1, offset: 12, format: 'float32x3' },
-            { shaderLocation: 2, offset: 24, format: 'float32' },
-          ],
-        },
-        {
-          // Straight from the core's tree buffer: position(3), heading(3),
-          // size, chop progress.
-          arrayStride: treeInstanceStride,
-          stepMode: 'instance',
-          attributes: [
-            { shaderLocation: 3, offset: 0, format: 'float32x3' },
-            { shaderLocation: 4, offset: 12, format: 'float32x3' },
-            { shaderLocation: 5, offset: 24, format: 'float32' },
-            { shaderLocation: 6, offset: 28, format: 'float32' },
-          ],
-        },
-      ],
-    },
-    fragment: { module: treeShaderModule, entryPoint: 'fs_main', targets: [{ format }] },
-    primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
-    depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
-    multisample: { count: SAMPLE_COUNT },
-  })
-  const treeBindGroup = device.createBindGroup({
-    layout: treePipeline.getBindGroupLayout(0),
-    entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
-  })
   const treeMesh = createTreeMesh({ height: game.trees.height, radius: game.trees.radius })
-  const treeVertexBuffer = device.createBuffer({
-    label: 'tree-vertices',
-    size: treeMesh.vertexData.byteLength,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-  })
-  device.queue.writeBuffer(treeVertexBuffer, 0, treeMesh.vertexData)
-  // Sized once for the core's ceiling; the forest only ever shrinks.
-  const treeInstanceBuffer = device.createBuffer({
-    label: 'tree-instances',
-    size: MAX_TREE_INSTANCES * treeInstanceStride,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  const trees = createInstancedMesh(factory, {
+    label: 'trees',
+    code: treeShader,
+    mesh: treeMesh,
+    vertexStride: TREE_VERTEX_BYTES,
+    vertexAttributes: meshAttributes,
+    // Straight from the core's tree buffer: position(3), heading(3), size,
+    // chop progress. Sized once for the core's ceiling; the forest only shrinks.
+    instanceStride: treeInstanceStride,
+    instanceAttributes: [
+      { shaderLocation: 3, offset: 0, format: 'float32x3' },
+      { shaderLocation: 4, offset: 12, format: 'float32x3' },
+      { shaderLocation: 5, offset: 24, format: 'float32' },
+      { shaderLocation: 6, offset: 28, format: 'float32' },
+    ],
+    maxInstances: MAX_TREE_INSTANCES,
   })
 
-  // The frame is drawn into multisampled colour and depth targets and resolved
-  // to the canvas, so both follow the drawing buffer. Neither is read after the
-  // pass, so neither is kept: `discard` saves writing them back out.
-  type Targets = { colorView: GPUTextureView; depthView: GPUTextureView }
-  let colorTexture: GPUTexture | null = null
-  let depthTexture: GPUTexture | null = null
+  const particles = createParticles(factory, { f16: features.shaderF16, planetRadius: planet.radius })
+
+  // --- the frame's bind groups -------------------------------------------------
+
+  const frameData = new Float32Array(FRAME_FLOATS)
+  const frameBuffer = device.createBuffer({
+    label: 'frame',
+    size: FRAME_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  // The shadow pass's copy: the same block with the sun's viewProj.
+  const shadowFrameBuffer = device.createBuffer({
+    label: 'frame-shadow',
+    size: FRAME_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  const shadowMap = device.createTexture({
+    label: 'shadow-map',
+    size: { width: SHADOW_SIZE, height: SHADOW_SIZE },
+    format: SHADOW_FORMAT,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+  })
+  const shadowView = shadowMap.createView()
+  // What the shadow pass binds where the shadow map goes: a texture cannot be
+  // drawn into and read in the same pass.
+  const shadowStandIn = device.createTexture({
+    label: 'shadow-map-stand-in',
+    size: { width: 1, height: 1 },
+    format: SHADOW_FORMAT,
+    usage: GPUTextureUsage.TEXTURE_BINDING,
+  })
+  const shadowSampler = device.createSampler({
+    label: 'shadow',
+    compare: 'less-equal',
+    magFilter: 'linear',
+    minFilter: 'linear',
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
+  })
+  const frameGroup = (buffer: GPUBuffer, shadow: GPUTextureView) =>
+    device.createBindGroup({
+      layout: factory.frameLayout,
+      entries: [
+        { binding: 0, resource: { buffer } },
+        { binding: 1, resource: shadow },
+        { binding: 2, resource: shadowSampler },
+      ],
+    })
+  const sceneFrameGroup = frameGroup(frameBuffer, shadowView)
+  const shadowFrameGroup = frameGroup(shadowFrameBuffer, shadowStandIn.createView())
+
+  // --- the composite: linear scene to the screen ---------------------------
+
+  const compositeModule = factory.module('composite', compositeShader)
+  const compositeLayout = device.createBindGroupLayout({
+    label: 'composite',
+    entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } }],
+  })
+  const compositePipeline = device.createRenderPipeline({
+    label: 'composite',
+    layout: device.createPipelineLayout({ bindGroupLayouts: [compositeLayout] }),
+    vertex: { module: compositeModule, entryPoint: 'vs_main' },
+    fragment: { module: compositeModule, entryPoint: 'fs_main', targets: [{ format: outputFormat }] },
+    primitive: { topology: 'triangle-list' },
+  })
+
+  // The scene is drawn into multisampled float colour and depth, resolved to
+  // a single-sample float texture the composite reads. The multisampled
+  // targets are not read after the pass, so neither is kept: `discard` saves
+  // writing them back out.
+  type Targets = {
+    width: number
+    height: number
+    textures: GPUTexture[]
+    colorView: GPUTextureView
+    depthView: GPUTextureView
+    resolveView: GPUTextureView
+    composite: GPUBindGroup
+    output: GPUTexture | null
+  }
   let targets: Targets | null = null
   const ensureTargets = (): Targets => {
     const { width, height } = canvas
-    if (targets && colorTexture?.width === width && colorTexture.height === height) {
+    if (targets && targets.width === width && targets.height === height) {
       return targets
     }
-
-    colorTexture?.destroy()
-    depthTexture?.destroy()
-    colorTexture = device.createTexture({
-      label: 'color-msaa',
-      size: { width, height },
-      format,
+    for (const texture of targets?.textures ?? []) {
+      texture.destroy()
+    }
+    const size = { width, height }
+    const color = device.createTexture({
+      label: 'scene-msaa',
+      size,
+      format: SCENE_FORMAT,
       sampleCount: SAMPLE_COUNT,
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     })
-    depthTexture = device.createTexture({
+    const depth = device.createTexture({
       label: 'depth-msaa',
-      size: { width, height },
+      size,
       format: DEPTH_FORMAT,
       sampleCount: SAMPLE_COUNT,
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     })
-    targets = { colorView: colorTexture.createView(), depthView: depthTexture.createView() }
+    const resolve = device.createTexture({
+      label: 'scene-resolved',
+      size,
+      format: SCENE_FORMAT,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    const output = options.offscreen
+      ? device.createTexture({
+          label: 'offscreen-output',
+          size,
+          format: outputFormat,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+        })
+      : null
+    const resolveView = resolve.createView()
+    targets = {
+      width,
+      height,
+      textures: [color, depth, resolve, ...(output ? [output] : [])],
+      colorView: color.createView(),
+      depthView: depth.createView(),
+      resolveView,
+      composite: device.createBindGroup({
+        layout: compositeLayout,
+        entries: [{ binding: 0, resource: resolveView }],
+      }),
+      output,
+    }
     return targets
   }
 
-  const uniformData = new Float32Array(UNIFORM_BYTES / 4)
-  const viewProj = uniformData.subarray(0, 16)
   const projection = new Float32Array(16)
-  // The planet does not turn on its own; the model matrix is the hook for
-  // spinning or tilting it later.
-  mat4Identity(uniformData.subarray(16, 32))
+  const lightViewProj = new Float32Array(16)
+  const startedAt = performance.now()
+  let lastFrameAt = startedAt
 
-  const triangleCount = game.planet.mesh.triangleCount
+  const timed = (name: (typeof TIMED_PASSES)[number]) => {
+    const writes = timer.passWrites(name)
+    return writes ? { timestampWrites: writes } : {}
+  }
+
+  const featureList = [
+    features.timestampQuery && 'GPU timing',
+    features.shaderF16 && 'f16 particles',
+    features.float32Filterable && 'float32-filterable',
+  ].filter(Boolean)
 
   return {
     statusMessage:
-      `WebGPU ready — cube-sphere planet (${triangleCount} triangles), ` +
-      `followers instanced (${followerMesh.triangleCount} triangles each), ` +
+      `WebGPU ready — cube-sphere planet (${mesh.triangleCount} triangles) with sea, air and ` +
+      `${SHADOW_SIZE}² sun shadows, followers instanced (${followerMesh.triangleCount} triangles each), ` +
       `huts instanced (${hutMesh.triangleCount} each), ` +
       `trees instanced (${treeMesh.triangleCount} each) — ` +
       `${canvas.width}×${canvas.height} at ${effectivePixelRatio(window.devicePixelRatio)}×, ` +
-      `${SAMPLE_COUNT}× MSAA`,
+      `${SAMPLE_COUNT}× MSAA, reversed-Z ${DEPTH_FORMAT}` +
+      (featureList.length > 0 ? `, ${featureList.join(', ')}` : ', no optional features'),
+    features,
     lost,
+    gpuTimingSupported: timer.supported,
+    takeGpuTimings: () => timer.take(),
+    diagnostics: () => factory.diagnostics(),
+
     render(currentGame: Game) {
       sizeDrawingBuffer()
-      const { camera, planet } = currentGame
-      const mesh = planet.mesh
+      const now = performance.now()
+      const dt = Math.min((now - lastFrameAt) / 1000, 0.1)
+      lastFrameAt = now
+      const { camera, sun, sculptor, huts: hutState, shaman } = currentGame
 
       // Terrain edits touch a small patch, so upload only the vertex range that
       // actually changed since the last frame.
       const dirty = consumeDirtyRange(mesh)
       if (dirty) {
         device.queue.writeBuffer(
-          planetBuffers.vertexBuffer,
+          planetVertices,
           dirty.min * VERTEX_BYTES,
           mesh.vertexData,
           dirty.min * VERTEX_FLOATS,
@@ -502,27 +511,18 @@ export async function createRenderer(
         )
       }
 
+      // --- the frame block ---
+
       // The CSS viewport's aspect ratio, the same one picking is given. The
       // drawing buffer rounds to whole pixels, so its own ratio can differ in
       // the fourth decimal place; sharing one value keeps a click on the pixel
       // it was drawn at.
-      const aspect = CANVAS_ASPECT
-      const eye = camera.eye
+      mat4PerspectiveReversedZ(camera.fovY, CANVAS_ASPECT, NEAR_PLANE, FAR_PLANE, projection)
+      mat4Multiply(projection, camera.viewMatrix, frameData.subarray(FRAME.viewProj, FRAME.viewProj + 16))
+      const light = sun.direction
+      sunShadowMatrix(light, planet.radius, planet.maxHeight, lightViewProj)
+      frameData.set(lightViewProj, FRAME.lightViewProj)
 
-      mat4Perspective(camera.fovY, aspect, NEAR_PLANE, FAR_PLANE, projection)
-      mat4Multiply(projection, camera.viewMatrix, viewProj)
-
-      const light = sunDirection(eye)
-      uniformData[32] = light[0]
-      uniformData[33] = light[1]
-      uniformData[34] = light[2]
-      // [35], the light's w, carries the cast pulse; set with the cursor below.
-      uniformData[36] = eye[0]
-      uniformData[37] = eye[1]
-      uniformData[38] = eye[2]
-      // How far between their two poses the followers are drawn this frame.
-      uniformData[39] = currentGame.followers.stepAlpha
-      const { sculptor, huts, shaman } = currentGame
       // The brush cursor while sculpting; otherwise, while a spell is aimed,
       // the disc it would write (a bridge's far end, at the strip's width),
       // green where the core would cast it; otherwise, while she casts, that
@@ -530,7 +530,7 @@ export async function createRenderer(
       // footprint and whether it can go there.
       const aim = sculptor.armed ? null : shaman.preview
       const cast = sculptor.armed || aim ? null : shaman.casting
-      const ghost = huts.ghost
+      const ghost = hutState.ghost
       const hover = sculptor.armed
         ? sculptor.hoverDirection
         : aim
@@ -546,22 +546,16 @@ export async function createRenderer(
           ? shaman.radiusOf(aim.spell)
           : cast
             ? cast.radius
-            : (ghost?.footprint ?? 0) || huts.radius / planet.radius
+            : (ghost?.footprint ?? 0) || hutState.radius / planet.radius
 
+      const eye = camera.eye
       // How far through the cast she is, for the pulse; 0 is a steady disc.
-      uniformData[35] = cast ? Math.max(cast.progress, 1e-3) : 0
-
-      uniformData[40] = planet.radius
-      uniformData[41] = planet.maxHeight
-      uniformData[42] =
-        sculptor.mode === 'raise'
-          ? 1
-          : sculptor.mode === 'lower'
-            ? -1
-            : sculptor.mode === 'flatten'
-              ? 2
-              : 0
-      uniformData[43] = aim
+      frameData.set([light[0], light[1], light[2], cast ? Math.max(cast.progress, 1e-3) : 0], FRAME.sunDir)
+      // How far between their two poses the followers are drawn this frame.
+      frameData.set([eye[0], eye[1], eye[2], currentGame.followers.stepAlpha], FRAME.cameraPos)
+      const brushMode =
+        sculptor.mode === 'raise' ? 1 : sculptor.mode === 'lower' ? -1 : sculptor.mode === 'flatten' ? 2 : 0
+      const site = aim
         ? aim.result === SpellResult.ok
           ? 1
           : -1
@@ -572,129 +566,185 @@ export async function createRenderer(
               ? 1
               : -1
             : 0
-      uniformData[44] = hover ? hover[0] : 0
-      uniformData[45] = hover ? hover[1] : 0
-      uniformData[46] = hover ? hover[2] : 0
+      frameData.set([planet.radius, planet.maxHeight, brushMode, site], FRAME.params)
       // A zero radius switches the cursor off in the shader.
-      uniformData[47] = hover ? cursorRadius : 0
+      frameData.set(hover ? [hover[0], hover[1], hover[2], cursorRadius] : [0, 0, 0, 0], FRAME.brush)
+      // Seconds, wrapped every hour so f32 keeps sub-millisecond steps.
+      const seconds = ((now - startedAt) / 1000) % 3600
+      frameData.set([SUN_COLOR[0], SUN_COLOR[1], SUN_COLOR[2], seconds], FRAME.sunColor)
+      frameData.set(
+        [
+          planet.radius * AIR_RADIUS,
+          SHADOW_STRENGTH,
+          1 / SHADOW_SIZE,
+          planet.radius + planet.maxHeight * WATER_LIFT,
+        ],
+        FRAME.world,
+      )
+      device.queue.writeBuffer(frameBuffer, 0, frameData)
+      frameData.set(lightViewProj, FRAME.viewProj)
+      device.queue.writeBuffer(shadowFrameBuffer, 0, frameData)
 
-      device.queue.writeBuffer(uniformBuffer, 0, uniformData)
+      // --- instances, straight out of the core ---
 
-      // One copy per frame out of WASM linear memory. The view is re-read each
-      // time: the core's buffer moves when the population grows, and growing
+      // One copy each per frame out of WASM linear memory. The views are
+      // re-read each time: the core's buffers move when they grow, and growing
       // linear memory replaces the typed-array views over it.
-      const instances = currentGame.followers.instances()
-      const followerInstanceCount = Math.min(
-        instances.length / currentGame.followers.instanceFloats,
+      const followerData = currentGame.followers.instances()
+      const followerCount = Math.min(
+        followerData.length / currentGame.followers.instanceFloats,
         MAX_FOLLOWER_INSTANCES,
       )
-      if (followerInstanceCount > 0) {
-        device.queue.writeBuffer(
-          followerInstanceBuffer,
-          0,
-          instances,
-          0,
-          followerInstanceCount * currentGame.followers.instanceFloats,
-        )
-      }
-
-      const hutInstances = huts.instances()
-      const hutCount = Math.min(hutInstances.length / huts.instanceFloats, MAX_HUT_INSTANCES)
-      if (hutCount > 0) {
-        device.queue.writeBuffer(
-          hutInstanceBuffer,
-          0,
-          hutInstances,
-          0,
-          hutCount * huts.instanceFloats,
-        )
-      }
-      const treeInstances = currentGame.trees.instances()
-      const treeCount = Math.min(
-        treeInstances.length / currentGame.trees.instanceFloats,
-        MAX_TREE_INSTANCES,
-      )
-      if (treeCount > 0) {
-        device.queue.writeBuffer(
-          treeInstanceBuffer,
-          0,
-          treeInstances,
-          0,
-          treeCount * currentGame.trees.instanceFloats,
-        )
-      }
-
-      const ghostInstance = huts.ghostInstance()
+      followers.write(followerData, followerCount)
+      const hutData = hutState.instances()
+      const hutCount = Math.min(hutData.length / hutState.instanceFloats, MAX_HUT_INSTANCES)
+      huts.write(hutData, hutCount)
+      const ghostInstance = hutState.ghostInstance()
       if (ghostInstance) {
-        device.queue.writeBuffer(hutInstanceBuffer, hutCount * hutInstanceBytes, ghostInstance)
+        huts.write(ghostInstance, 1, hutCount)
+      }
+      const treeData = currentGame.trees.instances()
+      const treeCount = Math.min(treeData.length / currentGame.trees.instanceFloats, MAX_TREE_INSTANCES)
+      trees.write(treeData, treeCount)
+
+      for (const landing of currentGame.takeSpellLandings()) {
+        particles.emit(burstsForLanding(landing, planet.surfacePointAt(landing.target), planet.radius))
       }
 
-      const { colorView, depthView } = ensureTargets()
-      const encoder = device.createCommandEncoder()
-      const pass = encoder.beginRenderPass({
+      // --- passes ---
+
+      timer.beginFrame()
+      const encoder = device.createCommandEncoder({ label: 'frame' })
+
+      const normalsDirty = normals !== null && dirty !== null
+      if (normalsDirty || particles.active) {
+        const compute = encoder.beginComputePass({ label: 'compute', ...timed('compute') })
+        if (normals && dirty) {
+          normals.dispatch(compute, dirty)
+        }
+        if (particles.active) {
+          particles.step(compute, dt)
+        }
+        compute.end()
+      }
+
+      const shadowPass = encoder.beginRenderPass({
+        label: 'shadow',
+        colorAttachments: [],
+        depthStencilAttachment: {
+          view: shadowView,
+          depthClearValue: 1,
+          depthLoadOp: 'clear',
+          depthStoreOp: 'store',
+        },
+        ...timed('shadow'),
+      })
+      shadowPass.setBindGroup(0, shadowFrameGroup)
+      drawPlanetMesh(shadowPass, planetMaterial.shadowPipeline!)
+      followers.draw(shadowPass, followerCount, { shadow: true })
+      trees.draw(shadowPass, treeCount, { shadow: true })
+      huts.draw(shadowPass, hutCount, { shadow: true })
+      shadowPass.end()
+
+      const frameTargets = ensureTargets()
+      const clear = linearClear(currentGame.clearColor)
+      const scene = encoder.beginRenderPass({
+        label: 'scene',
         colorAttachments: [
           {
-            view: colorView,
-            resolveTarget: context.getCurrentTexture().createView(),
-            clearValue: {
-              r: currentGame.clearColor[0],
-              g: currentGame.clearColor[1],
-              b: currentGame.clearColor[2],
-              a: 1,
-            },
+            view: frameTargets.colorView,
+            resolveTarget: frameTargets.resolveView,
+            clearValue: { r: clear[0], g: clear[1], b: clear[2], a: 1 },
             loadOp: 'clear',
             storeOp: 'discard',
           },
         ],
         depthStencilAttachment: {
-          view: depthView,
-          depthClearValue: 1,
+          view: frameTargets.depthView,
+          depthClearValue: SCENE_DEPTH_CLEAR,
           depthLoadOp: 'clear',
           depthStoreOp: 'discard',
         },
+        ...timed('scene'),
       })
-
-      pass.setPipeline(pipeline)
-      pass.setBindGroup(0, bindGroup)
-      pass.setVertexBuffer(0, planetBuffers.vertexBuffer)
-      pass.setIndexBuffer(planetBuffers.indexBuffer, 'uint32')
-      pass.drawIndexed(planetBuffers.indexCount)
-
-      if (followerInstanceCount > 0) {
-        pass.setPipeline(followerPipeline)
-        pass.setBindGroup(0, followerBindGroup)
-        pass.setVertexBuffer(0, followerVertexBuffer)
-        pass.setVertexBuffer(1, followerInstanceBuffer)
-        pass.draw(followerMesh.vertexCount, followerInstanceCount)
+      scene.setBindGroup(0, sceneFrameGroup)
+      // Opaque first, then everything that blends over it, back to front.
+      drawPlanetMesh(scene, planetMaterial.pipeline)
+      followers.draw(scene, followerCount)
+      trees.draw(scene, treeCount)
+      huts.draw(scene, hutCount)
+      drawPlanetMesh(scene, waterMaterial.pipeline)
+      drawPlanetMesh(scene, airMaterial.pipeline)
+      if (ghostInstance) {
+        huts.draw(scene, 1, { first: hutCount, material: ghostMaterial })
       }
-
-      if (treeCount > 0) {
-        pass.setPipeline(treePipeline)
-        pass.setBindGroup(0, treeBindGroup)
-        pass.setVertexBuffer(0, treeVertexBuffer)
-        pass.setVertexBuffer(1, treeInstanceBuffer)
-        pass.draw(treeMesh.vertexCount, treeCount)
+      if (particles.active) {
+        particles.draw(scene)
       }
+      scene.end()
 
-      if (hutCount > 0 || ghostInstance) {
-        pass.setVertexBuffer(0, hutVertexBuffer)
-        pass.setVertexBuffer(1, hutInstanceBuffer)
-        if (hutCount > 0) {
-          pass.setPipeline(hutPipeline)
-          pass.setBindGroup(0, hutBindGroup)
-          pass.draw(hutMesh.vertexCount, hutCount)
-        }
-        // Last, so it blends over everything opaque, the huts included.
-        if (ghostInstance) {
-          pass.setPipeline(ghostPipeline)
-          pass.setBindGroup(0, ghostBindGroup)
-          pass.draw(hutMesh.vertexCount, 1, 0, hutCount)
-        }
-      }
+      const post = encoder.beginRenderPass({
+        label: 'post',
+        colorAttachments: [
+          {
+            view: (frameTargets.output ?? context.getCurrentTexture()).createView(),
+            loadOp: 'clear',
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+            storeOp: 'store',
+          },
+        ],
+        ...timed('post'),
+      })
+      post.setPipeline(compositePipeline)
+      post.setBindGroup(0, frameTargets.composite)
+      post.draw(3)
+      post.end()
 
-      pass.end()
-
+      timer.resolve(encoder)
       device.queue.submit([encoder.finish()])
+      timer.afterSubmit()
+    },
+
+    async capture() {
+      const output = targets?.output
+      if (!output) {
+        throw new Error('capture() needs an offscreen renderer that has drawn a frame')
+      }
+      const { width, height } = output
+      const bytesPerRow = Math.ceil((width * 4) / 256) * 256
+      const buffer = device.createBuffer({
+        label: 'capture',
+        size: bytesPerRow * height,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      })
+      const encoder = device.createCommandEncoder()
+      encoder.copyTextureToBuffer({ texture: output }, { buffer, bytesPerRow }, { width, height })
+      device.queue.submit([encoder.finish()])
+      await buffer.mapAsync(GPUMapMode.READ)
+      const mapped = new Uint8Array(buffer.getMappedRange())
+      const pixels = new Uint8Array(width * height * 4)
+      for (let y = 0; y < height; y += 1) {
+        pixels.set(mapped.subarray(y * bytesPerRow, y * bytesPerRow + width * 4), y * width * 4)
+      }
+      buffer.unmap()
+      buffer.destroy()
+      return { width, height, pixels }
+    },
+
+    async readPlanetVertices() {
+      const buffer = device.createBuffer({
+        label: 'planet-readback',
+        size: mesh.vertexData.byteLength,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      })
+      const encoder = device.createCommandEncoder()
+      encoder.copyBufferToBuffer(planetVertices, 0, buffer, 0, mesh.vertexData.byteLength)
+      device.queue.submit([encoder.finish()])
+      await buffer.mapAsync(GPUMapMode.READ)
+      const data = new Float32Array(buffer.getMappedRange().slice(0))
+      buffer.unmap()
+      buffer.destroy()
+      return data
     },
   }
 }

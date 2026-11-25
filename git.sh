@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-branch="$(git rev-parse --abbrev-ref HEAD)"
+branch="$(git symbolic-ref --quiet --short HEAD || echo HEAD)"
 case "${branch}" in
   main | master | HEAD)
     echo "error: refusing to commit and push on '${branch}'. Create a branch first:" >&2

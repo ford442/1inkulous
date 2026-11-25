@@ -262,6 +262,7 @@ void FollowerSet::set_down(Follower& follower, std::int32_t node) {
   follower.node = node;
   follower.height = grid_->height(node);
   follower.grounded = true;
+  follower.placed = true;
   flatten(follower.heading, follower.dir);
   if (!normalize3(follower.heading)) {
     double e2[3];
@@ -394,6 +395,8 @@ std::int32_t FollowerSet::shove(const double centre_in[3], double angular_radius
       follower.node = node;
       follower.height = ground.height;
       follower.grounded = true;
+      // Thrown, not walked: drawn where it lands.
+      follower.placed = true;
     } else {
       const std::int32_t free = grid_->nearest_walkable_node(landing[0], landing[1], landing[2]);
       if (free < 0) {
@@ -1759,6 +1762,23 @@ void FollowerSet::fight(double dt_seconds) {
   }
 }
 
+void FollowerSet::pose(const Follower& follower, float out[6]) const {
+  const double r = (grid_ != nullptr ? grid_->planet_radius() : 1.0) + follower.height;
+  out[0] = static_cast<float>(follower.dir[0] * r);
+  out[1] = static_cast<float>(follower.dir[1] * r);
+  out[2] = static_cast<float>(follower.dir[2] * r);
+  out[3] = static_cast<float>(follower.heading[0]);
+  out[4] = static_cast<float>(follower.heading[1]);
+  out[5] = static_cast<float>(follower.heading[2]);
+}
+
+void FollowerSet::mark_step() {
+  for (Follower& follower : followers_) {
+    pose(follower, follower.drawn);
+    follower.placed = false;
+  }
+}
+
 void FollowerSet::refresh_instances() {
   const std::size_t needed =
       followers_.size() * static_cast<std::size_t>(kFollowerInstanceFloats);
@@ -1766,19 +1786,11 @@ void FollowerSet::refresh_instances() {
     instances_.resize(needed);
   }
 
-  const double radius = grid_ != nullptr ? grid_->planet_radius() : 1.0;
-
   for (std::size_t i = 0; i < followers_.size(); ++i) {
     const Follower& follower = followers_[i];
     float* out = &instances_[i * static_cast<std::size_t>(kFollowerInstanceFloats)];
 
-    const double r = radius + follower.height;
-    out[0] = static_cast<float>(follower.dir[0] * r);
-    out[1] = static_cast<float>(follower.dir[1] * r);
-    out[2] = static_cast<float>(follower.dir[2] * r);
-    out[3] = static_cast<float>(follower.heading[0]);
-    out[4] = static_cast<float>(follower.heading[1]);
-    out[5] = static_cast<float>(follower.heading[2]);
+    pose(follower, out);
     out[6] = static_cast<float>(follower.tribe);
 
     std::int32_t flags = 0;
@@ -1788,6 +1800,12 @@ void FollowerSet::refresh_instances() {
     if (follower.casting) flags |= kFlagCasting;
     flags |= (static_cast<std::int32_t>(follower.role) << kRoleShift) & kRoleMask;
     out[7] = static_cast<float>(flags);
+
+    float* prev = out + kInstancePrevOffset;
+    const float* from = follower.placed ? out : follower.drawn;
+    for (int k = 0; k < 6; ++k) {
+      prev[k] = from[k];
+    }
   }
 }
 

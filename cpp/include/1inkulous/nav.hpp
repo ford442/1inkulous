@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "1inkulous/state_hash.hpp"
+
 // Navigation graph on the planet surface.
 //
 // The graph is the planet mesh's *welded* vertex grid: one node per distinct
@@ -195,6 +197,9 @@ class NavGrid {
   // Shortest and longest link on the graph, in radians. Set by commit().
   double min_link_angle() const { return min_link_angle_; }
   double max_link_angle() const { return max_link_angle_; }
+
+  // Mixes in everything of this that decides the next step. See state_hash.hpp.
+  void hash(StateHash& out) const;
 
  private:
   // Whether the offsets and neighbour ids TypeScript wrote describe a

@@ -85,6 +85,44 @@ INKULOUS_EXPORT double core_pending_ms(void) { return simulation().pending_ms();
 
 INKULOUS_EXPORT void core_reset(void) { simulation().reset(); }
 
+INKULOUS_EXPORT int core_steps(int count) {
+  return static_cast<int>(simulation().run_steps(count));
+}
+
+INKULOUS_EXPORT double core_step_alpha(void) { return simulation().step_alpha(); }
+
+// --- determinism ----------------------------------------------------------
+
+INKULOUS_EXPORT void core_match_seed(int seed) {
+  simulation().seed_match(static_cast<std::uint32_t>(seed));
+}
+
+INKULOUS_EXPORT int core_match_seed_value(void) {
+  return static_cast<int>(simulation().random().seed());
+}
+
+INKULOUS_EXPORT int core_state_hash(void) { return static_cast<int>(simulation().state_hash()); }
+
+INKULOUS_EXPORT int core_checkpoint_every(void) { return inkulous::kCheckpointEverySteps; }
+
+INKULOUS_EXPORT int core_checkpoint_count(void) {
+  return static_cast<int>(simulation().checkpoints().size());
+}
+
+INKULOUS_EXPORT double core_checkpoint_step(int index) {
+  const auto& checkpoints = simulation().checkpoints();
+  return index >= 0 && static_cast<std::size_t>(index) < checkpoints.size()
+             ? static_cast<double>(checkpoints[static_cast<std::size_t>(index)].step)
+             : 0.0;
+}
+
+INKULOUS_EXPORT int core_checkpoint_hash(int index) {
+  const auto& checkpoints = simulation().checkpoints();
+  return index >= 0 && static_cast<std::size_t>(index) < checkpoints.size()
+             ? static_cast<int>(checkpoints[static_cast<std::size_t>(index)].hash)
+             : 0;
+}
+
 // --- navigation grid ------------------------------------------------------
 
 INKULOUS_EXPORT int core_nav_alloc(int node_count, int link_count) {
@@ -380,8 +418,8 @@ INKULOUS_EXPORT void core_wood_set(int tribe, int wood) {
   simulation().stores().set_wood(tribe, wood);
 }
 
-INKULOUS_EXPORT int core_trees_spawn(int count, int seed) {
-  return simulation().trees().spawn(count, static_cast<std::uint32_t>(seed));
+INKULOUS_EXPORT int core_trees_spawn(int count) {
+  return simulation().trees().spawn(count, simulation().random());
 }
 
 INKULOUS_EXPORT int core_tree_count(void) { return simulation().trees().count(); }

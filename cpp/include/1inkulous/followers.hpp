@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "1inkulous/nav.hpp"
+#include "1inkulous/state_hash.hpp"
 #include "1inkulous/tribes.hpp"
 
 // Followers: the first units on the planet.
@@ -33,7 +34,14 @@ namespace inkulous {
 //   6     tribe index, as a float
 //   7     flags bitfield, as a float — see kFlag*, with the Role in bits
 //         kRoleShift and up
-constexpr std::int32_t kFollowerInstanceFloats = 8;
+//   8..10 world position as the last fixed step began
+//   11..13 heading as the last fixed step began
+// The renderer draws each follower between the two poses, by how far the
+// clock has got towards the next step, so motion is smooth at any display
+// rate. Someone put somewhere rather than walked there — spawned, set down,
+// shoved — has both poses equal, and is drawn where they are.
+constexpr std::int32_t kFollowerInstanceFloats = 14;
+constexpr std::int32_t kInstancePrevOffset = 8;
 
 constexpr std::int32_t kFlagSelected = 1 << 0;
 constexpr std::int32_t kFlagWalking = 1 << 1;
@@ -237,6 +245,10 @@ class FollowerSet {
 
   // Advances every follower by one fixed step.
   void step(double dt_seconds);
+  // Notes everyone's pose as a step begins, for the previous pose in the
+  // instance buffer. Called by the clock before every step, before any system
+  // moves anyone. Drawing only: no part of the simulation reads it.
+  void mark_step();
 
   double speed() const { return speed_; }
   void set_speed(double speed) { speed_ = speed > 0.0 ? speed : kDefaultFollowerSpeed; }
@@ -248,6 +260,9 @@ class FollowerSet {
   // Packed instance data, refreshed by `refresh_instances`.
   const float* instances() const { return instances_.data(); }
   void refresh_instances();
+
+  // Mixes in everything of this that decides the next step. See state_hash.hpp.
+  void hash(StateHash& out) const;
 
  private:
   struct Follower {
@@ -309,7 +324,16 @@ class FollowerSet {
 
     // Separation push gathered this step, world units in the tangent plane.
     double push[3] = {0.0, 0.0, 0.0};
+
+    // Drawing only, and so not hashed: the pose (world position, heading) as
+    // the last step began. `placed` means it was put where it is since then,
+    // not walked there, and is drawn without interpolating.
+    float drawn[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    bool placed = true;
   };
+
+  // The pose the instance buffer draws: world position, then heading.
+  void pose(const Follower& follower, float out[6]) const;
 
   // One entry per follower in the neighbour index, sorted by cell.
   struct Cell {

@@ -105,7 +105,36 @@ export type Simulation = {
    * ran. 0 is normal on a frame shorter than one step.
    */
   tick: (deltaMs: number) => number
+  /**
+   * How far the clock is from the last step towards the next, in [0, 1). Each
+   * follower is drawn that far from its previous pose to its current one, so
+   * motion is smooth whatever the display rate.
+   */
+  readonly stepAlpha: number
+  /** Clears the clock and its checkpoints. */
   reset: () => void
+  /**
+   * Runs exactly `count` fixed steps, leaving the frame-time accumulator
+   * alone: how a replay (src/sim/replay.ts) or a lockstep peer drives the
+   * core. Returns how many ran.
+   */
+  runSteps: (count: number) => number
+
+  /**
+   * Seeds the match's random generator, the core's only source of chance.
+   * Call it as the match starts, before anything draws from it (the forest).
+   */
+  seedMatch: (seed: number) => void
+  /** What the match was last seeded with; a fresh core holds the default. */
+  readonly matchSeed: number
+  /**
+   * The core's hash of everything that decides the next step, as a uint32.
+   * Two cores fed the same seed and commands on the same steps agree on it.
+   */
+  stateHash: () => number
+  /** The hash every `checkpointEvery` steps since the clock was cleared, oldest first. */
+  checkpoints: () => { readonly step: number; readonly hash: number }[]
+  readonly checkpointEvery: number
 
   /**
    * Uploads the walkable graph and seeds the terrain with `heights`, one per
@@ -216,8 +245,11 @@ export type Simulation = {
   /** Wood a tribe holds. */
   wood: (tribe: number) => number
   setWood: (tribe: number, wood: number) => void
-  /** Scatters up to `count` trees from `seed`, replacing any. Returns how many stand. */
-  spawnTrees: (count: number, seed: number) => number
+  /**
+   * Scatters up to `count` trees, replacing any, drawn from the match's
+   * generator: seed the match first. Returns how many stand.
+   */
+  spawnTrees: (count: number) => number
   readonly treeCount: number
   /** Live view of the tree instance buffer, `treeInstanceFloats` per tree. Re-read per frame. */
   treeInstances: () => Float32Array
@@ -396,9 +428,32 @@ export async function createSimulation(
     tick(deltaMs: number) {
       return module._core_tick(deltaMs)
     },
+    get stepAlpha() {
+      return module._core_step_alpha()
+    },
     reset() {
       module._core_reset()
     },
+    runSteps(count: number) {
+      return module._core_steps(count)
+    },
+
+    seedMatch(seed: number) {
+      module._core_match_seed(seed | 0)
+    },
+    get matchSeed() {
+      return module._core_match_seed_value() >>> 0
+    },
+    stateHash() {
+      return module._core_state_hash() >>> 0
+    },
+    checkpoints() {
+      return Array.from({ length: module._core_checkpoint_count() }, (_, i) => ({
+        step: module._core_checkpoint_step(i),
+        hash: module._core_checkpoint_hash(i) >>> 0,
+      }))
+    },
+    checkpointEvery: module._core_checkpoint_every(),
 
     uploadNavGraph(graph: NavGraphUpload, heights: Float32Array, commit: NavCommitOptions) {
       // `TypedArray.set` bounds-checks against the whole heap view, not against
@@ -633,8 +688,8 @@ export async function createSimulation(
       module._core_wood_set(tribe, wood)
     },
 
-    spawnTrees(count: number, seed: number) {
-      return module._core_trees_spawn(count, seed)
+    spawnTrees(count: number) {
+      return module._core_trees_spawn(count)
     },
 
     get treeCount() {

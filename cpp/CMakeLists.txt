@@ -28,6 +28,7 @@ set(CORE_SOURCES
   src/huts.cpp
   src/nav.cpp
   src/shaman.cpp
+  src/state_hash.cpp
   src/terrain.cpp
   src/trees.cpp
   src/tribe_ai.cpp
@@ -36,11 +37,26 @@ set(CORE_SOURCES
 # Nothing in cpp/ uses RTTI or exceptions, so say so: a stray `dynamic_cast` or
 # `throw` fails the build instead of pulling the runtime support in. MSVC has
 # its own spelling and is not a target here.
+#
+# Floating point is kept strict, because replays and lockstep compare state
+# hashes bit for bit: the same seed and commands have to give the same doubles
+# in a release core, a debug core, and on another machine. So no -ffast-math
+# (or -Ofast, which implies it), and no contracting a*b+c into a fused
+# multiply-add, which would round differently from the two operations it
+# replaces. wasm has no FMA today; -ffp-contract=off keeps it so if it gains
+# one, and keeps a native build honest.
 function(core_language_options target)
   if(NOT MSVC)
-    target_compile_options(${target} PRIVATE -fno-rtti -fno-exceptions)
+    target_compile_options(${target} PRIVATE -fno-rtti -fno-exceptions -fno-fast-math -ffp-contract=off)
   endif()
 endfunction()
+
+foreach(flags_var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELWITHDEBINFO)
+  if("${${flags_var}}" MATCHES "fast-math|-Ofast|-funsafe-math|-ffinite-math|-fassociative-math")
+    message(FATAL_ERROR "${flags_var} asks for relaxed floating point (${${flags_var}}); "
+      "the core must stay deterministic for replays and lockstep. See core_language_options.")
+  endif()
+endforeach()
 
 if(EMSCRIPTEN)
   # Plain defaults, overridable with -D. Not CACHE entries: a cached default

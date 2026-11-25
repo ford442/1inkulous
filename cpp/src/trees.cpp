@@ -60,25 +60,9 @@ bool tangent_towards(const double from[3], const double to[3], double out[3]) {
   return normalize3(out);
 }
 
-// xorshift32: small, fast, and the same sequence on every platform, which is
-// all a forest needs. Zero is its one fixed point, so it is never seeded with
-// it.
-struct Random {
-  std::uint32_t state;
-  explicit Random(std::uint32_t seed) : state(seed != 0 ? seed : 0x9e3779b9u) {}
-  std::uint32_t next() {
-    state ^= state << 13;
-    state ^= state >> 17;
-    state ^= state << 5;
-    return state;
-  }
-  // [0, 1).
-  double unit() { return static_cast<double>(next() >> 8) / 16777216.0; }
-};
-
 }  // namespace
 
-std::int32_t TreeSet::spawn(std::int32_t how_many, std::uint32_t seed) {
+std::int32_t TreeSet::spawn(std::int32_t how_many, MatchRandom& random) {
   clear();
   if (grid_ == nullptr || !grid_->ready() || how_many <= 0) {
     return 0;
@@ -102,9 +86,9 @@ std::int32_t TreeSet::spawn(std::int32_t how_many, std::uint32_t seed) {
     }
   }
 
-  // A seeded shuffle, then first come first planted, keeping every tree a
-  // node clear of the last so the forest is scattered rather than solid.
-  Random random(seed);
+  // A shuffle drawn from the match's generator, then first come first
+  // planted, keeping every tree a node clear of the last so the forest is
+  // scattered rather than solid.
   for (std::size_t i = candidates.size(); i > 1; --i) {
     const std::size_t j = random.next() % i;
     std::swap(candidates[i - 1], candidates[j]);

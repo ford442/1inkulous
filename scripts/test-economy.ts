@@ -138,16 +138,23 @@ const tickSeconds = (sim: Simulation, seconds: number) => {
 
   check('core: no trees and no wood before the match starts',
     core.treeCount === 0 && [0, 1, 2, 3].every((tribe) => core.wood(tribe) === 0))
-  const planted = core.spawnTrees(60, 7)
+  // The forest is drawn from the match's generator: seeding it is starting the match.
+  const plant = (seed: number) => {
+    core.seedMatch(seed)
+    return core.spawnTrees(60)
+  }
+  const planted = plant(7)
   const forest = treePositions(core)
   check('core: trees are scattered from the height field', planted === 60 && core.treeCount === 60 &&
     core.treeInstanceFloats === 8 && core.treeInstances().length === 60 * 8, `${planted} planted`)
   check('core: every one on dry land', forest.every((at) => core.terrainHeightAt(at) > 0))
   check('core: the same seed plants the same forest',
-    core.spawnTrees(60, 7) === 60 && treePositions(core).every((at, i) => angle(at, forest[i]) < 1e-7))
-  check('core: another seed another', core.spawnTrees(60, 8) === 60 &&
+    plant(7) === 60 && treePositions(core).every((at, i) => angle(at, forest[i]) < 1e-7))
+  check('core: another seed another', plant(8) === 60 &&
     treePositions(core).some((at, i) => angle(at, forest[i]) > 1e-3))
-  core.spawnTrees(60, 7)
+  check('core: the forest is drawn, not the seed spent', plant(7) === 60 && core.matchSeed === 7 &&
+    core.spawnTrees(60) === 60 && treePositions(core).some((at, i) => angle(at, forest[i]) > 1e-3))
+  plant(7)
 
   // The tree nearest home, and a brave a short walk off.
   let tree = 0

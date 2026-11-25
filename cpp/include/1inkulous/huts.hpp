@@ -6,6 +6,7 @@
 
 #include "1inkulous/followers.hpp"
 #include "1inkulous/nav.hpp"
+#include "1inkulous/state_hash.hpp"
 #include "1inkulous/tribes.hpp"
 
 // Huts: the buildings, and the first game loop.
@@ -181,6 +182,9 @@ class HutSet {
 
   const float* instances() const { return instances_.data(); }
   void refresh_instances();
+
+  // Mixes in everything of this that decides the next step. See state_hash.hpp.
+  void hash(StateHash& out) const;
 
  private:
   struct Hut {

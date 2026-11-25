@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "1inkulous/nav.hpp"
+#include "1inkulous/state_hash.hpp"
 
 // The terrain: the one height per nav node, and the only things allowed to
 // change it.
@@ -85,6 +86,9 @@ class Terrain {
   // still has to copy.
   const NodeRange& dirty() const { return dirty_; }
   void clear_dirty() { dirty_ = NodeRange{}; }
+
+  // Mixes in everything of this that decides the next step. See state_hash.hpp.
+  void hash(StateHash& out) const;
 
  private:
   // Shared body of sculpt and flatten: visits each node inside the brush with

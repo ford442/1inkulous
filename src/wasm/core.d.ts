@@ -19,6 +19,22 @@ export type CoreModule = {
   _core_elapsed_ms: () => number
   _core_pending_ms: () => number
   _core_reset: () => void
+  /** Exactly `count` fixed steps, whatever the accumulator holds. Returns how many ran. */
+  _core_steps: (count: number) => number
+  /** Pending time over the step length, in [0, 1): how far to draw between poses. */
+  _core_step_alpha: () => number
+
+  /**
+   * Determinism. Seeds and hashes are uint32s that cross as signed ints: read
+   * them with `>>> 0`.
+   */
+  _core_match_seed: (seed: number) => void
+  _core_match_seed_value: () => number
+  _core_state_hash: () => number
+  _core_checkpoint_every: () => number
+  _core_checkpoint_count: () => number
+  _core_checkpoint_step: (index: number) => number
+  _core_checkpoint_hash: (index: number) => number
 
   /** Navigation graph. Sizes it, then hands back pointers for TS to fill. */
   _core_nav_alloc: (nodeCount: number, linkCount: number) => number
@@ -146,8 +162,8 @@ export type CoreModule = {
 
   _core_wood: (tribe: number) => number
   _core_wood_set: (tribe: number, wood: number) => void
-  /** Scatters up to `count` trees from a seed. Returns how many stand. */
-  _core_trees_spawn: (count: number, seed: number) => number
+  /** Scatters up to `count` trees from the match's generator. Returns how many stand. */
+  _core_trees_spawn: (count: number) => number
   _core_tree_count: () => number
   _core_trees_clear: () => void
   /** Pointer to the packed tree instance buffer; moves as trees fall. */

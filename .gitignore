@@ -30,6 +30,13 @@ emsdk/
 # src/wasm/core.d.ts is hand-written and tracked.
 cpp/build-wasm
 cpp/build-wasm-debug
+
+# Native builds (cmake --preset native-*): unit tests, sanitizers, clang-tidy.
+cpp/build/
 src/wasm/core.js
 src/wasm/core.wasm
 src/wasm/core.wasm.map
+
+# Python bytecode (deploy.py)
+__pycache__/
+*.pyc

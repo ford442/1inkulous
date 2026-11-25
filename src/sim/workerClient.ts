@@ -320,8 +320,12 @@ export function connectWorkerSimulation(
         return steps
       },
       get stepAlpha() {
-        const h = header()
-        return stepAlphaAt(h[H.pendingMs], h[H.clockAt], h[H.stepMs], performance.timeOrigin + performance.now())
+        return stepAlphaAt(
+          header(H.pendingMs),
+          header(H.clockAt),
+          header(H.stepMs),
+          performance.timeOrigin + performance.now(),
+        )
       },
       reset() {
         command('reset', [], false)
@@ -329,7 +333,7 @@ export function connectWorkerSimulation(
       runSteps: offThread('runSteps') as (count: number) => number,
       seedMatch: (...args) => command('seedMatch', args, false),
       get matchSeed() {
-        return header()[H.matchSeed]
+        return header(H.matchSeed)
       },
       stateHash: offThread('stateHash') as () => number,
       checkpoints: offThread('checkpoints') as () => { step: number; hash: number }[],

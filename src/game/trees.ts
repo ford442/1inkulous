@@ -1,7 +1,7 @@
 import type { Vec3 } from '../engine/math'
 import { screenRay, type Ray, type RayCamera } from '../engine/picking'
 import type { InputSnapshot, PointerClick } from '../input/input'
-import type { Simulation } from '../sim/simulation'
+import { settle, type SimulationClient } from '../sim/simulation'
 import type { Planet } from './planet'
 import { isSculptModifierIn } from './sculpt'
 
@@ -67,7 +67,7 @@ export type Trees = {
   update: (deltaMs: number, input: InputSnapshot, view: TreeViewContext) => TreeUpdate
 }
 
-export function createTrees(planet: Planet, simulation: Simulation, options: TreesOptions = {}): Trees {
+export function createTrees(planet: Planet, simulation: SimulationClient, options: TreesOptions = {}): Trees {
   simulation.spawnTrees(Math.min(options.count ?? DEFAULT_TREE_COUNT, MAX_TREES), options.seed ?? DEFAULT_SEED)
 
   const height = planet.radius * TREE_HEIGHT_FRACTION
@@ -112,9 +112,10 @@ export function createTrees(planet: Planet, simulation: Simulation, options: Tre
         // Like a hut, a tree under the cursor takes the order even when nobody
         // can carry it out, rather than walking the selection to its foot.
         consumed.add(click)
-        const sent = simulation.orderChop(id)
-        notice = sent > 0 ? `${sent} chopping` : 'only braves chop — and three to a tree'
-        noticeMs = NOTICE_MS
+        settle(simulation.orderChop(id), (sent) => {
+          notice = sent > 0 ? `${sent} chopping` : 'only braves chop — and three to a tree'
+          noticeMs = NOTICE_MS
+        })
       }
 
       return { consumed }

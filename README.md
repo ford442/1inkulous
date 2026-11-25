@@ -2,8 +2,18 @@
 A Populous 3: The Beginning clone.
 
 Rendering, input and UI are TypeScript on WebGPU. The simulation is C++ compiled
-to WebAssembly, so the heavy work — pathfinding, AI, sphere maths — stays out of
-the JS main thread.
+to WebAssembly and runs on its own Worker, so the heavy work — pathfinding, AI,
+sphere maths — stays out of the JS main thread.
+
+The world is built on the main thread with every command recorded; the worker
+replays that log onto its own core, proves it got the same world by digest, and
+from then on owns the fixed-step clock (`src/sim/host.ts`). The main thread sends
+commands and reads each finished step from a snapshot (`src/sim/workerClient.ts`):
+a SharedArrayBuffer triple buffer when the page is cross-origin isolated, posted
+copies when not. `?core=main` keeps the core in-process, which is also how the
+Node tests drive it. Serve with `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` for the shared path; `vite` and
+`vite preview` already do.
 
 ```
 src/engine/   WebGPU device, planet + follower meshes, renderer, picking, math

@@ -4,7 +4,9 @@ import { deviceLossMessage, WebGpuUnavailableError } from './engine/webgpu'
 import { createGame } from './game/game'
 import { createHud, showFatal } from './ui/hud'
 import { createInput } from './input/input'
-import { createSimulation } from './sim/simulation'
+import { createSimulationHandle } from './sim/handle'
+import { createSimulation, type SimulationClient } from './sim/simulation'
+import type { WorkerSimulation } from './sim/workerClient'
 import { CANVAS_ASPECT } from './viewport'
 
 async function main() {
@@ -20,13 +22,24 @@ async function main() {
   // Report the core as soon as it is up, so a later renderer failure cannot
   // hide whether the WASM boundary came alive. The game is built on top of it:
   // followers and the graph they walk live inside the core.
-  const simulation = await createSimulation()
+  const core = await createSimulation()
+  // The world is built here, on the in-process core, with every command it
+  // takes recorded; the worker then replays them and takes over.
+  const handle = createSimulationHandle(core)
+  const simulation = handle.simulation
   console.info(
     `[core] simulation core ${simulation.version}, ${simulation.stepMs}ms fixed step`,
   )
   hud.setStatus(`core ${simulation.version} loaded — building the world…`)
 
   const game = createGame(simulation)
+  const worker = await moveCoreToWorker(handle)
+  const live: SimulationClient = handle.current
+  hud.setStatus(
+    worker
+      ? `core ${simulation.version} on a worker (${worker.transport} snapshots)`
+      : `core ${simulation.version} on the main thread`,
+  )
   hud.setStatus(
     `core ${simulation.version} · ${game.followers.count} followers against ${game.match.enemy.name} — starting renderer…`,
   )
@@ -45,6 +58,7 @@ async function main() {
     }
     running = false
     cancelAnimationFrame(frameHandle)
+    worker?.dispose()
     hud.showFatal(message)
   }
   // Attached straight away, so a loss during the first frames is not missed.
@@ -57,6 +71,7 @@ async function main() {
   let perfWindowStart = lastTime
   let perfFrames = 0
   let perfSimMs = 0
+  let perfSyncMs = 0
   let perfGameMs = 0
   let perfDrawMs = 0
 
@@ -68,11 +83,12 @@ async function main() {
       const deltaMs = now - lastTime
       lastTime = now
 
-      // Simulation first: the C++ core consumes whole fixed steps, and rendering
-      // then draws whatever state they left behind.
+      // Simulation first. In-process, the C++ core consumes whole fixed steps
+      // here; on a worker it keeps its own clock, and this only swaps in the
+      // latest step it finished. Rendering then draws whatever that left behind.
       let mark = performance.now()
-      simulation.tick(deltaMs)
-      const simMs = performance.now() - mark
+      live.tick(deltaMs)
+      const tickMs = performance.now() - mark
 
       mark = performance.now()
       game.update(deltaMs, input.snapshot(), CANVAS_ASPECT)
@@ -83,26 +99,33 @@ async function main() {
       const drawMs = performance.now() - mark
 
       perfFrames += 1
-      perfSimMs += simMs
+      if (worker) {
+        perfSyncMs += tickMs
+      } else {
+        perfSimMs += tickMs
+      }
       perfGameMs += gameMs
       perfDrawMs += drawMs
       const windowMs = now - perfWindowStart
       if (windowMs >= PERF_WINDOW_MS && perfFrames > 0) {
         hud.setPerf({
           fps: (perfFrames * 1000) / windowMs,
-          simMs: perfSimMs / perfFrames,
+          simMs: worker ? worker.takeSimMsPerStep() : perfSimMs / perfFrames,
+          simThread: worker ? 'worker' : 'main',
+          syncMs: perfSyncMs / perfFrames,
           gameMs: perfGameMs / perfFrames,
           drawMs: perfDrawMs / perfFrames,
         })
         perfWindowStart = now
         perfFrames = 0
         perfSimMs = 0
+        perfSyncMs = 0
         perfGameMs = 0
         perfDrawMs = 0
       }
 
       hud.setBrush(game.sculptor)
-      hud.setSimulation(simulation)
+      hud.setSimulation(live)
       hud.setFollowers(game.followers)
       hud.setHuts(game.huts)
       hud.setShaman(game.shaman)
@@ -120,6 +143,35 @@ async function main() {
   }
 
   frameHandle = requestAnimationFrame(frame)
+}
+
+/**
+ * Hands the core to a worker, unless `?core=main` asks to keep it here or the
+ * worker cannot start; either way the game plays on. Snapshots are shared
+ * memory when the page is cross-origin isolated, posted copies otherwise.
+ */
+async function moveCoreToWorker(
+  handle: ReturnType<typeof createSimulationHandle>,
+): Promise<WorkerSimulation | null> {
+  if (new URLSearchParams(location.search).get('core') === 'main') {
+    return null
+  }
+  let thread: Worker | null = null
+  try {
+    thread = new Worker(new URL('./sim/worker.ts', import.meta.url), { type: 'module' })
+    const worker = await handle.moveToWorker(thread, {
+      shared: globalThis.crossOriginIsolated === true,
+    })
+    document.addEventListener('visibilitychange', () =>
+      document.hidden ? worker.pause() : worker.resume(),
+    )
+    console.info(`[core] running on a worker, ${worker.transport} snapshots`)
+    return worker
+  } catch (error) {
+    thread?.terminate()
+    console.warn('[core] could not move the core to a worker; it stays on the main thread', error)
+    return null
+  }
 }
 
 main().catch((error: unknown) => {

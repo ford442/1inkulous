@@ -74,7 +74,14 @@ export type MatchReadout = {
 /** Smoothed frame timing. `drawMs` is CPU time in `renderer.render`, not a GPU query. */
 export type FramePerf = {
   readonly fps: number
-  readonly simMs: number
+  /**
+   * Core time. On the main thread it is per frame; on a worker it is per fixed
+   * step, measured there, and null while no step ran.
+   */
+  readonly simMs: number | null
+  readonly simThread: 'main' | 'worker'
+  /** Main-thread time swapping in the worker's latest step. */
+  readonly syncMs: number
   readonly gameMs: number
   readonly drawMs: number
 }
@@ -316,7 +323,11 @@ export function createHud(): Hud {
     setPerf(perf: FramePerf) {
       if (fpsEl) {
         fpsEl.textContent =
-          `${perf.fps.toFixed(0)} fps · sim ${perf.simMs.toFixed(2)}ms · ` +
+          `${perf.fps.toFixed(0)} fps · ` +
+          (perf.simThread === 'worker'
+            ? `sim ${perf.simMs === null ? '—' : perf.simMs.toFixed(2)}ms/step (worker) · ` +
+              `sync ${perf.syncMs.toFixed(2)}ms · `
+            : `sim ${(perf.simMs ?? 0).toFixed(2)}ms · `) +
           `game ${perf.gameMs.toFixed(2)}ms · draw ${perf.drawMs.toFixed(2)}ms`
       }
     },

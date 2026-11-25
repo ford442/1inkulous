@@ -2,7 +2,7 @@ import type { Vec3 } from '../engine/math'
 import { screenRay, worldToNdc, type Ray, type RayCamera } from '../engine/picking'
 import type { DragRect, InputSnapshot } from '../input/input'
 import { Role, roleOfFlags } from '../sim/role'
-import type { Simulation } from '../sim/simulation'
+import type { SimulationClient } from '../sim/simulation'
 import type { NavGraph } from './navGraph'
 import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
 import { PLAYER_TRIBE } from './shaman'
@@ -94,7 +94,7 @@ export type Followers = {
 
 export function createFollowers(
   terrain: Terrain,
-  simulation: Simulation,
+  simulation: SimulationClient,
   options: FollowersOptions = {},
 ): Followers {
   const { planet, graph } = terrain

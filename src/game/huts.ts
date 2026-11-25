@@ -2,7 +2,7 @@ import type { Vec3 } from '../engine/math'
 import { screenRay, type Ray, type RayCamera } from '../engine/picking'
 import type { InputSnapshot, PointerClick } from '../input/input'
 import { HutKind, HutSite } from '../sim/hutSite'
-import type { Simulation } from '../sim/simulation'
+import { settle, type SimulationClient } from '../sim/simulation'
 import type { Planet } from './planet'
 import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
 
@@ -95,7 +95,7 @@ export type Huts = {
   update: (deltaMs: number, input: InputSnapshot, view: HutViewContext) => HutUpdate
 }
 
-export function createHuts(planet: Planet, simulation: Simulation): Huts {
+export function createHuts(planet: Planet, simulation: SimulationClient): Huts {
   const radius = simulation.hutRadius
   const height = radius * HUT_HEIGHT_RATIO
   const instanceFloats = simulation.hutInstanceFloats
@@ -237,14 +237,18 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
             say(siteProblem(site.site, simulation.hutCost(buildKind, PLAYER_TRIBE)))
             continue
           }
-          if (simulation.placeHut(site.direction, site.heading, PLAYER_TRIBE, buildKind) >= 0) {
+          const placing = buildKind
+          settle(simulation.placeHut(site.direction, site.heading, PLAYER_TRIBE, placing), (id) => {
+            if (id < 0) {
+              return
+            }
             notice = null
             noticeMs = 0
             // Shift keeps placing, the usual RTS binding for queued builds.
-            if (!click.shiftKey) {
+            if (!click.shiftKey && buildKind === placing) {
               buildKind = null
             }
-          }
+          })
           continue
         }
 
@@ -270,16 +274,16 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
             continue
           }
           consumed.add(click)
-          const out = simulation.ejectHut(id)
-          say(out > 0 ? `${out} came out` : 'nobody inside')
+          settle(simulation.ejectHut(id), (out) => say(out > 0 ? `${out} came out` : 'nobody inside'))
           continue
         }
 
         // A right-click on a hut is always an enter order, even one nobody can
         // follow: walking the selection into the wall instead would surprise.
         consumed.add(click)
-        const sent = simulation.orderEnterHut(id)
-        say(sent > 0 ? `${sent} going in` : enterProblem(simulation, id))
+        settle(simulation.orderEnterHut(id), (sent) =>
+          say(sent > 0 ? `${sent} going in` : enterProblem(simulation, id)),
+        )
       }
 
       return { consumed, building: buildKind !== null }
@@ -288,7 +292,7 @@ export function createHuts(planet: Planet, simulation: Simulation): Huts {
 }
 
 /** Why an enter order sent nobody, as the HUD says it. */
-function enterProblem(simulation: Simulation, id: number): string {
+function enterProblem(simulation: SimulationClient, id: number): string {
   const training = simulation.hutKind(id) === HutKind.training
   const capacity = training ? simulation.trainingCapacity : simulation.hutCapacity
   if (simulation.hutOccupants(id) >= capacity) {

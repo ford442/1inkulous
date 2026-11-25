@@ -1,6 +1,6 @@
 import { refreshGeometry, refreshVertices } from '../engine/mesh/cubeSphere'
 import type { Vec3 } from '../engine/math'
-import type { Simulation } from '../sim/simulation'
+import type { Deferred, SimulationClient } from '../sim/simulation'
 import { buildNavGraph, type NavGraph } from './navGraph'
 import type { Planet } from './planet'
 
@@ -39,13 +39,13 @@ export type Terrain = {
    * Raises (positive delta) or lowers the ground inside an angular radius, with
    * a smooth falloff to the rim. Returns true if anything moved.
    */
-  sculpt: (centre: Vec3, angularRadius: number, delta: number) => boolean
+  sculpt: (centre: Vec3, angularRadius: number, delta: number) => Deferred<boolean>
   /**
    * Pulls the ground inside an angular radius towards `targetHeight`, by at
    * most `rate` at the centre and less towards the rim. Ground within reach
    * lands on the target exactly, so a few strokes leave a level pad.
    */
-  flatten: (centre: Vec3, angularRadius: number, targetHeight: number, rate: number) => boolean
+  flatten: (centre: Vec3, angularRadius: number, targetHeight: number, rate: number) => Deferred<boolean>
   /**
    * Copies the heights the core changed since the last call onto the mesh.
    * Returns how many vertices moved. Call once a frame, after everything that
@@ -61,7 +61,7 @@ export type TerrainOptions = {
 
 export function createTerrain(
   planet: Planet,
-  simulation: Simulation,
+  simulation: SimulationClient,
   options: TerrainOptions = {},
 ): Terrain {
   const { mesh } = planet

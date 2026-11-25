@@ -2,7 +2,7 @@ import type { Vec3 } from '../engine/math'
 import { screenRay, type RayCamera } from '../engine/picking'
 import type { DragRect, InputSnapshot, PointerClick } from '../input/input'
 import { Spell, SPELLS, SpellResult } from '../sim/spell'
-import type { Simulation, SpellCast } from '../sim/simulation'
+import { settle, type SimulationClient, type SpellCast } from '../sim/simulation'
 import type { Planet } from './planet'
 import { isSculptModifierHeld, isSculptModifierIn } from './sculpt'
 
@@ -116,7 +116,7 @@ export type Shaman = {
   update: (deltaMs: number, input: InputSnapshot, view: ShamanViewContext) => ShamanUpdate
 }
 
-export function createShaman(planet: Planet, simulation: Simulation): Shaman {
+export function createShaman(planet: Planet, simulation: SimulationClient): Shaman {
   const tribe = PLAYER_TRIBE
   let aiming: Spell | null = null
   let preview: SpellPreview | null = null
@@ -165,16 +165,18 @@ export function createShaman(planet: Planet, simulation: Simulation): Shaman {
 
   // `origin` is a dragged bridge's near end. Null leaves it to the core:
   // wherever she stands when the cast starts.
-  const cast = (spell: Spell, to: Vec3, origin: Vec3 | null): boolean => {
-    const result = simulation.castSpell(spell, tribe, to, origin)
-    const cost = simulation.spellRules[spell].cost
-    if (result !== SpellResult.ok) {
-      say(spellProblem(spell, result, cost))
-      return false
-    }
-    say(`casting ${SPELL_NAMES[spell]}…`)
-    return true
-  }
+  // On a worker the answer comes a frame later; until then the cast is taken
+  // as started, and a refusal still reaches the HUD when it arrives.
+  const cast = (spell: Spell, to: Vec3, origin: Vec3 | null): boolean =>
+    settle(simulation.castSpell(spell, tribe, to, origin), (result) => {
+      const cost = simulation.spellRules[spell].cost
+      if (result !== SpellResult.ok) {
+        say(spellProblem(spell, result, cost))
+        return false
+      }
+      say(`casting ${SPELL_NAMES[spell]}…`)
+      return true
+    }) ?? true
   const spells: SpellSlot[] = SPELLS.map((spell) => ({
     spell,
     key: keyLabel(SPELL_KEYS[spell]),

@@ -294,6 +294,48 @@ export type Simulation = {
   readonly module: CoreModule
 }
 
+/** A command's result: the value in-process, a promise once the core is on a worker. */
+export type Deferred<T> = T | Promise<T>
+
+/** Runs `then` on a command's result: straight away if it is already here. */
+export function settle<T, R>(value: Deferred<T>, then: (value: T) => R): R | undefined {
+  if (value instanceof Promise) {
+    void value.then(then)
+    return undefined
+  }
+  return then(value)
+}
+
+/** Commands whose result only arrives after the core has run them. */
+type DeferredOp =
+  | 'orderFollowerMove'
+  | 'sculptTerrain'
+  | 'flattenTerrain'
+  | 'spawnFollower'
+  | 'setFollowerRole'
+  | 'placeHut'
+  | 'orderEnterHut'
+  | 'ejectHut'
+  | 'spawnTrees'
+  | 'orderChop'
+  | 'plantTree'
+  | 'spawnShaman'
+  | 'castSpell'
+  | 'enableAi'
+
+/**
+ * What frame-time game code sees: the same simulation, wherever it runs. Reads
+ * are synchronous — on a worker they come from the latest published step — but
+ * a command's result may be a promise; take it with `settle`. The in-process
+ * `Simulation` is one of these.
+ */
+export type SimulationClient = Omit<Simulation, DeferredOp> & {
+  [K in DeferredOp]: (...args: Parameters<Simulation[K]>) => Deferred<ReturnType<Simulation[K]>>
+} & {
+  /** Where the core runs, and its own timing when that is not here. */
+  readonly thread?: 'main' | 'worker'
+}
+
 export type SimulationOptions = {
   /** Fixed step length in ms. Omit for the core's default (50ms = 20Hz). */
   stepMs?: number

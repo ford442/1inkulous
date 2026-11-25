@@ -29,8 +29,8 @@ double angle_between(const double a[3], const double b[3]) {
 
 // Any orthonormal pair tangent at unit `n`.
 void tangent_basis(const double n[3], double e1[3], double e2[3]) {
-  const double helper[3] = {std::fabs(n[1]) < 0.9 ? 0.0 : 1.0,
-                            std::fabs(n[1]) < 0.9 ? 1.0 : 0.0, 0.0};
+  const double helper[3] = {std::fabs(n[1]) < 0.9 ? 0.0 : 1.0, std::fabs(n[1]) < 0.9 ? 1.0 : 0.0,
+                            0.0};
   const double along = dot3(helper, n);
   e1[0] = helper[0] - n[0] * along;
   e1[1] = helper[1] - n[1] * along;
@@ -255,9 +255,8 @@ std::int32_t TreeSet::order_chop(const std::vector<std::int32_t>& ids, std::int3
   const std::int32_t taken = kChoppersPerTree - room;
   std::vector<std::int32_t> one(1);
   for (std::size_t k = 0; k < chosen.size(); ++k) {
-    const double turn =
-        static_cast<double>(taken + static_cast<std::int32_t>(k)) * 6.283185307179586 /
-        kChoppersPerTree;
+    const double turn = static_cast<double>(taken + static_cast<std::int32_t>(k)) *
+                        6.283185307179586 / kChoppersPerTree;
     const double tangent[3] = {toward[0] * std::cos(turn) + side[0] * std::sin(turn),
                                toward[1] * std::cos(turn) + side[1] * std::sin(turn),
                                toward[2] * std::cos(turn) + side[2] * std::sin(turn)};

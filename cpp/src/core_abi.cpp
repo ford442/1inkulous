@@ -63,9 +63,7 @@ extern "C" {
 
 INKULOUS_EXPORT int core_version(void) { return inkulous::core_version(); }
 
-INKULOUS_EXPORT const char* core_version_text(void) {
-  return inkulous::core_version_string();
-}
+INKULOUS_EXPORT const char* core_version_text(void) { return inkulous::core_version_string(); }
 
 INKULOUS_EXPORT void core_init(double step_ms) { simulation().set_step_ms(step_ms); }
 
@@ -129,9 +127,7 @@ INKULOUS_EXPORT int core_nav_alloc(int node_count, int link_count) {
   return simulation().nav().allocate(node_count, link_count) ? 1 : 0;
 }
 
-INKULOUS_EXPORT float* core_nav_directions(void) {
-  return simulation().nav().directions();
-}
+INKULOUS_EXPORT float* core_nav_directions(void) { return simulation().nav().directions(); }
 
 INKULOUS_EXPORT float* core_nav_heights(void) { return simulation().nav().heights(); }
 
@@ -148,9 +144,7 @@ INKULOUS_EXPORT void core_nav_commit(double planet_radius, double max_slope) {
   simulation().terrain().clear_dirty();
 }
 
-INKULOUS_EXPORT int core_nav_node_count(void) {
-  return simulation().nav().node_count();
-}
+INKULOUS_EXPORT int core_nav_node_count(void) { return simulation().nav().node_count(); }
 
 INKULOUS_EXPORT int core_nav_ready(void) { return simulation().nav().ready() ? 1 : 0; }
 
@@ -158,13 +152,8 @@ INKULOUS_EXPORT int core_nav_nearest_walkable(double x, double y, double z) {
   return simulation().nav().nearest_walkable_node(x, y, z);
 }
 
-INKULOUS_EXPORT int core_nav_route(double x0,
-                                    double y0,
-                                    double z0,
-                                    double x1,
-                                    double y1,
-                                    double z1,
-                                    int smooth) {
+INKULOUS_EXPORT int core_nav_route(
+    double x0, double y0, double z0, double x1, double y1, double z1, int smooth) {
   inkulous::NavGrid& nav = simulation().nav();
   if (!nav.ready()) {
     return -1;
@@ -211,44 +200,31 @@ INKULOUS_EXPORT void core_terrain_set_max_height(double max_height) {
   simulation().terrain().set_max_height(max_height);
 }
 
-INKULOUS_EXPORT double core_terrain_max_height(void) {
-  return simulation().terrain().max_height();
-}
+INKULOUS_EXPORT double core_terrain_max_height(void) { return simulation().terrain().max_height(); }
 
 INKULOUS_EXPORT double core_terrain_height_at(double x, double y, double z) {
   const double dir[3] = {x, y, z};
   return simulation().terrain().height_at(dir);
 }
 
-INKULOUS_EXPORT int core_terrain_sculpt(double x,
-                                        double y,
-                                        double z,
-                                        double angular_radius,
-                                        double delta) {
+INKULOUS_EXPORT int core_terrain_sculpt(
+    double x, double y, double z, double angular_radius, double delta) {
   const double centre[3] = {x, y, z};
   const inkulous::NodeRange moved = simulation().terrain().sculpt(centre, angular_radius, delta);
   return moved.empty() ? 0 : 1;
 }
 
-INKULOUS_EXPORT int core_terrain_flatten(double x,
-                                         double y,
-                                         double z,
-                                         double angular_radius,
-                                         double target_height,
-                                         double rate) {
+INKULOUS_EXPORT int core_terrain_flatten(
+    double x, double y, double z, double angular_radius, double target_height, double rate) {
   const double centre[3] = {x, y, z};
   const inkulous::NodeRange moved =
       simulation().terrain().flatten(centre, angular_radius, target_height, rate);
   return moved.empty() ? 0 : 1;
 }
 
-INKULOUS_EXPORT int core_terrain_dirty_first(void) {
-  return simulation().terrain().dirty().first;
-}
+INKULOUS_EXPORT int core_terrain_dirty_first(void) { return simulation().terrain().dirty().first; }
 
-INKULOUS_EXPORT int core_terrain_dirty_last(void) {
-  return simulation().terrain().dirty().last;
-}
+INKULOUS_EXPORT int core_terrain_dirty_last(void) { return simulation().terrain().dirty().last; }
 
 INKULOUS_EXPORT void core_terrain_clear_dirty(void) { simulation().terrain().clear_dirty(); }
 
@@ -301,9 +277,7 @@ INKULOUS_EXPORT int core_follower_route(int id) {
 
 INKULOUS_EXPORT float* core_route_points(void) { return route_points().data(); }
 
-INKULOUS_EXPORT double core_follower_speed(void) {
-  return simulation().followers().speed();
-}
+INKULOUS_EXPORT double core_follower_speed(void) { return simulation().followers().speed(); }
 
 INKULOUS_EXPORT void core_follower_set_speed(double speed) {
   simulation().followers().set_speed(speed);
@@ -350,16 +324,10 @@ INKULOUS_EXPORT float* core_hut_site_point(void) {
   return const_cast<float*>(simulation().huts().site_point());
 }
 
-INKULOUS_EXPORT int core_hut_place(double x,
-                                   double y,
-                                   double z,
-                                   double hx,
-                                   double hy,
-                                   double hz,
-                                   int tribe,
-                                   int kind) {
-  const int id = simulation().huts().place(x, y, z, hx, hy, hz, tribe,
-                                           static_cast<inkulous::HutKind>(kind));
+INKULOUS_EXPORT int core_hut_place(
+    double x, double y, double z, double hx, double hy, double hz, int tribe, int kind) {
+  const int id =
+      simulation().huts().place(x, y, z, hx, hy, hz, tribe, static_cast<inkulous::HutKind>(kind));
   if (id >= 0) {
     simulation().followers().refresh_instances();
   }
@@ -432,7 +400,9 @@ INKULOUS_EXPORT float* core_tree_instances(void) {
 
 INKULOUS_EXPORT int core_tree_instance_floats(void) { return inkulous::kTreeInstanceFloats; }
 
-INKULOUS_EXPORT int core_tree_order_chop(int id) { return simulation().trees().order_chop_selected(id); }
+INKULOUS_EXPORT int core_tree_order_chop(int id) {
+  return simulation().trees().order_chop_selected(id);
+}
 
 INKULOUS_EXPORT double core_tree_progress(int id) { return simulation().trees().progress(id); }
 
@@ -455,9 +425,7 @@ INKULOUS_EXPORT int core_shaman(int tribe) {
 
 INKULOUS_EXPORT double core_mana(int tribe) { return simulation().shamans().mana(tribe); }
 
-INKULOUS_EXPORT double core_mana_income(int tribe) {
-  return simulation().shamans().income(tribe);
-}
+INKULOUS_EXPORT double core_mana_income(int tribe) { return simulation().shamans().income(tribe); }
 
 INKULOUS_EXPORT double core_mana_max(void) { return inkulous::kMaxMana; }
 
@@ -488,28 +456,16 @@ INKULOUS_EXPORT double core_spell_radius(int spell) {
                          : 0.0;
 }
 
-INKULOUS_EXPORT int core_spell_check(int spell,
-                                     int tribe,
-                                     double x,
-                                     double y,
-                                     double z,
-                                     double ox,
-                                     double oy,
-                                     double oz) {
-  return static_cast<int>(simulation().shamans().check(
-      static_cast<inkulous::Spell>(spell), tribe, spell_target(x, y, z, ox, oy, oz)));
+INKULOUS_EXPORT int core_spell_check(
+    int spell, int tribe, double x, double y, double z, double ox, double oy, double oz) {
+  return static_cast<int>(simulation().shamans().check(static_cast<inkulous::Spell>(spell), tribe,
+                                                       spell_target(x, y, z, ox, oy, oz)));
 }
 
-INKULOUS_EXPORT int core_spell_cast(int spell,
-                                    int tribe,
-                                    double x,
-                                    double y,
-                                    double z,
-                                    double ox,
-                                    double oy,
-                                    double oz) {
-  return static_cast<int>(simulation().shamans().cast(
-      static_cast<inkulous::Spell>(spell), tribe, spell_target(x, y, z, ox, oy, oz)));
+INKULOUS_EXPORT int core_spell_cast(
+    int spell, int tribe, double x, double y, double z, double ox, double oy, double oz) {
+  return static_cast<int>(simulation().shamans().cast(static_cast<inkulous::Spell>(spell), tribe,
+                                                      spell_target(x, y, z, ox, oy, oz)));
 }
 
 INKULOUS_EXPORT void core_spell_cancel(int tribe) { simulation().shamans().cancel(tribe); }

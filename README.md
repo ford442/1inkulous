@@ -21,15 +21,16 @@ src/engine/shaders/   the WGSL, one file per pipeline, imported as source
 src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers, huts, trees
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
-src/wasm/     build output (generated) + core.d.ts, the checked-in ABI contract
+src/wasm/     build output (generated) + the typings: core.d.ts, and core-abi.d.ts generated from core_abi.h
 cpp/          simulation core: fixed-step clock, terrain, navigation graph, followers, huts, trees, wood, tribe AI
 ```
 
 ## Prerequisites
 
-- **Node** 20 or newer
-- **CMake** 3.20 or newer
-- **Emscripten SDK**, with `emcc` and `emcmake` on `PATH`
+- **Node** 20.19 or newer (22.13 or newer on the 22 line)
+- **CMake** 3.21 or newer
+- **Emscripten SDK**, with `emcc` and `emcmake` on `PATH`. The release the repo is
+  built and tested with is pinned in `.emsdk-version` (CI installs that one too)
 
 The simulation core is not optional: the app fails to start without it, and every
 build script that needs `emcc` stops with install instructions rather than
@@ -39,7 +40,7 @@ Install the SDK once:
 
 ```sh
 git clone https://github.com/emscripten-core/emsdk.git
-cd emsdk && ./emsdk install latest && ./emsdk activate latest
+cd emsdk && ./emsdk install "$(cat /path/to/1inkulous/.emsdk-version)" && ./emsdk activate "$(cat /path/to/1inkulous/.emsdk-version)"
 ```
 
 Then activate it in each shell — add it to your shell profile so `npm` scripts
@@ -62,7 +63,9 @@ emcc -v   # confirm
 | `npm run build:wasm` | Compiles `cpp/` into `src/wasm/core.js` + `core.wasm` (release) |
 | `npm run build:wasm:debug` | Opt-in `-O0 -g -sASSERTIONS=2` core, in its own directory |
 | `npm test` | Every `test:*` script below, one after another, with a summary. This is what CI runs |
-| `npm run test:abi` | `core_abi.h`, `core.d.ts` and the exports in `core_abi.cpp` agree; needs no build |
+| `npm run test:lint` | ESLint (typescript-eslint, flat config) over `src/` and `scripts/` |
+| `npm run gen:abi` | Regenerates `src/wasm/core-abi.d.ts` from `core_abi.h` |
+| `npm run test:abi` | `core-abi.d.ts` is what `core_abi.h` produces now, and `core_abi.cpp` exports exactly what the header declares; needs no build |
 | `npm run test:core` | Headless checks of the core in Node (no browser needed) |
 | `npm run test:select` | Rubber-band selection and the pointer gestures behind it |
 | `npm run test:huts` | Hut picking and build mode against a fake core; then placing, entering, breeding and routing round a hut on the real core and planet |
@@ -81,12 +84,13 @@ emcc -v   # confirm
 run — locally and in CI — without being listed anywhere else. `npm test -- core
 huts` runs just those.
 
-`src/wasm/core.js` and `core.wasm` are generated and git-ignored;
-`src/wasm/core.d.ts` is hand-written and tracked, so a change to the C ABI in
-`cpp/include/1inkulous/core_abi.h` must be mirrored there. `npm run test:abi`
-is what notices when it is not: it fails on a function declared in one and
-missing from the other, on a different argument count or `void`-ness, and on a
-declaration `core_abi.cpp` does not export.
+`src/wasm/core.js` and `core.wasm` are generated and git-ignored. The C ABI is
+declared once, in `cpp/include/1inkulous/core_abi.h`; the `_core_*` typings
+(`src/wasm/core-abi.d.ts`, doc comments and all) are generated from it by
+`npm run gen:abi` and checked in, and `core.d.ts` adds only the Emscripten
+runtime half (`HEAPF32` and friends). Edit the header, run `gen:abi`, commit
+both: `npm run test:abi` fails when the generated file is stale, and on a
+declaration `core_abi.cpp` does not export (or an export it does not declare).
 
 The Emscripten glue targets `web,worker,node` — the Node environment is what lets
 `npm run test:core` run in CI. That is why a production build prints one
@@ -130,6 +134,42 @@ CORE_WASM_DIR=cpp/build-wasm-debug/out npm test    # or run the tests against it
 The time budgets in `test:core` (a mass order inside a frame, and so on) are
 claims about the release build; against a core loaded this way they are printed
 but not enforced.
+
+### Native tests and tooling
+
+The core also builds as a plain static library, with a doctest suite in
+`cpp/tests/` that drives it directly — the clock, the nav graph, terrain,
+followers, huts, trees and wood, combat, shamans and spells, the AI, the C ABI,
+and that a run is deterministic (what the worker's replay relies on). No
+Emscripten is needed. Every way of building `cpp/` is a preset in
+`cpp/CMakePresets.json`, and `scripts/build-wasm.sh` and CI use those names:
+
+| Preset | What it is |
+| --- | --- |
+| `wasm-release`, `wasm-debug` | What `npm run build:wasm` and `build:wasm:debug` run, through `emcmake` |
+| `native-debug` | The library and `core_tests`, `-O0 -g` |
+| `native-asan` | The same under AddressSanitizer and UBSan (`-fsanitize=address,undefined`); a report aborts, so `ctest` fails on it |
+| `native-tidy` | Builds the core under clang-tidy (`.clang-tidy`), every finding an error |
+
+```sh
+cd cpp
+cmake --preset native-debug && cmake --build --preset native-debug && ctest --preset native-debug
+cmake --preset native-asan  && cmake --build --preset native-asan  && ctest --preset native-asan
+build/native-debug/tests/core_tests -tc='*follower*'   # one group; -ltc lists them
+```
+
+The core is held to `-Wall -Wextra -Wconversion -Werror` in every build (turn the
+`-Werror` off with `-DCORE_WERROR=OFF` while experimenting), and `.clang-format`
+is the style it is written in: `clang-format -i cpp/src/* cpp/include/1inkulous/*
+cpp/tests/*`. CI runs the debug and ASan builds next to the wasm one, and checks
+format and clang-tidy in a separate job.
+
+Source layout: `followers.cpp` is the follower set itself (spawn, selection, the
+shaman, instances); `follower_orders.cpp` routes an order into formation slots;
+`follower_steering.cpp` is the per-step walking; `follower_jobs.cpp` the hut and
+tree a follower is sent to; `follower_combat.cpp` health and the fight. Likewise
+`nav.cpp` builds and queries the graph and `nav_search.cpp` searches it. The
+`*_internal.hpp` headers beside them are private to those files.
 
 ## Rendering
 
@@ -347,12 +387,13 @@ than a sliver of weight has to be land and within a step's slope of the
 others. Routes are held to that strictly (2% of the weight); each step a
 walker takes is held to it loosely (15%), which covers anything the line test
 could miss between its samples, so a leg it was given is always one it can
-walk. See `NavGrid::smooth_path` and `NavGrid::clear_line` in `cpp/src/nav.cpp`.
+walk. See `NavGrid::clear_line` in `cpp/src/nav.cpp` and `NavGrid::smooth_path` in
+`cpp/src/nav_search.cpp`.
 
 **Positions are free, not snapped to nodes.** A follower is a direction on the
 sphere plus its height, read off that same triangle, so its feet follow the
 ground between nodes. Each fixed step has three passes (`FollowerSet::step` in
-`cpp/src/followers.cpp`):
+`cpp/src/follower_steering.cpp`):
 
 1. *Steer.* A walker heads for its next waypoint. Someone ahead of it and
    close to its line, standing or coming the other way, gets stepped round —

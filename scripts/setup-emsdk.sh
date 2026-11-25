@@ -6,6 +6,8 @@
 set -euo pipefail
 
 EMSDK_ROOT="${EMSDK:-/opt/emsdk}"
+# The one Emscripten release the repo is built and tested with, shared with CI.
+EMSDK_VERSION="$(tr -d '[:space:]' < "$(dirname "${BASH_SOURCE[0]}")/../.emsdk-version")"
 
 if command -v emcmake >/dev/null 2>&1; then
   echo "Emscripten already on PATH: $(emcc --version | head -n 1)"
@@ -18,7 +20,7 @@ if [[ ! -d "${EMSDK_ROOT}" ]]; then
 fi
 
 cd "${EMSDK_ROOT}"
-./emsdk install latest
-./emsdk activate latest
+./emsdk install "${EMSDK_VERSION}"
+./emsdk activate "${EMSDK_VERSION}"
 
 echo "Emscripten ready: $(./upstream/emscripten/emcc --version | head -n 1)"

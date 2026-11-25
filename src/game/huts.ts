@@ -388,18 +388,18 @@ export function hutIdUnderRay(
     const py = instances[base + 1]
     const pz = instances[base + 2]
 
-    if (px * (eye[0] - px) + py * (eye[1] - py) + pz * (eye[2] - pz) <= 0) {
+    if (px! * (eye[0] - px!) + py! * (eye[1] - py!) + pz! * (eye[2] - pz!) <= 0) {
       continue
     }
 
-    const r = Math.hypot(px, py, pz)
+    const r = Math.hypot(px!, py!, pz!)
     if (r === 0) {
       continue
     }
     const lift = height * 0.5
-    const cx = px + (px / r) * lift - ray.origin[0]
-    const cy = py + (py / r) * lift - ray.origin[1]
-    const cz = pz + (pz / r) * lift - ray.origin[2]
+    const cx = px! + (px! / r) * lift - ray.origin[0]
+    const cy = py! + (py! / r) * lift - ray.origin[1]
+    const cz = pz! + (pz! / r) * lift - ray.origin[2]
     const along = cx * ray.direction[0] + cy * ray.direction[1] + cz * ray.direction[2]
     if (along <= 0 || along >= bestDistance) {
       continue

@@ -57,11 +57,11 @@ export function buildNavGraph(mesh: PlanetMesh): NavGraph {
 
   for (let node = 0; node < weldCount; node += 1) {
     // Any of the duplicates will do: they share a position by definition.
-    const vertex = weldVertices[weldVertexOffsets[node]]
-    nodeVertex[node] = vertex
-    nodeDirections[node * 3 + 0] = directions[vertex * 3 + 0]
-    nodeDirections[node * 3 + 1] = directions[vertex * 3 + 1]
-    nodeDirections[node * 3 + 2] = directions[vertex * 3 + 2]
+    const vertex = weldVertices[weldVertexOffsets[node]!]
+    nodeVertex[node] = vertex!
+    nodeDirections[node * 3 + 0] = directions[vertex! * 3 + 0]!
+    nodeDirections[node * 3 + 1] = directions[vertex! * 3 + 1]!
+    nodeDirections[node * 3 + 2] = directions[vertex! * 3 + 2]!
   }
 
   // A node on a seam owns several vertices, each with its own grid neighbours,
@@ -73,10 +73,10 @@ export function buildNavGraph(mesh: PlanetMesh): NavGraph {
   for (let node = 0; node < weldCount; node += 1) {
     seen.clear()
 
-    for (let v = weldVertexOffsets[node]; v < weldVertexOffsets[node + 1]; v += 1) {
+    for (let v = weldVertexOffsets[node]!; v < weldVertexOffsets[node + 1]!; v += 1) {
       const vertex = weldVertices[v]
-      const face = Math.floor(vertex / perFace)
-      const withinFace = vertex - face * perFace
+      const face = Math.floor(vertex! / perFace)
+      const withinFace = vertex! - face * perFace
       const iy = Math.floor(withinFace / stride)
       const ix = withinFace - iy * stride
 
@@ -92,7 +92,7 @@ export function buildNavGraph(mesh: PlanetMesh): NavGraph {
 
         const neighbor = weldIds[face * perFace + ny * stride + nx]
         if (neighbor !== node) {
-          seen.add(neighbor)
+          seen.add(neighbor!)
         }
       }
     }
@@ -103,13 +103,13 @@ export function buildNavGraph(mesh: PlanetMesh): NavGraph {
 
   const neighborOffsets = new Int32Array(weldCount + 1)
   for (let node = 0; node < weldCount; node += 1) {
-    neighborOffsets[node + 1] = neighborOffsets[node] + adjacency[node].length
+    neighborOffsets[node + 1] = neighborOffsets[node]! + adjacency[node]!.length
   }
 
-  const linkCount = neighborOffsets[weldCount]
+  const linkCount = neighborOffsets[weldCount]!
   const neighbors = new Int32Array(linkCount)
   for (let node = 0; node < weldCount; node += 1) {
-    neighbors.set(adjacency[node], neighborOffsets[node])
+    neighbors.set(adjacency[node]!, neighborOffsets[node]!)
   }
 
   return {

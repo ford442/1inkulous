@@ -31,6 +31,18 @@ import type { Role } from './role'
 import type { Replay, StampedCommand } from './replay'
 
 /** The main thread's end: a Worker, or one side of a MessageChannel. */
+/**
+ * A read from a snapshot array. The layout is fixed by protocol.ts, so an index
+ * outside it is a bug in one side of the wire, not a value to default.
+ */
+function read(array: ArrayLike<number>, index: number): number {
+  const value = array[index]
+  if (value === undefined) {
+    throw new RangeError(`snapshot index ${index} is outside the snapshot`)
+  }
+  return value
+}
+
 export type ClientPort = {
   onmessage: ((event: MessageEvent) => void) | null
   postMessage: (message: unknown, transfer: Transferable[]) => void
@@ -165,9 +177,9 @@ export function connectWorkerSimulation(
     // the worker: same binary, same commit.
     const spellRadii = shadow.spellRules.map((_, spell) => shadow.spellRadius(spell as Spell))
 
-    const header = () => view!.header
+    const header = (index: number) => read(view!.header, index)
     const tribeField = (tribe: number, field: number) =>
-      tribe >= 0 && tribe < MAX_TRIBES ? header()[H.tribes + tribe * T.size + field] : 0
+      tribe >= 0 && tribe < MAX_TRIBES ? header(H.tribes + tribe * T.size + field) : 0
 
     const flushQueue = () => {
       flushScheduled = false
@@ -273,13 +285,13 @@ export function connectWorkerSimulation(
       transport,
       version: shadow.version,
       get stepMs() {
-        return header()[H.stepMs]
+        return header(H.stepMs)
       },
       get stepCount() {
-        return header()[H.stepCount]
+        return header(H.stepCount)
       },
       get elapsedMs() {
-        return header()[H.elapsedMs]
+        return header(H.elapsedMs)
       },
 
       // The worker keeps its own clock; a frame only swaps in what it finished.
@@ -287,13 +299,12 @@ export function connectWorkerSimulation(
         if (!swapIn()) {
           return 0
         }
-        const h = header()
-        const rev = h[H.terrainRev]
+        const rev = header(H.terrainRev)
         if (rev !== lastRev) {
           // One edit since we last looked: its range. More: we missed some, so all of it.
           const range: NodeRange =
-            rev === lastRev + 1 && h[H.dirtyFirst] >= 0
-              ? { first: h[H.dirtyFirst], last: h[H.dirtyLast] }
+            rev === lastRev + 1 && header(H.dirtyFirst) >= 0
+              ? { first: header(H.dirtyFirst), last: header(H.dirtyLast) }
               : { first: 0, last: nodeCount - 1 }
           dirty = dirty
             ? { first: Math.min(dirty.first, range.first), last: Math.max(dirty.last, range.last) }
@@ -304,8 +315,8 @@ export function connectWorkerSimulation(
             .navHeights()
             .set(floatsAt(shape.heights + range.first, range.last - range.first + 1), range.first)
         }
-        const steps = h[H.stepCount] - lastSteps
-        lastSteps = h[H.stepCount]
+        const steps = header(H.stepCount) - lastSteps
+        lastSteps = header(H.stepCount)
         return steps
       },
       get stepAlpha() {
@@ -324,11 +335,10 @@ export function connectWorkerSimulation(
       checkpoints: offThread('checkpoints') as () => { step: number; hash: number }[],
       checkpointEvery: shadow.checkpointEvery,
       takeSimMsPerStep() {
-        const h = header()
-        const steps = h[H.simStepsTotal] - simStepsSeen
-        const ms = h[H.simMsTotal] - simMsSeen
-        simStepsSeen = h[H.simStepsTotal]
-        simMsSeen = h[H.simMsTotal]
+        const steps = header(H.simStepsTotal) - simStepsSeen
+        const ms = header(H.simMsTotal) - simMsSeen
+        simStepsSeen = header(H.simStepsTotal)
+        simMsSeen = header(H.simMsTotal)
         return steps > 0 ? ms / steps : null
       },
       pause: () => send({ type: 'pause' }),
@@ -374,10 +384,10 @@ export function connectWorkerSimulation(
 
       spawnFollower: (...args) => command('spawnFollower', args, true) as Promise<number>,
       get followerCount() {
-        return header()[H.followerCount]
+        return header(H.followerCount)
       },
       get selectedFollowerCount() {
-        return header()[H.selectedCount]
+        return header(H.selectedCount)
       },
       setFollowerSelected: (...args) => command('setFollowerSelected', args, false),
       clearFollowerSelection: () => command('clearFollowerSelection', [], false),
@@ -389,7 +399,7 @@ export function connectWorkerSimulation(
       followerMaxHealth: shadow.followerMaxHealth,
       followerTree: offThread('followerTree') as (id: number) => number,
       followerInstances: () =>
-        floatsAt(shape.followers, header()[H.followerCount] * shape.followerFloats),
+        floatsAt(shape.followers, header(H.followerCount) * shape.followerFloats),
       followerInstanceFloats: shape.followerFloats,
 
       hutSite: (direction: Vec3, kind: HutKind = HutKind.dwelling, tribe = -1) =>
@@ -399,15 +409,15 @@ export function connectWorkerSimulation(
       hutTribe: (id: number) => hutMeta(id, HUT_META.tribe),
       hutKind: (id: number) => hutMeta(id, HUT_META.kind) as HutKind | -1,
       get hutCount() {
-        return header()[H.hutCount]
+        return header(H.hutCount)
       },
       get housedCount() {
-        return header()[H.housedCount]
+        return header(H.housedCount)
       },
       hutOccupants: (id: number) => Math.max(0, hutMeta(id, HUT_META.occupants)),
       orderEnterHut: (...args) => command('orderEnterHut', args, true) as Promise<number>,
       ejectHut: (...args) => command('ejectHut', args, true) as Promise<number>,
-      hutInstances: () => floatsAt(shape.huts, header()[H.hutCount] * shape.hutFloats),
+      hutInstances: () => floatsAt(shape.huts, header(H.hutCount) * shape.hutFloats),
       hutInstanceFloats: shape.hutFloats,
       hutRadius: shadow.hutRadius,
       hutCapacity: shadow.hutCapacity,
@@ -419,9 +429,9 @@ export function connectWorkerSimulation(
       setWood: (...args) => command('setWood', args, false),
       spawnTrees: (...args) => command('spawnTrees', args, true) as Promise<number>,
       get treeCount() {
-        return header()[H.treeCount]
+        return header(H.treeCount)
       },
-      treeInstances: () => floatsAt(shape.trees, header()[H.treeCount] * shape.treeFloats),
+      treeInstances: () => floatsAt(shape.trees, header(H.treeCount) * shape.treeFloats),
       treeInstanceFloats: shape.treeFloats,
       orderChop: (...args) => command('orderChop', args, true) as Promise<number>,
       treeProgress: offThread('treeProgress') as (id: number) => number,
@@ -464,10 +474,10 @@ export function connectWorkerSimulation(
 
       shamanFallen: (tribe: number) => tribeField(tribe, T.fallen) !== 0,
       get matchOver() {
-        return header()[H.matchOver] !== 0
+        return header(H.matchOver) !== 0
       },
       get matchWinner() {
-        return header()[H.matchWinner]
+        return header(H.matchWinner)
       },
 
       enableAi: (...args) => command('enableAi', args, true) as Promise<boolean>,
@@ -484,10 +494,10 @@ export function connectWorkerSimulation(
     }
 
     function hutMeta(id: number, field: number): number {
-      if (!(id >= 0 && id < header()[H.hutCount])) {
+      if (!(id >= 0 && id < header(H.hutCount))) {
         return -1
       }
-      return view!.floats[shape.hutMeta + id * HUT_META.size + field]
+      return read(view!.floats, shape.hutMeta + id * HUT_META.size + field)
     }
 
     return client

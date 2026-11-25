@@ -63,7 +63,7 @@ export function serveCore(port: HostPort): void {
     const sim = core!
     const shape = layout!
     const { header, floats } = viewSnapshot(buffer, shape)
-    header[H.seq] += 1
+    header[H.seq]! += 1
     header[H.stepMs] = sim.stepMs
     header[H.stepCount] = sim.stepCount
     header[H.elapsedMs] = sim.elapsedMs
@@ -189,10 +189,13 @@ export function serveCore(port: HostPort): void {
     switch (message.type) {
       case 'init': {
         manual = message.options.clock === 'manual'
-        core = await createSimulation({ stepMs: message.options.stepMs })
-        // Each command after exactly the steps it was stamped with.
-        playCommands(core, message.log)
-        recorder = createRecorder(core, message.log)
+        
+ core = await createSimulation(
+  message.options.stepMs === undefined ? {} : { stepMs: message.options.stepMs },
+)
+playCommands(core, message.log)
+recorder = createRecorder(core, message.log)
+        
         // Digest before the snapshot's first fill clears the terrain's dirty range.
         const digest = stateDigest(core)
         const hash = core.stateHash()
@@ -226,7 +229,7 @@ export function serveCore(port: HostPort): void {
           recorder!.record(command)
           const value = applyCommand(core!, command)
           const id = message.ids[i]
-          if (id !== null) {
+          if (id !== null && id !== undefined) {
             results.push({ id, value })
           }
         })

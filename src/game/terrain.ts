@@ -71,7 +71,7 @@ export function createTerrain(
   // duplicates will do, and after the write-back below they all agree anyway.
   const seed = new Float32Array(graph.nodeCount)
   for (let node = 0; node < graph.nodeCount; node += 1) {
-    seed[node] = mesh.heights[graph.nodeVertex[node]]
+    seed[node] = mesh.heights[graph.nodeVertex[node]!]!
   }
   simulation.uploadNavGraph(graph, seed, {
     planetRadius: planet.radius,
@@ -85,7 +85,7 @@ export function createTerrain(
   {
     const heights = simulation.navHeights()
     for (let vertex = 0; vertex < mesh.vertexCount; vertex += 1) {
-      mesh.heights[vertex] = heights[mesh.weldIds[vertex]]
+      mesh.heights[vertex] = heights[mesh.weldIds[vertex]!]!
     }
     refreshGeometry(mesh)
   }
@@ -116,12 +116,12 @@ export function createTerrain(
       touched.length = 0
       for (let node = dirty.first; node <= dirty.last; node += 1) {
         const height = heights[node]
-        for (let v = weldVertexOffsets[node]; v < weldVertexOffsets[node + 1]; v += 1) {
+        for (let v = weldVertexOffsets[node]!; v < weldVertexOffsets[node + 1]!; v += 1) {
           const vertex = weldVertices[v]
           // A range, not a list: most nodes in it did not move.
-          if (mesh.heights[vertex] !== height) {
-            mesh.heights[vertex] = height
-            touched.push(vertex)
+          if (mesh.heights[vertex!] !== height) {
+            mesh.heights[vertex!] = height!
+            touched.push(vertex!)
           }
         }
       }

@@ -24,7 +24,10 @@ void Terrain::set_max_height(double max_height) {
 }
 
 template <typename Step>
-NodeRange Terrain::brush(const double centre[3], double angular_radius, bool commit, Step next) const {
+NodeRange Terrain::brush(const double centre[3],
+                         double angular_radius,
+                         bool commit,
+                         Step next) const {
   NodeRange moved;
   double c[3];
   if (grid_ == nullptr || !grid_->ready() || !(angular_radius > 0.0) || !unit(centre, c)) {
@@ -128,7 +131,7 @@ NodeRange Terrain::flatten_impl(const double centre[3],
   if (max_height_ > 0.0 && clamped > max_height_) {
     clamped = max_height_;
   }
-  const float target = static_cast<float>(clamped);
+  const auto target = static_cast<float>(clamped);
 
   return brush(centre, angular_radius, commit, [&](double falloff, double before) -> float {
     const double gap = static_cast<double>(target) - before;

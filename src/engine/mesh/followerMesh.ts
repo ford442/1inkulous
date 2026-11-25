@@ -159,10 +159,10 @@ export function createFollowerMesh(options: FollowerMeshOptions): FollowerMesh {
 
     for (let segment = 0; segment < segments; segment += 1) {
       const next = (segment + 1) % segments
-      const a = ringPoint(lower, segment)
-      const b = ringPoint(lower, next)
-      const c = ringPoint(upper, segment)
-      const d = ringPoint(upper, next)
+      const a = ringPoint(lower!, segment)
+      const b = ringPoint(lower!, next)
+      const c = ringPoint(upper!, segment)
+      const d = ringPoint(upper!, next)
 
       // Counter-clockwise seen from outside, matching the planet's winding.
       builder.push(a, c, b, FOLLOWER_PART_BODY)
@@ -179,8 +179,8 @@ export function createFollowerMesh(options: FollowerMeshOptions): FollowerMesh {
 
   for (let segment = 0; segment < segments; segment += 1) {
     const next = (segment + 1) % segments
-    builder.push(ringPoint(crown, next), ringPoint(crown, segment), apex, FOLLOWER_PART_BODY)
-    builder.push(ringPoint(foot, segment), ringPoint(foot, next), heel, FOLLOWER_PART_BODY)
+    builder.push(ringPoint(crown!, next), ringPoint(crown!, segment), apex, FOLLOWER_PART_BODY)
+    builder.push(ringPoint(foot!, segment), ringPoint(foot!, next), heel, FOLLOWER_PART_BODY)
   }
 
   // Headband: a short band of quads round the brow.
@@ -206,13 +206,13 @@ export function createFollowerMesh(options: FollowerMeshOptions): FollowerMesh {
     const hi = [corner(-1, y1, -1), corner(1, y1, -1), corner(1, y1, 1), corner(-1, y1, 1)]
     for (let side = 0; side < 4; side += 1) {
       const n = (side + 1) % 4
-      builder.push(lo[side], hi[side], lo[n], FOLLOWER_PART_CLUB)
-      builder.push(lo[n], hi[side], hi[n], FOLLOWER_PART_CLUB)
+      builder.push(lo[side]!, hi[side]!, lo[n]!, FOLLOWER_PART_CLUB)
+      builder.push(lo[n]!, hi[side]!, hi[n]!, FOLLOWER_PART_CLUB)
     }
-    builder.push(hi[0], hi[3], hi[2], FOLLOWER_PART_CLUB)
-    builder.push(hi[0], hi[2], hi[1], FOLLOWER_PART_CLUB)
-    builder.push(lo[0], lo[1], lo[2], FOLLOWER_PART_CLUB)
-    builder.push(lo[0], lo[2], lo[3], FOLLOWER_PART_CLUB)
+    builder.push(hi[0]!, hi[3]!, hi[2]!, FOLLOWER_PART_CLUB)
+    builder.push(hi[0]!, hi[2]!, hi[1]!, FOLLOWER_PART_CLUB)
+    builder.push(lo[0]!, lo[1]!, lo[2]!, FOLLOWER_PART_CLUB)
+    builder.push(lo[0]!, lo[2]!, lo[3]!, FOLLOWER_PART_CLUB)
   }
   box(CLUB_X, CLUB_BOTTOM, CLUB_HEAD, CLUB_HALF * 0.6)
   box(CLUB_X, CLUB_HEAD, CLUB_TOP, CLUB_HALF)

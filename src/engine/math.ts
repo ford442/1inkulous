@@ -88,7 +88,7 @@ export function mat4Multiply(a: Mat4, b: Mat4, out: Mat4 = new Float32Array(16))
 
     for (let row = 0; row < 4; row += 1) {
       out[col * 4 + row] =
-        a[row] * b0 + a[4 + row] * b1 + a[8 + row] * b2 + a[12 + row] * b3
+        a[row]! * b0! + a[4 + row]! * b1! + a[8 + row]! * b2! + a[12 + row]! * b3!
     }
   }
   return out

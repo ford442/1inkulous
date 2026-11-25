@@ -1,13 +1,16 @@
 /**
- * Hand-written types for the Emscripten glue that `npm run build:wasm` emits
- * next to this file as `core.js`. The glue itself is generated and gitignored;
- * this declaration is the checked-in contract, so a change to the C ABI in
- * cpp/include/1inkulous/core_abi.h has to be mirrored here.
+ * Types for the Emscripten glue that `npm run build:wasm` emits next to this
+ * file as `core.js`. The glue itself is generated and gitignored.
  *
- * The underscore-prefixed members are the exported C functions. Use the wrapper
- * in src/sim/simulation.ts rather than reaching for these directly.
+ * The exported C functions — every `_core_*` member — are not written here: they
+ * are generated from cpp/include/1inkulous/core_abi.h into ./core-abi.d.ts
+ * (`npm run gen:abi`), so the header is the only place the ABI is declared. What
+ * this file adds is the Emscripten runtime half of the module.
  */
 
+import type { CoreExports } from './core-abi.d.ts'
+
+export type { CoreExports, Ptr } from './core-abi.d.ts'
 export type CoreModule = {
   _core_version: () => number
   /** Pointer into linear memory; decode with UTF8ToString. */
@@ -258,6 +261,8 @@ export type CoreModule = {
   _core_ai_thinks: (tribe: number) => number
   _core_ai_think_seconds: () => number
 
+export type CoreModule = CoreExports & {
+  /** Decodes a NUL-terminated string at a pointer into linear memory. */
   UTF8ToString: (pointer: number) => string
 
   /** Module linear memory, for reading bulk state without per-call copies. */
@@ -274,6 +279,4 @@ export type CoreModuleOptions = {
   printErr?: (message: string) => void
 }
 
-export default function createCoreModule(
-  options?: CoreModuleOptions,
-): Promise<CoreModule>
+export default function createCoreModule(options?: CoreModuleOptions): Promise<CoreModule>

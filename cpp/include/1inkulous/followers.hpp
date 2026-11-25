@@ -174,23 +174,17 @@ class FollowerSet {
   std::int32_t tribe(std::int32_t id) const {
     return followers_[static_cast<std::size_t>(id)].tribe;
   }
-  bool selected(std::int32_t id) const {
-    return followers_[static_cast<std::size_t>(id)].selected;
-  }
+  bool selected(std::int32_t id) const { return followers_[static_cast<std::size_t>(id)].selected; }
   bool is_walking(std::int32_t id) const {
     return walking(followers_[static_cast<std::size_t>(id)]);
   }
-  bool is_shaman(std::int32_t id) const {
-    return followers_[static_cast<std::size_t>(id)].shaman;
-  }
+  bool is_shaman(std::int32_t id) const { return followers_[static_cast<std::size_t>(id)].shaman; }
   // Move orders this follower has been given, ever. Something waiting on a
   // follower (a shaman's cast) notes it and treats any change as a new order.
   std::uint32_t orders(std::int32_t id) const {
     return followers_[static_cast<std::size_t>(id)].orders;
   }
-  bool casting(std::int32_t id) const {
-    return followers_[static_cast<std::size_t>(id)].casting;
-  }
+  bool casting(std::int32_t id) const { return followers_[static_cast<std::size_t>(id)].casting; }
   // Sets kFlagCasting. False for a bad id.
   bool set_casting(std::int32_t id, bool casting);
   // Stops follower `id` where it stands, dropping its route but not its hut
@@ -198,9 +192,7 @@ class FollowerSet {
   void halt(std::int32_t id);
   Role role(std::int32_t id) const { return followers_[static_cast<std::size_t>(id)].role; }
   bool is_brave(std::int32_t id) const { return role(id) == Role::kBrave; }
-  double health(std::int32_t id) const {
-    return followers_[static_cast<std::size_t>(id)].health;
-  }
+  double health(std::int32_t id) const { return followers_[static_cast<std::size_t>(id)].health; }
 
   // Changes follower `id`'s role. A training hut does this to the warrior it
   // lets out; tests and scenarios may do it directly. False for a bad id or
@@ -222,9 +214,7 @@ class FollowerSet {
   }
   // Whether follower `id` still answers to orders: in range, and of a tribe
   // whose shaman stands (or never had one).
-  bool takes_orders(std::int32_t id) const {
-    return id >= 0 && id < count() && !fallen(tribe(id));
-  }
+  bool takes_orders(std::int32_t id) const { return id >= 0 && id < count() && !fallen(tribe(id)); }
   // Id of `tribe`'s shaman, or -1. Ids shift as followers go into huts, so
   // look her up rather than keeping the number.
   std::int32_t shaman(std::int32_t tribe) const;

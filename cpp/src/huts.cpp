@@ -43,8 +43,8 @@ bool tangent_of(const double n[3], const double v[3], double out[3]) {
 
 // Any orthonormal pair tangent at unit `n`.
 void tangent_basis(const double n[3], double e1[3], double e2[3]) {
-  const double helper[3] = {std::fabs(n[1]) < 0.9 ? 0.0 : 1.0,
-                            std::fabs(n[1]) < 0.9 ? 1.0 : 0.0, 0.0};
+  const double helper[3] = {std::fabs(n[1]) < 0.9 ? 0.0 : 1.0, std::fabs(n[1]) < 0.9 ? 1.0 : 0.0,
+                            0.0};
   tangent_of(n, helper, e1);
   e2[0] = n[1] * e1[2] - n[2] * e1[1];
   e2[1] = n[2] * e1[0] - n[0] * e1[2];
@@ -244,7 +244,7 @@ std::int32_t HutSet::place(double x,
   // anywhere out to the ring of free nodes round the pad, and a little more,
   // so a group packed round the door all count as there.
   const double radius = grid_->planet_radius();
-  const double extent = static_cast<double>(site_point_[3]);
+  const auto extent = static_cast<double>(site_point_[3]);
   double ring = extent;
   const std::int32_t* offsets = grid_->neighbor_offsets();
   const std::int32_t* neighbors = grid_->neighbors();
@@ -440,8 +440,7 @@ void HutSet::admit_arrivals() {
     Hut& hut = huts_[static_cast<std::size_t>(id)];
     if (angle_between(followers_->direction(f), hut.dir) <= hut.reach) {
       const std::int32_t tribe = followers_->tribe(f);
-      const bool room =
-          hut.occupants < capacity(hut.kind) && (hut.tribe < 0 || hut.tribe == tribe);
+      const bool room = hut.occupants < capacity(hut.kind) && (hut.tribe < 0 || hut.tribe == tribe);
       // A trainee pays for its kit at the door; a tribe that spent the wood
       // while it walked leaves it outside.
       const bool paid = room && (hut.kind != HutKind::kTraining || stores_ == nullptr ||

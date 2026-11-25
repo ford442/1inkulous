@@ -27,8 +27,7 @@ const char* core_version_string() { return kVersionText; }
 
 int core_version() { return kVersion; }
 
-Simulation::Simulation(double step_ms)
-    : step_ms_(step_ms > 0.0 ? step_ms : kDefaultStepMs) {
+Simulation::Simulation(double step_ms) : step_ms_(step_ms > 0.0 ? step_ms : kDefaultStepMs) {
   terrain_.attach(&nav_);
   followers_.set_grid(&nav_);
   huts_.attach(&nav_, &followers_, &stores_);

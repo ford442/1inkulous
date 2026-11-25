@@ -137,8 +137,14 @@ class HutSet {
   // sent in, if it is negative. Charges the tribe its cost, blocks the
   // footprint and moves anyone standing on it to free ground. Returns its id,
   // or -1 if check_site refuses the spot or the wood.
-  std::int32_t place(double x, double y, double z, double hx, double hy, double hz,
-                     std::int32_t tribe, HutKind kind);
+  std::int32_t place(double x,
+                     double y,
+                     double z,
+                     double hx,
+                     double hy,
+                     double hz,
+                     std::int32_t tribe,
+                     HutKind kind);
 
   // Removes every hut and frees their footprints.
   void clear();
@@ -152,9 +158,7 @@ class HutSet {
   // Everyone inside every hut.
   std::int32_t housed() const;
   // Unit direction of hut `id`'s centre; `id` must be in range.
-  const double* direction(std::int32_t id) const {
-    return huts_[static_cast<std::size_t>(id)].dir;
-  }
+  const double* direction(std::int32_t id) const { return huts_[static_cast<std::size_t>(id)].dir; }
 
   // Sends selected braves into hut `id`: as many as it has room for once
   // those already on their way are counted, nearest first, and only of the

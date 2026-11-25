@@ -75,7 +75,10 @@ class Terrain {
   // Nothing is written and nothing is marked dirty: this is how a spell's
   // check tells "nothing to do" without touching the ground.
   bool would_sculpt(const double centre[3], double angular_radius, double delta) const;
-  bool would_flatten(const double centre[3], double angular_radius, double target, double rate) const;
+  bool would_flatten(const double centre[3],
+                     double angular_radius,
+                     double target,
+                     double rate) const;
 
   // Height above sea level under a direction, read off the same triangle of
   // the nearest node's fan that walkers stand on. Need not be normalised. Zero
@@ -99,12 +102,12 @@ class Terrain {
   NodeRange brush(const double centre[3], double angular_radius, bool commit, Step next) const;
   // The per-node rule of each edit, shared by the edit and its dry run. The
   // caller widens the dirty range.
-  NodeRange sculpt_impl(const double centre[3], double angular_radius, double delta, bool commit) const;
-  NodeRange flatten_impl(const double centre[3],
-                         double angular_radius,
-                         double target,
-                         double rate,
-                         bool commit) const;
+  NodeRange sculpt_impl(const double centre[3],
+                        double angular_radius,
+                        double delta,
+                        bool commit) const;
+  NodeRange flatten_impl(
+      const double centre[3], double angular_radius, double target, double rate, bool commit) const;
 
   NavGrid* grid_ = nullptr;
   double max_height_ = 0.0;

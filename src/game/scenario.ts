@@ -73,8 +73,8 @@ const angleBetween = (a: Vec3, b: Vec3) => Math.acos(Math.max(-1, Math.min(1, do
 
 function nodeDirection(graph: NavGraph, node: number): Vec3 {
   const d = graph.directions
-  const length = Math.hypot(d[node * 3], d[node * 3 + 1], d[node * 3 + 2])
-  return [d[node * 3] / length, d[node * 3 + 1] / length, d[node * 3 + 2] / length]
+  const length = Math.hypot(d[node * 3]!, d[node * 3 + 1]!, d[node * 3 + 2]!)
+  return [d[node * 3]! / length, d[node * 3 + 1]! / length, d[node * 3 + 2]! / length]
 }
 
 function mean(graph: NavGraph, nodes: readonly number[]): Vec3 | null {
@@ -82,9 +82,9 @@ function mean(graph: NavGraph, nodes: readonly number[]): Vec3 | null {
   let y = 0
   let z = 0
   for (const node of nodes) {
-    x += graph.directions[node * 3]
-    y += graph.directions[node * 3 + 1]
-    z += graph.directions[node * 3 + 2]
+    x += graph.directions[node * 3]!
+    y += graph.directions[node * 3 + 1]!
+    z += graph.directions[node * 3 + 2]!
   }
   const length = Math.hypot(x, y, z)
   return length > 0 ? [x / length, y / length, z / length] : null
@@ -97,8 +97,8 @@ function mean(graph: NavGraph, nodes: readonly number[]): Vec3 | null {
 function inlandByFlatness(graph: NavGraph, heights: Float32Array, planetRadius: number): number[] {
   const { nodeCount, neighborOffsets, neighbors } = graph
   const dryAround = (node: number) => {
-    for (let link = neighborOffsets[node]; link < neighborOffsets[node + 1]; link += 1) {
-      if (heights[neighbors[link]] <= 0) {
+    for (let link = neighborOffsets[node]!; link < neighborOffsets[node + 1]!; link += 1) {
+      if (heights[neighbors[link]!]! <= 0) {
         return false
       }
     }
@@ -106,21 +106,21 @@ function inlandByFlatness(graph: NavGraph, heights: Float32Array, planetRadius: 
   }
   const scored: { node: number; slope: number }[] = []
   for (let node = 0; node < nodeCount; node += 1) {
-    if (heights[node] <= 0 || !dryAround(node)) {
+    if (heights[node]! <= 0 || !dryAround(node)) {
       continue
     }
     let inland = true
     let slope = 0
     const here = nodeDirection(graph, node)
-    for (let link = neighborOffsets[node]; link < neighborOffsets[node + 1]; link += 1) {
+    for (let link = neighborOffsets[node]!; link < neighborOffsets[node + 1]!; link += 1) {
       const next = neighbors[link]
-      if (!dryAround(next)) {
+      if (!dryAround(next!)) {
         inland = false
         break
       }
-      const run = angleBetween(here, nodeDirection(graph, next)) * planetRadius
+      const run = angleBetween(here, nodeDirection(graph, next!)) * planetRadius
       if (run > 0) {
-        slope = Math.max(slope, Math.abs(heights[next] - heights[node]) / run)
+        slope = Math.max(slope, Math.abs(heights[next!]! - heights[node]!) / run)
       }
     }
     if (inland && slope <= MAX_WALKABLE_SLOPE) {
@@ -137,7 +137,7 @@ function plantGrove(simulation: Simulation, graph: NavGraph, home: Vec3, spread:
   const stride = simulation.treeInstanceFloats
   let near = 0
   for (let id = 0; id < data.length / stride; id += 1) {
-    const at: Vec3 = [data[id * stride], data[id * stride + 1], data[id * stride + 2]]
+    const at: Vec3 = [data[id * stride]!, data[id * stride + 1]!, data[id * stride + 2]!]
     const length = Math.hypot(...at)
     if (angleBetween(home, [at[0] / length, at[1] / length, at[2] / length]) < GROVE_ANGLE) {
       near += 1
@@ -145,7 +145,7 @@ function plantGrove(simulation: Simulation, graph: NavGraph, home: Vec3, spread:
   }
   // From the outside of the village in, so the trees stand round it, not in it.
   for (let i = spread.length - 1; i >= 0 && near < GROVE_TREES; i -= 1) {
-    if (simulation.plantTree(nodeDirection(graph, spread[i])) >= 0) {
+    if (simulation.plantTree(nodeDirection(graph, spread[i]!)) >= 0) {
       near += 1
     }
   }
@@ -174,7 +174,7 @@ export function createMatch(
     (options.playerFollowers ?? PLAYER_FOLLOWERS) + 1,
   )
   if (playerNodes.length > 0) {
-    simulation.spawnShaman(nodeDirection(graph, playerNodes[0]), playerTribe)
+    simulation.spawnShaman(nodeDirection(graph, playerNodes[0]!), playerTribe)
     for (const node of playerNodes.slice(1)) {
       simulation.spawnFollower(nodeDirection(graph, node), playerTribe)
     }
@@ -227,7 +227,7 @@ export function createMatch(
     }
   }
   if (enemyHome && enemyNodes.length > 0) {
-    simulation.spawnShaman(nodeDirection(graph, enemyNodes[0]), enemyTribe)
+    simulation.spawnShaman(nodeDirection(graph, enemyNodes[0]!), enemyTribe)
     for (const node of enemyNodes.slice(1)) {
       simulation.spawnFollower(nodeDirection(graph, node), enemyTribe)
     }
@@ -253,7 +253,7 @@ export function createMatch(
     get enemy() {
       return {
         tribe: enemyTribe,
-        name: TRIBE_NAMES[enemyTribe],
+        name: TRIBE_NAMES[enemyTribe] ?? `Tribe ${enemyTribe}`,
         shamanStanding: simulation.shamanId(enemyTribe) >= 0,
         population: simulation.population(enemyTribe),
         mana: simulation.mana(enemyTribe),

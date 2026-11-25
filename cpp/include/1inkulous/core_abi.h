@@ -151,12 +151,8 @@ double core_terrain_height_at(double x, double y, double z);
 int core_terrain_sculpt(double x, double y, double z, double angular_radius, double delta);
 // Pulls the same disc towards `target_height`, at most `rate` at the centre;
 // a node within reach lands on it exactly. Returns 1 if any node moved.
-int core_terrain_flatten(double x,
-                         double y,
-                         double z,
-                         double angular_radius,
-                         double target_height,
-                         double rate);
+int core_terrain_flatten(
+    double x, double y, double z, double angular_radius, double target_height, double rate);
 
 // Inclusive node range moved since the last clear, first > last when clean.
 int core_terrain_dirty_first(void);
@@ -250,14 +246,8 @@ float* core_hut_site_point(void);
 // owned by `tribe`, or unclaimed (and free) until someone goes in if `tribe`
 // is negative. Charges the tribe core_hut_cost. Returns its id, or -1 if
 // core_hut_site would refuse it. Does not sculpt.
-int core_hut_place(double x,
-                   double y,
-                   double z,
-                   double hx,
-                   double hy,
-                   double hz,
-                   int tribe,
-                   int kind);
+int core_hut_place(
+    double x, double y, double z, double hx, double hy, double hz, int tribe, int kind);
 // Wood `tribe`'s next hut of `kind` would cost: 0 for a tribe's first
 // dwelling, and for a negative tribe.
 int core_hut_cost(int kind, int tribe);
@@ -387,10 +377,12 @@ double core_spell_radius(int spell);
 // Whether `tribe`'s shaman could cast `spell` at (x, y, z): 0 yes, otherwise
 // the reason. (ox, oy, oz) is a Land Bridge's near end; all zero is wherever
 // she stands. The disc spells ignore it. Changes nothing.
-int core_spell_check(int spell, int tribe, double x, double y, double z, double ox, double oy, double oz);
+int core_spell_check(
+    int spell, int tribe, double x, double y, double z, double ox, double oy, double oz);
 // The same check; on 0 she stops and starts casting, ending any cast already
 // under way. Any other result changes nothing.
-int core_spell_cast(int spell, int tribe, double x, double y, double z, double ox, double oy, double oz);
+int core_spell_cast(
+    int spell, int tribe, double x, double y, double z, double ox, double oy, double oz);
 // Ends `tribe`'s cast in progress, if any, with nothing spent.
 void core_spell_cancel(int tribe);
 

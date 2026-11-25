@@ -6,8 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# A newer push to the same branch makes an older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  # The game: the core compiled to WebAssembly, every test:* script (lint and
+  # the ABI check included), then the production build.
+  web:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,15 +24,67 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # One Emscripten release, named in .emsdk-version and shared with
+      # scripts/setup-emsdk.sh, so a new release cannot break main overnight:
+      # bumping it is a pull request that has to pass. The install is cached
+      # under that version.
+      - name: Read the pinned Emscripten version
+        id: emsdk
+        run: echo "version=$(tr -d '[:space:]' < .emsdk-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: latest
+          version: ${{ steps.emsdk.outputs.version }}
+          actions-cache-folder: emsdk-cache
 
       - run: npm ci
       - run: npm run build:wasm
       # Every `test:*` script in package.json, so a new one is picked up without
-      # touching this file. Includes `test:abi`, which fails when core_abi.h and
-      # src/wasm/core.d.ts disagree.
+      # touching this file. Includes `test:lint` (ESLint over src/ and scripts/)
+      # and `test:abi`, which fails when core_abi.h, the typings generated from
+      # it (src/wasm/core-abi.d.ts) and core_abi.cpp disagree.
       - run: npm test
       - run: npm run build
+
+  # The core as a plain library with the doctest unit tests in cpp/tests: once
+  # as a debug build, and once under AddressSanitizer and UBSan, which find
+  # heap overruns, use after free and undefined arithmetic that the wasm build's
+  # -sASSERTIONS=2 does not. A sanitizer report aborts, so it fails the job.
+  native:
+    name: native (${{ matrix.preset }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [native-debug, native-asan]
+    defaults:
+      run:
+        working-directory: cpp
+    steps:
+      - uses: actions/checkout@v4
+      # The runner's kernel randomises mappings over more address bits than
+      # AddressSanitizer's shadow memory can cope with, and it aborts at startup.
+      # Fewer bits is the documented workaround, and harmless to the other job.
+      - run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }} --parallel
+      - run: ctest --preset ${{ matrix.preset }}
+
+  # Style and static analysis of the C++: clang-format must have nothing to
+  # change, and the core must build clean under clang-tidy (checks in
+  # .clang-tidy) — on top of the -Wall -Wextra -Wconversion -Werror every build
+  # above already holds it to.
+  cpp-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format and clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-format clang-tidy
+      - name: clang-format
+        run: clang-format --dry-run --Werror cpp/src/* cpp/include/1inkulous/* cpp/tests/*.cpp cpp/tests/*.hpp
+      - name: clang-tidy
+        working-directory: cpp
+        run: |
+          cmake --preset native-tidy
+          cmake --build --preset native-tidy --parallel

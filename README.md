@@ -18,7 +18,9 @@ Node tests drive it. Serve with `Cross-Origin-Opener-Policy: same-origin` and
 ```
 src/engine/   WebGPU device and features, materials, renderer, particles, GPU timer, picking, math
 src/engine/shaders/   the WGSL; shaders/lib/ holds what they #include
-src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers, huts, trees
+src/assets/   the manifest, the asset manager, the glTF reader, and a loaded model made into a follower
+src/audio/    the Web Audio engine, its mixer and settings, the synthesised sounds, listener geometry
+src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers, huts, trees, game events
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
 src/wasm/     build output (generated) + the typings: core.d.ts, and core-abi.d.ts generated from core_abi.h
@@ -78,7 +80,14 @@ emcc -v   # confirm
 | `npm run test:replay` | Determinism: the opening match, both tribes on the AI, 10,000 steps on ragged frame times, replayed twice to the same state hash and every checkpoint; another seed, a nudged order and a late one are each caught; the checked-in recording still plays to its hash; no `Math.random` in `src/sim` or `src/game`. `-- file.replay.json` plays a saved replay instead; `-- --record` re-records the checked-in one |
 | `npm run test:interpolation` | Followers drawn between steps: at 144 Hz on a 30 Hz core a walker moves the same distance every frame (and would stutter without it), the previous pose is the one the step began from, someone set down is not slid, and the shader and renderer source say the same |
 | `npm run test:gpu` | Drawing-buffer sizing, limit and feature planning, GPU error reporting and loss messages, GPU timings, WGSL `#include`/`#ifdef`, the frame and particle layouts shader and CPU share, the particle ring, reversed Z, the shadow box, the sun, spell landings, and what the renderer's source must keep true |
-| `npm run check:webgpu` | The real game drawn in headless Chromium on a software GPU: every shader compiles, no validation errors, GPU normals match the CPU's, particles and timings work, with and without optional features. Needs the core built and Playwright; not part of `npm test` (see [Headless WebGPU check](#headless-webgpu-check)) |
+| `npm run test:assets` | The asset path with no browser: the glTF reader on plain, quantised and meshopt-compressed files (one of them the real optimiser's output), node transforms, every refusal; a model made into a follower, and the procedural pawn written out and read back as itself; the manager's progress, caching, optional versus required, cancelling and index; the loading bar's numbers |
+| `npm run test:audio` | Sound with no speaker: settings and `localStorage` (hostile storage included), the listener's geometry, the events the world raises (chops, huts, casts, deaths) and which sound each makes, and the engine driven against a stand-in `AudioContext` that refuses what the real one refuses — mute and volume restored on load, voices capped, samples over synthesis |
+| `npm run test:events` | The sound events against the real game, with the core in-process and behind a worker: a follower killed, a tree planted and chopped down (six blows, one felling), a hut raised, a Blast cast — each reported once, where it happened, and the opening seconds quiet. The worker run is what proves the events survive the snapshot proxy |
+| `npm run test:bundle` | The bundle-size report: files sorted into categories, sizes measured, budgets enforced with an exit code, and that CI runs it |
+| `npm run check:webgpu` | The real game drawn in headless Chromium on a software GPU: every shader compiles, no validation errors, GPU normals match the CPU's, particles and timings work, with and without optional features; a loaded glTF replaces the followers on screen; every synthesised sound renders offline; the audio engine, HUD and `localStorage` work in the browser's own. Needs the core built and Playwright; not part of `npm test` (see [Headless WebGPU check](#headless-webgpu-check)) |
+| `npm run report:bundle` | What `dist/` weighs, by category and file, raw/gzip/brotli, against `bundle-budget.json` — after `npm run build`. CI runs it and puts the table in the job summary |
+| `npm run assets:follower` | Writes the procedural follower out as `assets/models/follower.glb`, a working example of the model conventions |
+| `npm run assets:optimize` | `assets/models/*.glb` → `public/models/`, welded, quantised and meshopt-compressed by glTF Transform |
 | `npm run clean:wasm` | Removes the CMake build directories and generated artifacts |
 
 `npm test` finds the `test:*` scripts in `package.json` itself, so a new one is
@@ -283,9 +292,20 @@ checks:
 - a Blast landing puts particles on screen; `N` turns the day;
 - with `timestamp-query`, GPU pass timings come back; without, none are claimed.
 
-It runs twice: with every optional feature the adapter has, and with
-`?features=none`. The frames are saved as PNGs (to `webgpu-check-out/`, or
-the directory given as an argument) to look at.
+It runs four times: with every optional feature the adapter has, with
+`?features=none`, and twice more with the followers replaced by a loaded glTF
+(see [Assets and audio](#assets-and-audio)). In the first, the page also renders
+each synthesised sound offline and drives the real audio engine and HUD. The
+frames are saved as PNGs (to `webgpu-check-out/`, or the directory given as an
+argument) to look at.
+
+The swap is checked from outside: one variant loads the optimiser's copy of the
+pawn (`scripts/fixtures/follower.optimized.glb`) and the other a box, each
+through the game's own manifest, manager and mesh glue, and the village in
+each close-up is compared with the procedural pawn's — the loaded pawn must
+differ by almost nothing, the box by thousands of pixels. Only the village is
+compared: the sea is animated from the wall clock, so a page that took longer
+to start has other waves, and comparing whole frames would count water.
 
 Two things to know about it. Headless Chromium here cannot present to a
 canvas: the first frame drawn to `getCurrentTexture()` loses the device. So
@@ -295,6 +315,197 @@ game's own path. And SwiftShader has no `shader-f16`, so the half-precision
 particle path is checked only by `test:gpu`'s layout and `#ifdef` checks, not
 compiled. It needs Playwright with Chromium, which the repo does not install;
 without it the script says so and exits 2, and it is not in `npm test`.
+
+## Assets and audio
+
+Everything is procedural today — the pawn, the huts, the trees, every sound —
+and the game needs no file to run. This is the path real art and sound take
+when they arrive: a manifest, a loader with progress, a glTF reader, and a
+Web Audio engine. Each piece is *optional by construction*: a file in
+`public/` replaces a built-in, and with none the built-in plays.
+
+### Loading
+
+`src/assets/manifest.ts` is the one typed list of what the game can load, each
+entry with a kind (`model`, `audio`, `binary`), a URL relative to the page, an
+`optional` flag and a group: `boot` assets are fetched behind the loading
+screen, `deferred` ones (sound, which cannot even be decoded until the browser
+lets the page play) in the background afterwards. Every entry is optional
+today, and `test:assets` fails if one is not, or if a file lands in
+`public/models` or `public/audio` that the manifest does not name.
+
+`src/assets/manager.ts` loads it:
+
+- **Progress.** Bytes as they stream in, over everything asked for so far;
+  `onProgress` feeds the HUD's loading screen, which fades in a beat late
+  (CSS) so a start that takes no time never flashes it, and is removed when the
+  renderer is up. Startup is four stages — core, world, assets, renderer — and
+  the bar is how many are done, the assets' bytes filling their own quarter.
+  Fetching starts at once and runs alongside the core.
+- **Caching.** A loaded asset is kept and handed to every later `load`; two
+  callers asking at once share one request. The browser's HTTP cache sits
+  underneath; files in `public/` are not content-hashed, so how long they live
+  is the host's cache headers' call.
+- **Absent is not broken.** An optional asset that is missing, or will not
+  parse, is `null` with one line in the console and the built-in stays. A
+  required one throws an `AssetError` naming the file and why, and the page's
+  fatal message says so. Abort signals are honoured and an aborted load is not
+  remembered as a failure.
+- **No 404s.** The build emits `assets-index.json` — what `public/models` and
+  `public/audio` hold, with sizes (`scripts/assets-index.mjs`; the dev server
+  serves it live). The manager reads it first and does not ask for what is not
+  listed, so a start with no art is not a column of red 404s on a static host,
+  and each listed file's size is known before its first byte.
+
+### Models
+
+`src/assets/gltf.ts` reads glTF 2.0 — a `.glb`, or a `.gltf` with embedded
+buffers — for **geometry and materials only**: positions, normals, indices with
+every node transform applied (mirroring fixes the winding), and each
+primitive's material name and base colour. Textures, skins, animation and morph
+targets are skipped; anything that would change the geometry and cannot be
+honoured (Draco, GPU instancing) is refused by name rather than drawn wrong. It
+reads what the optimiser writes: `KHR_mesh_quantization`, and
+`EXT_meshopt_compression` through [meshoptimizer](https://github.com/zeux/meshoptimizer)'s
+wasm decoder, which is a lazy chunk (about 7 kB gzipped) that a game with no
+compressed model never downloads.
+
+**Swapping the follower.** The renderer draws a `FollowerMesh`; it does not
+know where one came from. `src/assets/followerModel.ts` makes one from a loaded
+model, `src/assets/models.ts` is the "if `model.follower` came in and is usable,
+else the procedural pawn" glue, and `main.ts` hands the result to
+`createRenderer({ followerMesh })`. Nothing in `src/sim` or `src/game` imports
+the loader (`test:assets` checks that), and the shader's per-instance work —
+tribe colour, selection, the shaman's stature, a warrior's gear — applies to
+whatever mesh it is given. The conventions an artist follows:
+
+- glTF's own axes: +Y up, the follower faces +Z.
+- **Parts by material name.** A material named `band` or `club` is the
+  warrior's headband or club, drawn only on a warrior; any other material is
+  the body, tinted in the tribe's colour (the file's base colour is not used).
+- The body is scaled to the follower's height, stood on y = 0 and centred on
+  x/z, whatever units the file is in; the band and club keep their place
+  relative to it.
+- The selection ring is added by the loader, not authored.
+- At most 2000 triangles (a thousand followers go through the scene and shadow
+  passes every frame); over it, the model is refused with a warning and the pawn
+  stays.
+
+`npm run assets:follower` writes the procedural pawn out as
+`assets/models/follower.glb` — a working example that already follows all of
+the above. `npm run assets:optimize` runs `assets/models/*.glb` through
+[glTF Transform](https://gltf-transform.dev) (`optimize`, meshopt, pinned to a
+version through `npx` rather than added to the repo) into `public/models/`: the
+example goes from 12.8 kB to 5.9 kB. Two things it taught: `--palette false` is
+passed because palettes merge materials, and the optimiser's `dedup` merges
+materials with *identical settings* regardless — so give a model's parts
+different base colours (the example does) or the band and club fold into the
+body. `scripts/fixtures/follower.optimized.glb` is that output, kept as a
+fixture: `test:assets` holds every triangle of the procedural pawn to a twin in
+it, in the right part, to the precision 16-bit positions and 8-bit normals
+allow.
+
+### Sound
+
+`src/audio/engine.ts` is a Web Audio graph and a mixer:
+
+```
+voice ─ [low-pass if hidden] ─ [panner] ─┐
+                                         ├─ sfx ─┐
+voice (a UI sound) ──────────────────────┴─ ui ──┤
+music ───────────────────────────────────────────┴─ master ─ limiter ─ out
+```
+
+- **Locked until the player acts.** Browsers will not start audio before a
+  click or key, so no `AudioContext` exists until the first press
+  (`engine.attach`). A sound asked for before then is dropped, not queued. The
+  context is suspended while the page is hidden.
+- **Positional.** A sound with a world position goes through an equal-power
+  `PannerNode` against a listener that follows the orbit camera
+  (`listenerPoseFromView`): it pans with the view and falls off with distance
+  (full volume inside one planet radius, half at three). One on the far side of
+  the planet is quieter and duller — the segment from the camera to it passes
+  through the planet (`src/audio/spatial.ts`).
+- **Voices.** At most 24 at once, per-sound caps, and a cooldown per sound — a
+  crowd chopping is a rhythm, not a buzz. Each voice's nodes are disconnected
+  when its time is up.
+- **Settings.** Mute and four volumes (master, music, sfx, ui) in
+  `localStorage` under `1inkulous.audio.v1`, restored before the first sample
+  and saved on every change. Storage that throws (private windows, blocked
+  site data) or holds junk costs nothing but the memory: every field falls back
+  to its default on its own. Muting glides the master to zero and stops voices
+  from being built at all. The HUD has a mute button and a master slider; `K`
+  toggles mute.
+- **Synthesised, with recordings over them.** Each sound — chop, build
+  complete, spell cast, spell impact, death, UI click — has a voice written in a
+  few lines of oscillators and noise (`src/audio/sounds.ts`), so the game has
+  sound from the first commit and none of it is anyone else's. The manifest lists
+  `audio/<name>.ogg` for each; when the file is present and decodes, it plays
+  instead (from a copy, so the cached file stays whole). `audio/music.ogg`, if
+  present, loops on the music bus; there is no synthesised music.
+
+**Sound events ride the same channel as the particles.** `game.takeEvents()`
+(`src/game/gameEvents.ts`) is the spell landings the particles are made from
+and the rest of what the world did: a chop blow (the tree's chop progress
+crossing one of six marks), a tree felled, a hut built (huts go up whole, so
+this is also when building completes), a spell cast and one landing, a death.
+The core does not push events — it keeps state — so these are *read* from it,
+by looking at what changed since the last step (and not at all on frames
+where none ran). That keeps them out of the
+worker's snapshots, the state hash and the replays: an event is a view of the
+simulation, never part of it. A death is a tribe with fewer people
+(`population`), placed by comparing this frame's followers with last frame's —
+the core removes the dead from a dense list, so whoever no longer lines up is
+the gap; someone thrown across the map by a Blast is still themselves, and
+someone walking into a hut leaves the list without leaving the tribe, so
+neither is a death. `src/audio/events.ts` says which sound each event makes.
+`npm run test:events` checks all of it against the real game, in-process and
+behind a worker; it also shows the volume to expect — with the enemy felling
+its own forest, about three chop events a second arrive planet-wide, which the
+per-sound cooldown and voice caps exist for.
+
+### Budgets
+
+`npm run report:bundle` (after `npm run build`) measures every file in
+`dist/` raw, gzipped and brotlied, sorts them into what the player pays for —
+`entry` (the page, its script and style), `worker`, `wasm`, `lazy` (the meshopt
+decoder), `media` (`public/models` and `public/audio`), `other` — and checks
+each category's *transfer* size (gzip for what compresses, raw for models and
+audio, which are already coded) against `bundle-budget.json`. Over a budget it
+exits 1. CI runs it after the production build, puts the table in the job
+summary, and keeps the JSON as an artifact even when the budget fails. Budgets
+sit 16–28% over what each code category weighs today, with 2 MB for art and
+sound together; raising one is a deliberate edit in the pull request that
+needs it.
+At the time of writing: entry 60.1 kB, worker 7.8 kB, wasm 55.8 kB, lazy
+7.0 kB, all gzipped.
+
+### Licences
+
+Everything shown and played is original to this repository or listed, with its
+licence, in `public/CREDITS.md`, which ships with the game. `test:assets` fails
+if a file in `public/models` or `public/audio` is not named there.
+
+### Not done yet
+
+- **Animation.** Followers stand still: a loaded model is a static mesh. The
+  proposal's two routes are GPU skinning (a joint-matrix storage buffer) and
+  baked vertex-animation textures; for hundreds of instanced units the latter
+  is likely the better fit, and would need a clip and a time per follower in
+  the core's instance buffer and a texture sampled in `follower.wgsl`. Neither
+  exists; the loader reads no skins or animations.
+- **Textures.** The loader skips them, and the planet shader takes none: no
+  KTX2/Basis transcoder is shipped, and terrain splat layers by height and
+  slope are not built.
+- **Other meshes.** Huts and trees could be swapped the way the follower is;
+  only the follower is wired.
+- **Content.** No recorded sample, music or model ships; the manifest slots and
+  the synthesised voices are what there is. There is no ambience, and orders
+  and selection are silent.
+- **Sound events** are derived from state, so a death that coincides with
+  someone entering a hut in the same frame can be placed at the wrong person,
+  and a tree built over after being half-chopped counts as felled.
+- **The size report** is absolute: it does not compare with the base branch.
 
 ## The JS/WASM boundary
 
@@ -433,6 +644,7 @@ host until the clock reaches it), and a peer to compare checkpoints with.
 | Drag, while aiming a bridge | Raise land from where the drag began to where it ends |
 | Order the shaman, while she casts | Cancels the cast; so does casting another spell |
 | `N` | Turn the day: the sun stops following the camera and the planet turns under it (`N` again brings it back) |
+| `K` | Mute / unmute sound (the HUD's button does the same, and its slider sets the volume) |
 
 Shift-click toggles one follower; Shift-drag adds everyone in the box. A plain
 drag replaces the selection, and a click that does not move stays a single
@@ -573,8 +785,10 @@ and reading the ground under each follower, both linear in the population.
 - Avoidance is reactive (look ahead, step aside), not velocity-obstacle
   planning, so two crowds crossing still jostle where they meet.
 - Followers are placeholder pawns in the placeholder tribe colours (blue,
-  red, yellow, green); unique art comes later. A match uses blue and red (see
-  [The match](#the-match)).
+  red, yellow, green); unique art comes later — a loaded glTF can already take
+  the pawn's place without touching the simulation (see [Assets and
+  audio](#assets-and-audio)), though it stands still: no animation yet. A match
+  uses blue and red (see [The match](#the-match)).
 
 ## Huts
 

@@ -12,16 +12,32 @@
  * - the frames themselves, as RGBA, for the runner to save as PNGs.
  *
  * `?features=` withholds optional features, as in the game.
+ *
+ * `?follower=fixture` draws the followers from the optimiser-made glTF in
+ * scripts/fixtures, `?follower=box` from a deliberately different shape, both
+ * loaded through the real manifest, asset manager and mesh glue (a stand-in
+ * `fetch` serves the bytes). The runner compares their close-ups with the
+ * procedural pawn's. Without `?follower` and `?features` the page also renders
+ * every synthesised sound offline and drives the real audio engine and HUD
+ * against the browser's own `AudioContext` and `localStorage`.
  */
+import { createGameAssets } from '../../src/assets/manager'
+import { followerMeshFromAssets } from '../../src/assets/models'
+import { createAudioEngine } from '../../src/audio/engine'
+import { AUDIO_SETTINGS_KEY } from '../../src/audio/settings'
+import { createNoise, SOUND_IDS, SOUNDS } from '../../src/audio/sounds'
 import type { ShaderDiagnostic } from '../../src/engine/materials'
 import { createRenderer } from '../../src/engine/renderer'
 import { withheldFeatures } from '../../src/engine/webgpu'
 import { refreshGeometry, VERTEX_FLOATS } from '../../src/engine/mesh/cubeSphere'
+import { FOLLOWER_HEIGHT_FRACTION, FOLLOWER_RADIUS_FRACTION } from '../../src/game/followers'
 import { createGame } from '../../src/game/game'
 import type { InputSnapshot } from '../../src/input/input'
 import { createSimulation } from '../../src/sim/simulation'
 import { Spell } from '../../src/sim/spell'
+import { createHud } from '../../src/ui/hud'
 import { CANVAS_ASPECT } from '../../src/viewport'
+import { writeGlb } from '../glb-writer'
 
 type Frame = { name: string; width: number; height: number; rgba: string }
 type Result = {
@@ -33,6 +49,8 @@ type Result = {
   diagnostics: ShaderDiagnostic[]
   gpu: unknown
   normals: { compared: number; worstDegrees: number } | null
+  /** Triangles in the follower mesh the renderer was given, when it was given one. */
+  followerTriangles: number | null
   frames: Frame[]
 }
 
@@ -67,15 +85,158 @@ const base64 = (bytes: Uint8Array) => {
   return btoa(out)
 }
 
+/** A box 0.5 wide and 1 tall: nothing like the pawn, so a swap shows. */
+function boxGlb(): Uint8Array {
+  const [w, h, d] = [0.25, 1, 0.25]
+  const p = (x: number, y: number, z: number): [number, number, number] => [x * w, y * h, z * d]
+  // 12 triangles, counter-clockwise from outside.
+  const quads: [number, number, number][][] = [
+    [p(-1, 0, 1), p(1, 0, 1), p(1, 1, 1), p(-1, 1, 1)],
+    [p(1, 0, -1), p(-1, 0, -1), p(-1, 1, -1), p(1, 1, -1)],
+    [p(1, 0, 1), p(1, 0, -1), p(1, 1, -1), p(1, 1, 1)],
+    [p(-1, 0, -1), p(-1, 0, 1), p(-1, 1, 1), p(-1, 1, -1)],
+    [p(-1, 1, 1), p(1, 1, 1), p(1, 1, -1), p(-1, 1, -1)],
+    [p(-1, 0, -1), p(1, 0, -1), p(1, 0, 1), p(-1, 0, 1)],
+  ]
+  const positions: number[] = []
+  for (const [a, b, c, e] of quads) {
+    positions.push(...a!, ...b!, ...c!, ...a!, ...c!, ...e!)
+  }
+  return writeGlb([{ material: 'body', positions: new Float32Array(positions) }])
+}
+
+/**
+ * The game's own asset manager, with a `fetch` that serves the one model the
+ * variant asks for and nothing else: the real manifest, URL handling,
+ * streaming, parsing and mesh glue, without a file in `public/`.
+ */
+function assetsServing(bytes: () => Promise<Uint8Array>) {
+  const serve = (async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('models/follower.glb')) {
+      const body = await bytes()
+      return new Response(body.slice().buffer, {
+        headers: { 'content-type': 'model/gltf-binary', 'content-length': String(body.length) },
+      })
+    }
+    return new Response('not here', { status: 404 })
+  }) as typeof fetch
+  return createGameAssets({ fetch: serve, baseUrl: location.href })
+}
+
+/** Each synthesised sound rendered offline: audible, finite, and over by its own end. */
+async function checkSynthesis() {
+  const rate = 44100
+  for (const id of SOUND_IDS) {
+    const ctx = new OfflineAudioContext(1, rate * 3, rate)
+    const noise = createNoise(ctx)
+    const seconds = SOUNDS[id].synth({ ctx, out: ctx.destination, when: 0.01, noise, pitch: 1 })
+    const data = (await ctx.startRendering()).getChannelData(0)
+    let peak = 0
+    let finite = true
+    let lastAudible = 0
+    for (let i = 0; i < data.length; i += 1) {
+      const v = data[i]!
+      finite &&= Number.isFinite(v)
+      peak = Math.max(peak, Math.abs(v))
+      if (Math.abs(v) > 1e-3) lastAudible = i
+    }
+    const endsAt = lastAudible / rate
+    check(`${id}: renders audible sound`, finite && peak > 0.05 && peak < 3, `peak ${peak.toFixed(2)}`)
+    check(`${id}: is over when its recipe says (${seconds.toFixed(2)}s)`, endsAt > 0.02 && endsAt <= 0.01 + seconds + 0.15,
+      `last audible at ${endsAt.toFixed(2)}s`)
+  }
+}
+
+/** The real engine and HUD against the browser's AudioContext and localStorage. */
+async function checkAudioEngine() {
+  localStorage.removeItem(AUDIO_SETTINGS_KEY)
+  const hud = createHud()
+  hud.setLoading({ label: 'Loading assets', fraction: 0.4 })
+  const label = document.querySelector('#hud-loading-label')?.textContent ?? ''
+  check('the loading screen shows its label and percentage', label === 'Loading assets — 40%', label)
+  check('and a progress bar the screen reader can read',
+    document.querySelector('.loading-bar')?.getAttribute('aria-valuenow') === '40')
+  hud.setLoading(null)
+  check('and goes away when told', document.querySelector('#hud-loading') === null)
+
+  const make = () =>
+    createAudioEngine({ planetRadius: 1, createContext: () => new AudioContext() })
+  const engine = make()
+  hud.bindAudio({
+    setMuted: (muted) => engine.setMuted(muted),
+    setMasterVolume: (volume) => engine.setVolume('master', volume),
+  })
+  check('before a gesture the engine is locked', engine.state === 'locked')
+  engine.unlock()
+  engine.setListener({ position: [0, 0, 3], forward: [0, 0, -1], up: [0, 1, 0] })
+  for (let i = 0; i < 40 && engine.state !== 'running'; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  check('the browser lets it run', engine.state === 'running', engine.state)
+  check('a sound at a place plays through the browser\'s panner', engine.play('chop', [0, 0, 1]) && engine.voiceCount === 1)
+  check('as does one behind the planet', engine.play('spellImpact', [0, 0, -1]) && engine.voiceCount === 2)
+  check('and a UI sound', engine.play('click'))
+
+  const mute = document.querySelector<HTMLButtonElement>('#hud-audio-mute')!
+  hud.setAudio({ muted: engine.settings.muted, master: engine.settings.master, state: engine.state })
+  check('the mute button reads sound on', mute.textContent === 'sound on', mute.textContent ?? '')
+  mute.click()
+  hud.setAudio({ muted: engine.settings.muted, master: engine.settings.master, state: engine.state })
+  check('clicking it mutes the engine', engine.settings.muted && mute.textContent === 'sound off' && mute.getAttribute('aria-pressed') === 'true')
+  check('and nothing plays while it is muted', !engine.play('death', [0, 0, 1]))
+  const volume = document.querySelector<HTMLInputElement>('#hud-audio-volume')!
+  volume.value = '30'
+  volume.dispatchEvent(new Event('input'))
+  check('the slider sets the master volume', Math.abs(engine.settings.master - 0.3) < 1e-9)
+
+  const stored = JSON.parse(localStorage.getItem(AUDIO_SETTINGS_KEY) ?? 'null') as { muted?: boolean; master?: number } | null
+  check('both are in localStorage', stored?.muted === true && stored.master === 0.3, JSON.stringify(stored))
+  const reloaded = make()
+  check('and a fresh engine, as after a reload, comes back muted at that volume', reloaded.settings.muted && Math.abs(reloaded.settings.master - 0.3) < 1e-9)
+  reloaded.unlock()
+  check('and plays nothing until unmuted', !reloaded.play('chop', [0, 0, 1]))
+  reloaded.setMuted(false)
+  for (let i = 0; i < 40 && reloaded.state !== 'running'; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  check('unmuting makes it sound again', reloaded.play('chop', [0, 0, 1]))
+  localStorage.removeItem(AUDIO_SETTINGS_KEY)
+}
+
 async function run(): Promise<Result> {
   const params = new URLSearchParams(location.search)
   const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas')!
   const core = await createSimulation()
   const game = createGame(core, { seed: 1 })
+
+  // A loaded follower, if the variant asks for one: through the game's own
+  // manifest, manager and glue, as main.ts does it.
+  const mode = params.get('follower')
+  let followerMesh: ReturnType<typeof followerMeshFromAssets> = null
+  if (mode === 'fixture' || mode === 'box') {
+    const assets = assetsServing(async () =>
+      mode === 'box'
+        ? boxGlb()
+        : new Uint8Array(await (await fetch('/scripts/fixtures/follower.optimized.glb')).arrayBuffer()),
+    )
+    await assets.load('model.follower')
+    followerMesh = followerMeshFromAssets(assets, {
+      height: game.planet.radius * FOLLOWER_HEIGHT_FRACTION,
+      radius: game.planet.radius * FOLLOWER_RADIUS_FRACTION,
+    })
+    check('the model loaded through the manager becomes a follower mesh', followerMesh !== null,
+      followerMesh ? `${followerMesh.triangleCount} triangles` : 'the glue refused it')
+  }
+
   const renderer = await createRenderer(canvas, game, {
     offscreen: true,
     withholdFeatures: withheldFeatures(params.get('features')),
+    ...(followerMesh ? { followerMesh } : {}),
   })
+  if (followerMesh) {
+    check('the renderer draws the loaded mesh, not the procedural pawn',
+      renderer.statusMessage.includes(`followers instanced (${followerMesh.triangleCount} triangles each)`), renderer.statusMessage)
+  }
 
   const frames: Frame[] = []
   const draw = async (count: number, input: InputSnapshot = idle()) => {
@@ -115,6 +276,21 @@ async function run(): Promise<Result> {
     `centre ${centre}, corner ${corner}`)
   check('the background keeps the game\'s clear colour through the exposure curve',
     corner.every((c, i) => Math.abs(c - [10, 13, 23][i]!) <= 3), `corner ${corner}`)
+
+  // --- the village up close: where a different follower shows -----------------------
+  {
+    const home = game.match.playerHome ?? [0, 1, 0]
+    game.camera.focusOn(home, true)
+    const zoom = idle()
+    await draw(2)
+    game.update(16, { ...zoom, pointer: { ...zoom.pointer, wheel: -60 } }, CANVAS_ASPECT)
+    await draw(40)
+    await capture('closeup')
+    // Back to the opening shot, as createGame left it, for the checks below.
+    game.camera.reset()
+    game.camera.focusOn(home, true)
+    await draw(30)
+  }
 
   // --- GPU normals match the CPU's after a sculpt -------------------------------
   const home = game.match.playerHome ?? [0, 1, 0]
@@ -178,6 +354,11 @@ async function run(): Promise<Result> {
       gpu === null && !renderer.gpuTimingSupported)
   }
 
+  if (mode === null && !params.has('features')) {
+    await checkSynthesis()
+    await checkAudioEngine()
+  }
+
   return {
     ok: failures.length === 0,
     failures,
@@ -187,6 +368,7 @@ async function run(): Promise<Result> {
     diagnostics,
     gpu,
     normals,
+    followerTriangles: followerMesh ? followerMesh.triangleCount : null,
     frames,
   }
 }

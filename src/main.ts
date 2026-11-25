@@ -1,8 +1,17 @@
 import './style.css'
+import { fetchAssetIndex } from './assets/index'
+import { createGameAssets } from './assets/manager'
+import { followerMeshFromAssets } from './assets/models'
+import { createAudioEngine } from './audio/engine'
+import { soundForEvent } from './audio/events'
+import { SOUND_SAMPLE_KEYS } from './audio/sounds'
+import { listenerPoseFromView } from './audio/spatial'
 import { createRenderer } from './engine/renderer'
 import { deviceLossMessage, WebGpuUnavailableError, withheldFeatures } from './engine/webgpu'
+import { FOLLOWER_HEIGHT_FRACTION, FOLLOWER_RADIUS_FRACTION } from './game/followers'
 import { createGame, DEFAULT_MATCH_SEED } from './game/game'
 import { createHud, showFatal } from './ui/hud'
+import { createStartupProgress } from './ui/loading'
 import { createInput } from './input/input'
 import { createSimulationHandle, type SimulationHandle } from './sim/handle'
 import { encodeReplay } from './sim/replay'
@@ -19,6 +28,18 @@ async function main() {
   const canvas = found
 
   const hud = createHud()
+  // Four stages, in order: the core, the world, the assets, the renderer.
+  const startup = createStartupProgress(4, hud.setLoading)
+  startup.stage(0, 'Starting the simulation core')
+
+  // Fetching starts now and runs alongside the core and the world; it is
+  // waited for just before the renderer, which is the first to need a model.
+  const assets = createGameAssets({ index: await fetchAssetIndex() })
+  const booting = assets.loadGroup('boot')
+  // Reported where it is awaited below; this only keeps it from being unhandled
+  // while the core starts.
+  booting.catch(() => {})
+
   const input = createInput(canvas)
   // Report the core as soon as it is up, so a later renderer failure cannot
   // hide whether the WASM boundary came alive. The game is built on top of it:
@@ -32,6 +53,7 @@ async function main() {
     `[core] simulation core ${simulation.version}, ${simulation.stepMs}ms fixed step`,
   )
   hud.setStatus(`core ${simulation.version} loaded — building the world…`)
+  startup.stage(1, 'Building the world')
 
   // `?seed=` replays a match's start; with its replay, the whole of it.
   const seed = matchSeedFromUrl()
@@ -49,6 +71,22 @@ async function main() {
     `core ${simulation.version} · ${game.followers.count} followers against ${game.match.enemy.name} — starting renderer…`,
   )
 
+  startup.stage(2, 'Loading assets', assets.progress.fraction)
+  const stopWatching = assets.onProgress((progress) =>
+    startup.stage(2, 'Loading assets', progress.fraction),
+  )
+  await booting
+  stopWatching()
+
+  startup.stage(3, 'Starting the renderer')
+  // A loaded follower model, if there is one and it is usable; the renderer
+  // draws the procedural pawn otherwise. Nothing in the simulation or the game
+  // modules knows the difference.
+  const followerMesh = followerMeshFromAssets(assets, {
+    height: game.planet.radius * FOLLOWER_HEIGHT_FRACTION,
+    radius: game.planet.radius * FOLLOWER_RADIUS_FRACTION,
+  })
+
   // `?features=none` (or `-timestamp-query,-shader-f16`) runs the paths an
   // adapter without them would take; `?normals=cpu` keeps sculpted normals on
   // the CPU, for comparing the two.
@@ -56,6 +94,29 @@ async function main() {
   const renderer = await createRenderer(canvas, game, {
     withholdFeatures: withheldFeatures(params.get('features')),
     gpuNormals: params.get('normals') !== 'cpu',
+    ...(followerMesh ? { followerMesh } : {}),
+  })
+  startup.finish()
+
+  // Sound. It stays locked until the first click or key (browsers insist), and
+  // plays synthesised voices unless a recorded sample is present and decoded.
+  // Recorded files are fetched now, in the background, so they are ready by the
+  // time anything makes a sound; none of them is required.
+  const audio = createAudioEngine({
+    planetRadius: game.planet.radius,
+    loadSample: (id) => assets.load(SOUND_SAMPLE_KEYS[id]),
+    loadMusic: () => assets.load('audio.music'),
+  })
+  audio.attach(window, document)
+  hud.bindAudio({
+    setMuted: (muted) => {
+      audio.setMuted(muted)
+      audio.play('click')
+    },
+    setMasterVolume: (volume) => audio.setVolume('master', volume),
+  })
+  void assets.loadGroup('deferred').catch((error: unknown) => {
+    console.warn('[assets] background assets did not all load', error)
   })
   hud.setStatus(`${renderer.statusMessage} · core ${simulation.version}`)
 
@@ -103,8 +164,21 @@ async function main() {
       const tickMs = performance.now() - mark
 
       mark = performance.now()
-      game.update(deltaMs, input.snapshot(), CANVAS_ASPECT)
+      const snapshot = input.snapshot()
+      game.update(deltaMs, snapshot, CANVAS_ASPECT)
       const gameMs = performance.now() - mark
+
+      // Sound follows the camera and what the world just did.
+      if (snapshot.pressed.has('KeyK')) {
+        audio.toggleMuted()
+      }
+      audio.setListener(listenerPoseFromView(game.camera.viewMatrix, game.camera.eye))
+      for (const event of game.takeEvents()) {
+        const request = soundForEvent(event)
+        if (request) {
+          audio.play(request.sound, request.at, request.options)
+        }
+      }
 
       mark = performance.now()
       renderer.render(game)
@@ -138,6 +212,7 @@ async function main() {
         perfDrawMs = 0
       }
 
+      hud.setAudio({ muted: audio.settings.muted, master: audio.settings.master, state: audio.state })
       hud.setBrush(game.sculptor)
       hud.setSimulation(live)
       hud.setFollowers(game.followers)

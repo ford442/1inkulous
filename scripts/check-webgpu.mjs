@@ -39,11 +39,17 @@ const ARGS = [
   '--enable-features=Vulkan',
   '--use-angle=swiftshader',
   '--use-webgpu-adapter=swiftshader',
+  // The audio checks start an AudioContext without a click, as a test must.
+  '--autoplay-policy=no-user-gesture-required',
 ]
 
 const VARIANTS = [
   { name: 'all-features', query: '' },
   { name: 'no-features', query: '?features=none' },
+  // The follower swap: a loaded model must draw (the optimiser-made copy of the
+  // pawn as the pawn does, a box as something plainly different).
+  { name: 'loaded-fixture', query: '?follower=fixture' },
+  { name: 'loaded-box', query: '?follower=box' },
 ]
 
 /** A minimal RGBA8 PNG encoder: enough to look at a frame. */
@@ -89,6 +95,38 @@ const { port } = server.httpServer.address()
 const browser = await chromium.launch({ args: ARGS })
 mkdirSync(outDir, { recursive: true })
 
+/**
+ * Pixels in `region` whose colour differs by more than `threshold` in any
+ * channel. The frame is `width` pixels wide.
+ */
+function differing(a, b, width, region, threshold = 16) {
+  let count = 0
+  for (let y = region.y0; y < region.y1; y += 1) {
+    for (let x = region.x0; x < region.x1; x += 1) {
+      const i = (y * width + x) * 4
+      if (
+        Math.abs(a[i] - b[i]) > threshold ||
+        Math.abs(a[i + 1] - b[i + 1]) > threshold ||
+        Math.abs(a[i + 2] - b[i + 2]) > threshold
+      ) {
+        count += 1
+      }
+    }
+  }
+  return count
+}
+
+/**
+ * Where the village stands in the close-up (1024x768): all of it on dry land.
+ * The sea is animated from the wall clock (the renderer's own time), so a page
+ * that took longer to start has other waves, and comparing whole frames would
+ * count water. Land does not move. The framing is fixed — seed 1, the camera
+ * on the player's home, a set zoom — so these numbers are too.
+ */
+const VILLAGE = { x0: 330, y0: 230, x1: 700, y1: 520 }
+
+const closeups = new Map()
+const closeupSize = new Map()
 let failed = false
 try {
   for (const variant of VARIANTS) {
@@ -115,6 +153,10 @@ try {
       )
     }
     for (const frame of result.frames ?? []) {
+      if (frame.name === 'closeup') {
+        closeups.set(variant.name, Buffer.from(frame.rgba, 'base64'))
+        closeupSize.set(variant.name, frame.width)
+      }
       const file = join(outDir, `${variant.name}-${frame.name}.png`)
       writeFileSync(file, png(frame.width, frame.height, Buffer.from(frame.rgba, 'base64')))
       console.log(`frame ${file}`)
@@ -122,6 +164,33 @@ try {
     const problems = [...(result.failures ?? []), ...consoleErrors.map((e) => `console error: ${e}`)]
     for (const problem of problems) console.error(`FAIL ${problem}`)
     if (problems.length > 0 || !result.ok) failed = true
+  }
+  // The swap, seen from outside: the optimiser's copy of the pawn must draw as
+  // the pawn does, and a box must not.
+  const base = closeups.get('all-features')
+  const fixture = closeups.get('loaded-fixture')
+  const box = closeups.get('loaded-box')
+  if (base && fixture && box) {
+    // Measured here, in the village: the loaded pawn differs from the procedural
+    // one by next to nothing (what 16-bit positions and 8-bit normals cannot
+    // hold: 0 pixels past the threshold, 11 levels at most), the box by thousands.
+    const width = closeupSize.get('all-features') ?? 1024
+    const fixtureDiff = differing(base, fixture, width, VILLAGE)
+    const boxDiff = differing(base, box, width, VILLAGE)
+    console.log(`\n=== follower swap (village close-up, pixels differing from the procedural pawn)`)
+    console.log(`loaded pawn (quantised, meshopt-compressed): ${fixtureDiff}`)
+    console.log(`loaded box: ${boxDiff}`)
+    if (fixtureDiff > 300) {
+      console.error(`FAIL the loaded pawn should draw as the procedural one does: ${fixtureDiff} pixels differ`)
+      failed = true
+    }
+    if (boxDiff < 3000 || boxDiff < fixtureDiff * 10) {
+      console.error(`FAIL a loaded box should visibly replace the pawn: only ${boxDiff} pixels differ`)
+      failed = true
+    }
+  } else {
+    console.error('FAIL the follower-swap variants did not each produce a close-up')
+    failed = true
   }
 } finally {
   await browser.close()

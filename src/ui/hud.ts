@@ -6,6 +6,8 @@ import { SpellResult, type Spell } from '../sim/spell'
 import { HutKind, HutSite } from '../sim/hutSite'
 import { AI_ACTION_TEXT } from '../sim/ai'
 import { TRIBE_NAMES, type MatchOutcome, type TribeReadout } from '../game/scenario'
+import type { AudioState } from '../audio/engine'
+import { clampFraction, loadingPercent, loadingText, type LoadingReadout } from './loading'
 
 /** The slice of the terrain brush the HUD reports on. */
 export type BrushReadout = {
@@ -71,6 +73,28 @@ export type MatchReadout = {
   readonly enemy: TribeReadout
 }
 
+/** The slice of the audio engine the HUD shows. */
+export type AudioReadout = {
+  readonly muted: boolean
+  /** Master volume, 0..1. */
+  readonly master: number
+  readonly state: AudioState
+}
+
+/** What the HUD's sound controls do when the player uses them. */
+export type AudioControls = {
+  setMuted: (muted: boolean) => void
+  setMasterVolume: (volume: number) => void
+}
+
+/** The mute button's label. Pure. */
+export function audioLabel(audio: AudioReadout): string {
+  if (audio.state === 'unsupported') {
+    return 'no sound'
+  }
+  return audio.muted ? 'sound off' : 'sound on'
+}
+
 /** GPU time per pass from timestamp queries, averaged like the rest of the line. */
 export type GpuPerf = {
   readonly totalMs: number
@@ -116,12 +140,21 @@ export type FramePerf = {
 export type Hud = {
   setStatus: (message: string) => void
   /**
+   * The loading screen over the whole page: a label and a bar. Null takes it
+   * down. It fades in a moment late (CSS), so a start that takes no time never
+   * flashes it.
+   */
+  setLoading: (loading: LoadingReadout | null) => void
+  /**
    * Replaces the whole HUD with one message and a reload button, for a failure
    * the game cannot continue past. The HUD stays dead afterwards: the readouts
    * it was updating are gone.
    */
   showFatal: (message: string) => void
   setPerf: (perf: FramePerf) => void
+  /** Connects the sound controls; until then they do nothing. */
+  bindAudio: (controls: AudioControls) => void
+  setAudio: (audio: AudioReadout) => void
   setBrush: (brush: BrushReadout) => void
   setSimulation: (simulation: SimulationReadout) => void
   setFollowers: (followers: FollowerReadout) => void
@@ -297,9 +330,22 @@ export function createHud(): Hud {
   }
 
   root.innerHTML = `
+    <div class="loading" id="hud-loading" role="status" aria-live="polite">
+      <h2 class="loading-title">1inkulous</h2>
+      <p class="loading-label" id="hud-loading-label">Loading…</p>
+      <div class="loading-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="loading-fill" id="hud-loading-fill"></div>
+      </div>
+    </div>
     <div>
       <h1 class="title">1inkulous</h1>
       <p class="status" id="hud-status">Starting…</p>
+      <div class="audio">
+        <button type="button" class="audio-mute" id="hud-audio-mute" aria-pressed="false"
+          title="Mute or unmute sound (K)">sound on</button>
+        <input type="range" class="audio-volume" id="hud-audio-volume" min="0" max="100" step="1"
+          value="80" aria-label="Master volume" title="Master volume" />
+      </div>
     </div>
     <div>
       <p class="hint" id="hud-fps">— fps</p>
@@ -320,12 +366,19 @@ export function createHud(): Hud {
       <p class="hint">A brave sent into a training hut, with wood to spare, comes out a warrior · warriors strike enemies next to them</p>
       <p class="hint">F finds the shaman · L aims a Land Bridge: click across water from her, or drag shore to shore</p>
       <p class="hint">Red plays itself: kill its shaman to win, and keep yours alive · warriors are the way to do it</p>
+      <p class="hint">K mutes sound · the slider sets its volume (remembered between visits)</p>
       <p class="hint">N turns the day: the sun stops following the camera and the night side goes dark · N again brings it back</p>
       <p class="hint">X Blast raises a hill and throws people off it · V Flatten levels a hut pad · M Swamp sinks the ground · a cast takes a moment: move her or cast again to cancel</p>
     </div>
   `
 
+  const loadingEl = root.querySelector<HTMLDivElement>('#hud-loading')
+  const loadingLabelEl = root.querySelector<HTMLParagraphElement>('#hud-loading-label')
+  const loadingFillEl = root.querySelector<HTMLDivElement>('#hud-loading-fill')
+  const loadingBarEl = root.querySelector<HTMLDivElement>('.loading-bar')
   const statusEl = root.querySelector<HTMLParagraphElement>('#hud-status')
+  const muteEl = root.querySelector<HTMLButtonElement>('#hud-audio-mute')
+  const volumeEl = root.querySelector<HTMLInputElement>('#hud-audio-volume')
   const fpsEl = root.querySelector<HTMLParagraphElement>('#hud-fps')
   const brushEl = root.querySelector<HTMLParagraphElement>('#hud-brush')
   const simEl = root.querySelector<HTMLParagraphElement>('#hud-sim')
@@ -339,11 +392,64 @@ export function createHud(): Hud {
   const bandEl = document.querySelector<HTMLDivElement>('#select-band')
   const canvasEl = document.querySelector<HTMLCanvasElement>('#game-canvas')
 
+  // The sound controls act through whatever `bindAudio` was given, on what
+  // `setAudio` last showed.
+  let audioControls: AudioControls | null = null
+  let shownMuted = false
+  let shownAudio = ''
+  muteEl?.addEventListener('click', () => {
+    audioControls?.setMuted(!shownMuted)
+    // A focused button would take Space and Enter from the game.
+    muteEl.blur()
+  })
+  volumeEl?.addEventListener('input', () => {
+    audioControls?.setMasterVolume(Number(volumeEl.value) / 100)
+  })
+  volumeEl?.addEventListener('change', () => volumeEl.blur())
+
   return {
+    bindAudio(controls: AudioControls) {
+      audioControls = controls
+    },
+    setAudio(audio: AudioReadout) {
+      shownMuted = audio.muted
+      // Called every frame: touch the page only when something changed.
+      const shown = `${audioLabel(audio)}|${audio.muted}|${audio.state === 'unsupported'}`
+      if (muteEl && shown !== shownAudio) {
+        shownAudio = shown
+        muteEl.textContent = audioLabel(audio)
+        muteEl.setAttribute('aria-pressed', String(audio.muted))
+        muteEl.disabled = audio.state === 'unsupported'
+      }
+      // Not while it is being dragged: the slider is the source of truth then.
+      if (volumeEl && document.activeElement !== volumeEl) {
+        const value = String(Math.round(clampFraction(audio.master) * 100))
+        if (volumeEl.value !== value) {
+          volumeEl.value = value
+        }
+      }
+    },
     setStatus(message: string) {
       if (statusEl) {
         statusEl.textContent = message
       }
+    },
+    setLoading(loading: LoadingReadout | null) {
+      if (!loadingEl) {
+        return
+      }
+      if (loading === null) {
+        // Removed, not hidden: once the game is up there is nothing to come back to.
+        loadingEl.remove()
+        return
+      }
+      if (loadingLabelEl) {
+        loadingLabelEl.textContent = loadingText(loading)
+      }
+      if (loadingFillEl) {
+        loadingFillEl.style.width = `${clampFraction(loading.fraction) * 100}%`
+      }
+      loadingBarEl?.setAttribute('aria-valuenow', String(loadingPercent(loading.fraction)))
     },
     showFatal(message: string) {
       showFatal(root, message)

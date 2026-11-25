@@ -1,0 +1,28 @@
+# clang-tidy for the simulation core (cpp/src and cpp/include). Run it with
+#   cmake --preset native-tidy && cmake --build --preset native-tidy
+# which builds the core with every finding an error. The tests and doctest are
+# not checked.
+#
+# The core is numeric code over float/double/int32 with C-style arrays at its
+# ABI, so the families that fight that (readability-magic-numbers,
+# cppcoreguidelines-avoid-c-arrays, ...) are left off rather than silenced
+# line by line; what is on is what finds real defects.
+# performance-enum-size is off because the enums mirror the ABI's `int`, and
+# narrowing them saves nothing. The others off are noise for this code: swappable
+# (x, y, z) parameters, `int` -> size_t narrowing the -Wconversion build already
+# polices, and trailing return types.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  performance-*,
+  -performance-enum-size,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-avoid-c-arrays,
+  -modernize-use-nodiscard,
+  -modernize-pass-by-value,
+HeaderFilterRegex: 'cpp/(include|src)/.*'
+WarningsAsErrors: ''
+FormatStyle: file

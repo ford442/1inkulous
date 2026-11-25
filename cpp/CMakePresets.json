@@ -1,0 +1,99 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "wasm-base",
+      "description": "WebAssembly core. Configure through Emscripten: `emcmake cmake --preset wasm-release` (emcmake supplies the toolchain file). scripts/build-wasm.sh does this.",
+      "hidden": true,
+      "cacheVariables": {
+        "CORE_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "wasm-release",
+      "displayName": "WebAssembly, release",
+      "description": "-O3 -flto, sized memory. Writes core.js and core.wasm into src/wasm/, where Vite bundles them.",
+      "inherits": "wasm-base",
+      "binaryDir": "${sourceDir}/build-wasm",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CORE_OUTPUT_DIR": "${sourceDir}/../src/wasm"
+      }
+    },
+    {
+      "name": "wasm-debug",
+      "displayName": "WebAssembly, debug",
+      "description": "-O0 -g -sASSERTIONS=2, opt-in. Its own build and output directories so it can neither be mistaken for nor overwrite the release build; load it with CORE_WASM_DIR=cpp/build-wasm-debug/out.",
+      "inherits": "wasm-base",
+      "binaryDir": "${sourceDir}/build-wasm-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CORE_OUTPUT_DIR": "${sourceDir}/build-wasm-debug/out"
+      }
+    },
+    {
+      "name": "native-base",
+      "description": "The core as a plain static library, with the doctest unit tests.",
+      "hidden": true,
+      "cacheVariables": {
+        "CORE_BUILD_TESTS": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "native-debug",
+      "displayName": "Native, debug",
+      "description": "-O0 -g: for a debugger.",
+      "inherits": "native-base",
+      "binaryDir": "${sourceDir}/build/native-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "native-asan",
+      "displayName": "Native, AddressSanitizer + UBSan",
+      "description": "-fsanitize=address,undefined -fno-omit-frame-pointer. Finds heap overruns, use after free, leaks and undefined arithmetic that -sASSERTIONS=2 will not; a report aborts, so ctest fails on it.",
+      "inherits": "native-base",
+      "binaryDir": "${sourceDir}/build/native-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O1 -g",
+        "CORE_SANITIZE": "ON"
+      }
+    },
+    {
+      "name": "native-tidy",
+      "displayName": "Native, clang-tidy",
+      "description": "Builds the core with clang-tidy (checks in .clang-tidy) and every finding an error.",
+      "inherits": "native-base",
+      "binaryDir": "${sourceDir}/build/native-tidy",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CORE_BUILD_TESTS": "OFF",
+        "CORE_CLANG_TIDY": "ON",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "wasm-release", "configurePreset": "wasm-release" },
+    { "name": "wasm-debug", "configurePreset": "wasm-debug" },
+    { "name": "native-debug", "configurePreset": "native-debug" },
+    { "name": "native-asan", "configurePreset": "native-asan" },
+    { "name": "native-tidy", "configurePreset": "native-tidy" }
+  ],
+  "testPresets": [
+    {
+      "name": "native-debug",
+      "configurePreset": "native-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "native-asan",
+      "configurePreset": "native-asan",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

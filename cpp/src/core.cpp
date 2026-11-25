@@ -10,7 +10,8 @@ namespace {
 // which keeps core_version_text() safe to hand across the WASM boundary.
 #define INKULOUS_STRINGIFY_(x) #x
 #define INKULOUS_STRINGIFY(x) INKULOUS_STRINGIFY_(x)
-constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(10) "." INKULOUS_STRINGIFY(0);
+constexpr const char* kVersionText =
+    INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(10) "." INKULOUS_STRINGIFY(0);
 
 static_assert(kVersionMajor == 0 && kVersionMinor == 10 && kVersionPatch == 0,
               "kVersionText must be kept in step with the version constants");
@@ -21,8 +22,7 @@ const char* core_version_string() { return kVersionText; }
 
 int core_version() { return kVersion; }
 
-Simulation::Simulation(double step_ms)
-    : step_ms_(step_ms > 0.0 ? step_ms : kDefaultStepMs) {
+Simulation::Simulation(double step_ms) : step_ms_(step_ms > 0.0 ? step_ms : kDefaultStepMs) {
   terrain_.attach(&nav_);
   followers_.set_grid(&nav_);
   huts_.attach(&nav_, &followers_, &stores_);

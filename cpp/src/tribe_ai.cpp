@@ -501,7 +501,8 @@ void TribeAi::idle_braves(std::int32_t tribe, std::vector<std::int32_t>& out) co
 
 std::int32_t TribeAi::open_training_hut(std::int32_t tribe) const {
   for (std::int32_t h = 0; h < huts_->count(); ++h) {
-    if (huts_->tribe(h) == tribe && huts_->kind(h) == static_cast<std::int32_t>(HutKind::kTraining) &&
+    if (huts_->tribe(h) == tribe &&
+        huts_->kind(h) == static_cast<std::int32_t>(HutKind::kTraining) &&
         huts_->occupants(h) + huts_->incoming(h) < HutSet::capacity(HutKind::kTraining)) {
       return h;
     }
@@ -513,8 +514,7 @@ bool TribeAi::try_chop(std::int32_t tribe, const Mind& mind) {
   idle_braves(tribe, ids_);
   // One brave stays back for a training hut that could take him now, or
   // chopping would keep every hand busy and nobody would ever train.
-  if (!ids_.empty() && open_training_hut(tribe) >= 0 &&
-      stores_->wood(tribe) >= kWarriorWoodCost) {
+  if (!ids_.empty() && open_training_hut(tribe) >= 0 && stores_->wood(tribe) >= kWarriorWoodCost) {
     ids_.pop_back();
   }
   if (ids_.empty()) {

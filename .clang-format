@@ -1,0 +1,15 @@
+# The style cpp/ is already written in — Google's, at 100 columns — written down
+# so it stays that way. Format with
+#   clang-format -i cpp/src/* cpp/include/1inkulous/* cpp/tests/*.cpp cpp/tests/*.hpp
+# CI runs `clang-format --dry-run --Werror` over the same files.
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++20
+ColumnLimit: 100
+# One parameter per line once a declaration does not fit, as core_abi.cpp has it.
+BinPackParameters: false
+# Short bodies on one line are used throughout: `int count() const { return n; }`.
+AllowShortFunctionsOnASingleLine: All
+# Sort within a block, never across: project headers stay above the standard library.
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive

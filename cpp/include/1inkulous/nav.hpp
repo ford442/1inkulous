@@ -25,6 +25,11 @@ namespace inkulous {
 // only there to absorb float32 rounding.
 constexpr float kWaterHeight = 1e-6f;
 
+// Node and link ids are signed (-1 means "none") but index std::vector, which
+// is unsigned. Ids are validated when the graph is committed, so this is the one
+// place the sign changes — and the one place -Wsign-conversion is satisfied.
+constexpr std::size_t idx(std::int32_t id) { return static_cast<std::size_t>(id); }
+
 // Steepest ground a follower will cross, as height change over arc length —
 // i.e. the tangent of the slope angle. 0.55 is a shade under 30 degrees, which
 // leaves gentle hills walkable and turns sculpted cliffs into real barriers.
@@ -92,24 +97,22 @@ class NavGrid {
   std::int32_t* neighbor_offsets() { return neighbor_offsets_.data(); }
   std::int32_t* neighbors() { return neighbors_.data(); }
 
-  const float* direction(std::int32_t node) const { return &directions_[node * 3]; }
-  float height(std::int32_t node) const { return heights_[node]; }
+  const float* direction(std::int32_t node) const { return &directions_[idx(node * 3)]; }
+  float height(std::int32_t node) const { return heights_[idx(node)]; }
 
   // Above the water line: the terrain alone, whatever stands on it.
-  bool dry(std::int32_t node) const { return heights_[node] > kWaterHeight; }
+  bool dry(std::int32_t node) const { return heights_[idx(node)] > kWaterHeight; }
   // Ground a follower may stand on or route through: dry, and not under a
   // building. Every search, line test and step reads this, so a hut's
   // footprint is refused exactly the way water is.
   bool walkable(std::int32_t node) const {
-    return heights_[node] > kWaterHeight && blocked_[node] == 0;
+    return heights_[idx(node)] > kWaterHeight && blocked_[idx(node)] == 0;
   }
 
   // Footprint nodes, set and cleared by the hut set. Cleared by allocate(),
   // which also bumps topology_generation() so the owner knows to mark again.
-  bool blocked(std::int32_t node) const { return blocked_[node] != 0; }
-  void set_blocked(std::int32_t node, bool blocked) {
-    blocked_[node] = blocked ? 1 : 0;
-  }
+  bool blocked(std::int32_t node) const { return blocked_[idx(node)] != 0; }
+  void set_blocked(std::int32_t node, bool blocked) { blocked_[idx(node)] = blocked ? 1 : 0; }
   std::uint32_t topology_generation() const { return topology_generation_; }
 
   // Whether a follower can step between two adjacent nodes: both on land, and

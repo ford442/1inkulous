@@ -9,6 +9,10 @@
 #                                    output directories so it can neither be
 #                                    mistaken for nor overwrite the release one.
 #                                    Use it with CORE_WASM_DIR (see README).
+#
+# What those two builds are lives in cpp/CMakePresets.json (wasm-release and
+# wasm-debug); this script only runs the preset and checks what came out, so the
+# flags are written down in one place, shared with anyone running cmake by hand.
 
 set -euo pipefail
 
@@ -17,14 +21,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-release}"
 case "${MODE}" in
   release)
-    BUILD_TYPE=Release
+    PRESET=wasm-release
     BUILD_DIR="${ROOT}/cpp/build-wasm"
-    OUT_DIR="${ROOT}/src/wasm"
     ;;
   debug)
-    BUILD_TYPE=Debug
+    PRESET=wasm-debug
     BUILD_DIR="${ROOT}/cpp/build-wasm-debug"
-    OUT_DIR="${BUILD_DIR}/out"
     ;;
   *)
     echo "usage: build-wasm.sh [release|debug]" >&2
@@ -32,21 +34,24 @@ case "${MODE}" in
     ;;
 esac
 
+# The Emscripten release the core is built and tested with (also what CI installs).
+EMSDK_VERSION="$(tr -d '[:space:]' < "${ROOT}/.emsdk-version")"
+
 if ! command -v emcmake >/dev/null 2>&1; then
-  cat >&2 <<'MESSAGE'
+  cat >&2 <<MESSAGE
 error: Emscripten not found on PATH (emcmake is missing).
 
 The simulation core is C++ compiled to WebAssembly, so the app cannot run
 without it. Install the SDK once:
 
   git clone https://github.com/emscripten-core/emsdk.git
-  cd emsdk && ./emsdk install latest && ./emsdk activate latest
+  cd emsdk && ./emsdk install ${EMSDK_VERSION} && ./emsdk activate ${EMSDK_VERSION}
 
 Then activate it in each shell (add to your profile to make it permanent):
 
   source /path/to/emsdk/emsdk_env.sh
 
-Verify with `emcc -v`, then re-run `npm run build:wasm`.
+Verify with \`emcc -v\`, then re-run \`npm run build:wasm\`.
 MESSAGE
   exit 1
 fi
@@ -56,12 +61,27 @@ if ! command -v cmake >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "building simulation core (${BUILD_TYPE}) with $(emcc --version | head -n 1)"
+emcc_banner="$(emcc --version | head -n 1)"
+echo "building simulation core (${PRESET}) with ${emcc_banner}"
+if [[ "${emcc_banner}" != *" ${EMSDK_VERSION} "* ]]; then
+  echo "warning: the core is built and tested with Emscripten ${EMSDK_VERSION} (.emsdk-version); this is a different release." >&2
+fi
 
-emcmake cmake -S "${ROOT}/cpp" -B "${BUILD_DIR}" \
-  -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-  -DCORE_OUTPUT_DIR="${OUT_DIR}"
-cmake --build "${BUILD_DIR}"
+# Presets are read from the source directory, hence the cd.
+(
+  cd "${ROOT}/cpp"
+  emcmake cmake --preset "${PRESET}"
+  cmake --build --preset "${PRESET}"
+)
+
+# Where the preset put the output: read back from the configured build rather
+# than repeated here, so the preset is the only place it is written.
+OUT_DIR="$(sed -n 's/^CORE_OUTPUT_DIR:[A-Z]*=//p' "${BUILD_DIR}/CMakeCache.txt")"
+if [[ -z "${OUT_DIR}" ]]; then
+  echo "error: ${BUILD_DIR}/CMakeCache.txt has no CORE_OUTPUT_DIR; is the ${PRESET} preset intact?" >&2
+  exit 1
+fi
+OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
 
 for artifact in core.js core.wasm; do
   if [[ ! -f "${OUT_DIR}/${artifact}" ]]; then
@@ -74,7 +94,7 @@ done
 # repeating what CMake was told: this is what the browser instantiates.
 memory="$(node "${ROOT}/scripts/wasm-memory.mjs" "${OUT_DIR}/core.wasm")"
 
-echo "wasm core (${BUILD_TYPE}) written to ${OUT_DIR#"${ROOT}/"}/ " \
+echo "wasm core (${PRESET}) written to ${OUT_DIR#"${ROOT}/"}/ " \
      "($(du -h "${OUT_DIR}/core.wasm" | cut -f1) core.wasm, ${memory})"
 
 if [[ "${MODE}" == debug ]]; then

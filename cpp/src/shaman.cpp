@@ -167,7 +167,8 @@ SpellResult Shamans::bridge_ends(const double a_in[3],
   // the graph already crosses on dry ground would cost mana and raise nothing.
   const double theta = angle_between(a, b);
   const double sample_step = std::max(grid_->min_link_angle() * 0.5, 1e-4);
-  const std::int32_t samples = std::max(1, static_cast<std::int32_t>(std::ceil(theta / sample_step)));
+  const std::int32_t samples =
+      std::max(1, static_cast<std::int32_t>(std::ceil(theta / sample_step)));
   for (std::int32_t i = 0; i <= samples; ++i) {
     double p[3];
     slerp(a, b, theta, static_cast<double>(i) / samples, p);
@@ -239,7 +240,8 @@ SpellResult Shamans::judge(Spell spell, const double* shaman_at, const SpellTarg
   switch (spell) {
     case Spell::kBlast:
       // Something to raise, or someone to throw.
-      return terrain_->would_sculpt(target.at, angle, kBlastHeight) || anyone_within(target.at, angle)
+      return terrain_->would_sculpt(target.at, angle, kBlastHeight) ||
+                     anyone_within(target.at, angle)
                  ? SpellResult::kOk
                  : SpellResult::kNothing;
     case Spell::kFlatten: {
@@ -423,7 +425,7 @@ void Shamans::raise_land(const double a[3], const double b[3]) {
   // one ridge, and a stamp on ground already that high — the beaches at the
   // ends — lifts nothing. Its neighbours' falloff may still nudge it a little.
   for (std::int32_t i = 0; i < stamp_count(); ++i) {
-    const double at[3] = {stamps_[i * 3], stamps_[i * 3 + 1], stamps_[i * 3 + 2]};
+    const double at[3] = {stamps_[idx(i * 3)], stamps_[idx(i * 3 + 1)], stamps_[idx(i * 3 + 2)]};
     const double lift = kLandBridgeHeight - terrain_->height_at(at);
     if (lift > 0.0) {
       terrain_->sculpt(at, radius, lift);
@@ -454,8 +456,8 @@ void Shamans::count_population() {
 void Shamans::step(double dt_seconds) {
   count_population();
   for (std::size_t tribe = 0; tribe < mana_.size(); ++tribe) {
-    mana_[tribe] = std::min(
-        kMaxMana, mana_[tribe] + population_[tribe] * kManaPerPersonSecond * dt_seconds);
+    mana_[tribe] =
+        std::min(kMaxMana, mana_[tribe] + population_[tribe] * kManaPerPersonSecond * dt_seconds);
     // Steps are not exact in binary, so a wait within a hair of over is over.
     for (double& wait : cooldowns_[tribe]) {
       wait = wait > dt_seconds + 1e-9 ? wait - dt_seconds : 0.0;
@@ -499,7 +501,8 @@ void Shamans::step(double dt_seconds) {
     }
     if (result == SpellResult::kOk) {
       mana_[t] -= spell_rules(cast.spell).cost;
-      cooldowns_[t][static_cast<std::size_t>(cast.spell)] = spell_rules(cast.spell).cooldown_seconds;
+      cooldowns_[t][static_cast<std::size_t>(cast.spell)] =
+          spell_rules(cast.spell).cooldown_seconds;
       apply(cast.spell, cast.target);
     }
     end(tribe, result);

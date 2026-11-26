@@ -169,6 +169,44 @@ export type CoreExports = {
   _core_terrain_dirty_last: () => number
   _core_terrain_clear_dirty: () => void
   /**
+   * --- worlds ---------------------------------------------------------------
+   *
+   * A scenario's procedural terrain is generated here, not uploaded: the whole
+   * field from a seed and the parameters of inkulous::WorldGenParams (see
+   * worldgen.hpp for what each one does), each clamped to its range. Every node
+   * is written, under the ceiling, and the whole range marked dirty. Drawn from
+   * a generator of its own, so it leaves the match's random state alone.
+   * Returns how many nodes are land, or -1 with no grid.
+   */
+  _core_terrain_generate: (
+    seed: number,
+    land: number,
+    continents: number,
+    continentSize: number,
+    continentWeight: number,
+    frequency: number,
+    octaves: number,
+    persistence: number,
+    lacunarity: number,
+    warp: number,
+    ridges: number,
+    relief: number,
+    peak: number,
+    smoothing: number,
+  ) => number
+  /**
+   * Marks every node dirty: after a scenario's own height field (or the
+   * editor's) was written into core_nav_heights wholesale.
+   */
+  _core_terrain_touch_all: () => void
+  /**
+   * Takes everything off the world but the ground and the clock: every
+   * follower, hut, tree, shaman's mana, cast, cooldown and unlock, every
+   * tribe's wood, and every AI mind and personality. What the editor rebuilds
+   * a world on.
+   */
+  _core_world_clear: () => void
+  /**
    * Places a follower on the walkable node nearest the direction. Returns its id,
    * or -1 if there is no land nearby, no grid, or no room.
    */
@@ -334,9 +372,17 @@ export type CoreExports = {
   _core_tree_progress: (id: number) => number
   /**
    * Plants one tree on the walkable node nearest the direction, unless one
-   * stands there already. Returns its id, or -1. For tests and scenario setup.
+   * stands there already: `size` a multiple of the placeholder mesh (0 is 1),
+   * `turn` the way it leans, in radians round its node. Returns its id, or -1.
+   * For tests, scenarios and the editor.
    */
-  _core_tree_plant: (x: number, y: number, z: number) => number
+  _core_tree_plant: (x: number, y: number, z: number, size: number, turn: number) => number
+  /**
+   * Tree `id`'s size and lean as core_tree_plant takes them, so a scattered
+   * forest can be written out and planted back exactly; 0 for a bad id.
+   */
+  _core_tree_size: (id: number) => number
+  _core_tree_turn: (id: number) => number
   /** Wood one tree gives, and the brave-seconds it takes to fell. */
   _core_tree_wood: () => number
   _core_tree_chop_seconds: () => number
@@ -409,6 +455,19 @@ export type CoreExports = {
   /** Ends `tribe`'s cast in progress, if any, with nothing spent. */
   _core_spell_cancel: (tribe: number) => void
   /**
+   * Spell progression. Every spell starts unlocked; `at` 0 unlocks it for the
+   * tribe now, -1 locks it for the match, and a positive `at` locks it until
+   * the tribe's population first reaches that many. A locked spell is refused
+   * with 12, by the player's casts and the AI's alike. Ignores a bad tribe or
+   * spell.
+   */
+  _core_spell_set_unlock: (tribe: number, spell: number, at: number) => void
+  /**
+   * The threshold as it stands: 0 unlocked, -1 never, or the population still
+   * to reach. -1 for a bad tribe or spell.
+   */
+  _core_spell_unlock_at: (tribe: number, spell: number) => number
+  /**
    * The spell `tribe` is casting now, or -1; how far through it is, 0..1; and
    * where it will land: 4 floats, a unit direction and the disc's angular
    * radius, zeros when not casting. Valid until the next call.
@@ -456,12 +515,37 @@ export type CoreExports = {
   /**
    * What the tribe's last think did — 0 waited, 1 cast a spell, 2 sent the
    * shaman to the shore to bridge from, 3 built a hut, 4 flattened a pad, 5
-   * sent braves to chop, 6 sent a brave to train, 7 sent warriors to attack
-   * (mirrors inkulous::AiAction) — how many thinks did something, and how many
-   * there have been.
+   * sent braves to chop, 6 sent a brave to train, 7 sent warriors to attack, 8
+   * sent braves home to breed (mirrors inkulous::AiAction) — how many thinks
+   * did something, and how many there have been.
    */
   _core_ai_last_action: (tribe: number) => number
   _core_ai_actions: (tribe: number) => number
   _core_ai_thinks: (tribe: number) => number
   _core_ai_think_seconds: () => number
+  /**
+   * The weights `tribe`'s AI plays by (inkulous::AiPersonality): seconds
+   * between thinks, the huts it stops at, how far round home it builds and
+   * forages in world units, the fewest enemies a Swamp or Blast must catch (0
+   * never), idle warriors it gathers at home before marching, braves it keeps
+   * housed to breed, and whether it bridges (0 or 1). Each is clamped. Kept
+   * across core_ai_enable; core_world_clear puts the defaults back. Returns 1,
+   * or 0 for a bad tribe.
+   */
+  _core_ai_configure: (
+    tribe: number,
+    thinkSeconds: number,
+    hutCap: number,
+    buildReach: number,
+    forageReach: number,
+    patch: number,
+    muster: number,
+    settle: number,
+    bridges: number,
+  ) => number
+  /**
+   * One weight as the AI holds it, in the order core_ai_configure takes them
+   * (0 think_seconds .. 7 bridges); 0 for a bad tribe or field.
+   */
+  _core_ai_personality: (tribe: number, field: number) => number
 }

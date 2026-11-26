@@ -36,6 +36,7 @@ add_executable(core_tests
   test_nav.cpp
   test_shaman.cpp
   test_terrain.cpp
+  test_worlds.cpp
 )
 
 target_link_libraries(core_tests PRIVATE 1inkulous_core)

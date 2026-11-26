@@ -16,9 +16,10 @@ namespace {
 // which keeps core_version_text() safe to hand across the WASM boundary.
 #define INKULOUS_STRINGIFY_(x) #x
 #define INKULOUS_STRINGIFY(x) INKULOUS_STRINGIFY_(x)
-constexpr const char* kVersionText = INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(11) "." INKULOUS_STRINGIFY(0);
+constexpr const char* kVersionText =
+    INKULOUS_STRINGIFY(0) "." INKULOUS_STRINGIFY(12) "." INKULOUS_STRINGIFY(0);
 
-static_assert(kVersionMajor == 0 && kVersionMinor == 11 && kVersionPatch == 0,
+static_assert(kVersionMajor == 0 && kVersionMinor == 12 && kVersionPatch == 0,
               "kVersionText must be kept in step with the version constants");
 
 }  // namespace
@@ -107,6 +108,16 @@ void Simulation::step_once() {
       checkpoints_.size() < static_cast<std::size_t>(kMaxCheckpoints)) {
     checkpoints_.push_back({step_count_, state_hash()});
   }
+}
+
+void Simulation::clear_world() {
+  // Huts first: they give their footprints back to the grid.
+  huts_.clear();
+  trees_.clear();
+  followers_.clear();
+  shamans_.clear();
+  stores_.clear();
+  ai_.clear();
 }
 
 void Simulation::reset() {

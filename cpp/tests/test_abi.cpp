@@ -116,9 +116,9 @@ TEST_CASE("abi: huts, trees and wood") {
   core_wood_set(2, 17);
   CHECK(core_wood(2) == 17);
   core_wood_set(2, 0);
-  CHECK(core_trees_spawn(20, 3) > 0);
+  CHECK(core_trees_spawn(20) > 0);
   CHECK(core_tree_count() > 0);
-  CHECK(core_tree_plant(0.0, 0.0, 1.0) >= 0);
+  CHECK(core_tree_plant(0.0, 0.0, 1.0, 0.0, 0.0) >= 0);
   CHECK(core_tree_progress(0) == 0.0);
   core_trees_clear();
   CHECK(core_tree_count() == 0);

@@ -228,6 +228,44 @@ INKULOUS_EXPORT int core_terrain_dirty_last(void) { return simulation().terrain(
 
 INKULOUS_EXPORT void core_terrain_clear_dirty(void) { simulation().terrain().clear_dirty(); }
 
+// --- worlds ---------------------------------------------------------------
+
+INKULOUS_EXPORT int core_terrain_generate(int seed,
+                                          double land,
+                                          int continents,
+                                          double continent_size,
+                                          double continent_weight,
+                                          double frequency,
+                                          int octaves,
+                                          double persistence,
+                                          double lacunarity,
+                                          double warp,
+                                          double ridges,
+                                          double relief,
+                                          double peak,
+                                          int smoothing) {
+  inkulous::WorldGenParams params;
+  params.seed = static_cast<std::uint32_t>(seed);
+  params.land = land;
+  params.continents = continents;
+  params.continent_size = continent_size;
+  params.continent_weight = continent_weight;
+  params.frequency = frequency;
+  params.octaves = octaves;
+  params.persistence = persistence;
+  params.lacunarity = lacunarity;
+  params.warp = warp;
+  params.ridges = ridges;
+  params.relief = relief;
+  params.peak = peak;
+  params.smoothing = smoothing;
+  return simulation().terrain().generate(params);
+}
+
+INKULOUS_EXPORT void core_terrain_touch_all(void) { simulation().terrain().touch_all(); }
+
+INKULOUS_EXPORT void core_world_clear(void) { simulation().clear_world(); }
+
 // --- followers ------------------------------------------------------------
 
 INKULOUS_EXPORT int core_follower_spawn(double x, double y, double z, int tribe) {
@@ -470,6 +508,19 @@ INKULOUS_EXPORT int core_spell_cast(
 
 INKULOUS_EXPORT void core_spell_cancel(int tribe) { simulation().shamans().cancel(tribe); }
 
+INKULOUS_EXPORT void core_spell_set_unlock(int tribe, int spell, int at) {
+  if (inkulous::valid_spell(spell)) {
+    simulation().shamans().set_unlock(tribe, static_cast<inkulous::Spell>(spell), at);
+  }
+}
+
+INKULOUS_EXPORT int core_spell_unlock_at(int tribe, int spell) {
+  if (!inkulous::valid_spell(spell)) {
+    return inkulous::kSpellNever;
+  }
+  return simulation().shamans().unlock_at(tribe, static_cast<inkulous::Spell>(spell));
+}
+
 INKULOUS_EXPORT int core_spell_casting(int tribe) { return simulation().shamans().casting(tribe); }
 
 INKULOUS_EXPORT double core_spell_progress(int tribe) {
@@ -521,9 +572,13 @@ INKULOUS_EXPORT double core_land_bridge_height(void) { return inkulous::kLandBri
 
 INKULOUS_EXPORT int core_population(int tribe) { return simulation().shamans().population(tribe); }
 
-INKULOUS_EXPORT int core_tree_plant(double x, double y, double z) {
-  return simulation().trees().plant(x, y, z);
+INKULOUS_EXPORT int core_tree_plant(double x, double y, double z, double size, double turn) {
+  return simulation().trees().plant(x, y, z, size, turn);
 }
+
+INKULOUS_EXPORT double core_tree_size(int id) { return simulation().trees().size(id); }
+
+INKULOUS_EXPORT double core_tree_turn(int id) { return simulation().trees().turn(id); }
 
 INKULOUS_EXPORT int core_shaman_fallen(int tribe) {
   return simulation().followers().fallen(tribe) ? 1 : 0;
@@ -548,5 +603,53 @@ INKULOUS_EXPORT int core_ai_actions(int tribe) { return simulation().ai().action
 INKULOUS_EXPORT int core_ai_thinks(int tribe) { return simulation().ai().thinks(tribe); }
 
 INKULOUS_EXPORT double core_ai_think_seconds(void) { return inkulous::kAiThinkSeconds; }
+
+INKULOUS_EXPORT int core_ai_configure(int tribe,
+                                      double think_seconds,
+                                      int hut_cap,
+                                      double build_reach,
+                                      double forage_reach,
+                                      int patch,
+                                      int muster,
+                                      int settle,
+                                      int bridges) {
+  inkulous::AiPersonality personality;
+  personality.think_seconds = think_seconds;
+  personality.hut_cap = hut_cap;
+  personality.build_reach = build_reach;
+  personality.forage_reach = forage_reach;
+  personality.patch = patch;
+  personality.muster = muster;
+  personality.settle = settle;
+  personality.bridges = bridges != 0;
+  return simulation().ai().configure(tribe, personality) ? 1 : 0;
+}
+
+INKULOUS_EXPORT double core_ai_personality(int tribe, int field) {
+  if (!inkulous::valid_tribe(tribe)) {
+    return 0.0;
+  }
+  const inkulous::AiPersonality& p = simulation().ai().personality(tribe);
+  switch (field) {
+    case 0:
+      return p.think_seconds;
+    case 1:
+      return p.hut_cap;
+    case 2:
+      return p.build_reach;
+    case 3:
+      return p.forage_reach;
+    case 4:
+      return p.patch;
+    case 5:
+      return p.muster;
+    case 6:
+      return p.settle;
+    case 7:
+      return p.bridges ? 1.0 : 0.0;
+    default:
+      return 0.0;
+  }
+}
 
 }  // extern "C"

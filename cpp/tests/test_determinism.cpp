@@ -46,7 +46,8 @@ std::uint64_t play() {
   sim.shamans().spawn(kHome[0], kHome[1], kHome[2], 0);
   const Vec3 far_side = step_towards(kHome, {1.0, 0.0, 0.0}, 1.4);
   sim.shamans().spawn(far_side[0], far_side[1], far_side[2], 1);
-  sim.trees().spawn(30, 11);
+  sim.seed_match(11);
+  sim.trees().spawn(30, sim.random());
   for (int i = 0; i < 20; ++i) {
     sim.followers().spawn(kHome[0], kHome[1], kHome[2], 0);
     sim.followers().spawn(far_side[0], far_side[1], far_side[2], 1);

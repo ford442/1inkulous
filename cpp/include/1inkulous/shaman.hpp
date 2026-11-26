@@ -137,7 +137,12 @@ enum class SpellResult : std::int32_t {
   kCancelled = 10,
   // No such spell.
   kUnknownSpell = 11,
+  // The tribe has not unlocked this spell yet (see Shamans::set_unlock).
+  kLocked = 12,
 };
+
+// An unlock threshold for a spell the tribe never gets this match.
+constexpr std::int32_t kSpellNever = -1;
 
 // Where a spell is aimed. Directions need not be normalised.
 struct SpellTarget {
@@ -200,6 +205,18 @@ class Shamans {
   bool cast_disc(std::int32_t tribe, double out[3], double& angular_radius) const;
   // Seconds before `tribe` may cast `spell` again; 0 when it may.
   double cooldown(std::int32_t tribe, Spell spell) const;
+
+  // Spell progression. Every spell starts unlocked for every tribe; a
+  // scenario can hold one back: `at` 0 unlocks it now, kSpellNever locks it
+  // for the match, and a positive `at` locks it until the tribe's population
+  // first reaches that many (counted each step, as mana is), after which it
+  // stays unlocked. A locked spell is refused by check() as kLocked, which is
+  // how the AI is held to the same rules. Ignores a bad tribe or spell.
+  void set_unlock(std::int32_t tribe, Spell spell, std::int32_t at);
+  // The threshold as it stands: 0 unlocked, kSpellNever, or the population
+  // still to reach. kSpellNever for a bad tribe or spell.
+  std::int32_t unlock_at(std::int32_t tribe, Spell spell) const;
+  bool unlocked(std::int32_t tribe, Spell spell) const { return unlock_at(tribe, spell) == 0; }
   // How `tribe`'s most recent cast ended. All zeros before the first.
   CastEnd last_end(std::int32_t tribe) const;
 
@@ -281,6 +298,8 @@ class Shamans {
   std::array<Cast, kMaxTribes> casts_{};
   std::array<CastEnd, kMaxTribes> ends_{};
   std::array<std::array<double, kSpellCount>, kMaxTribes> cooldowns_{};
+  // Per tribe and spell: 0 unlocked, kSpellNever, or a population to reach.
+  std::array<std::array<std::int32_t, kSpellCount>, kMaxTribes> unlock_{};
   std::vector<float> stamps_;
 };
 

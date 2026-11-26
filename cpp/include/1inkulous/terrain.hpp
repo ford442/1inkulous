@@ -4,6 +4,7 @@
 
 #include "1inkulous/nav.hpp"
 #include "1inkulous/state_hash.hpp"
+#include "1inkulous/worldgen.hpp"
 
 // The terrain: the one height per nav node, and the only things allowed to
 // change it.
@@ -79,6 +80,16 @@ class Terrain {
                      double angular_radius,
                      double target,
                      double rate) const;
+
+  // Replaces the whole field with a generated world (see worldgen.hpp), under
+  // the ceiling, and marks every node dirty. What a scenario's procedural
+  // terrain is: a seed and parameters, run once as the world is built. Returns
+  // how many nodes are land, or -1 with no grid.
+  std::int32_t generate(const WorldGenParams& params);
+
+  // Marks every node dirty, for when the heights were written wholesale (a
+  // scenario's own height field, or the editor putting its ground back).
+  void touch_all();
 
   // Height above sea level under a direction, read off the same triangle of
   // the nearest node's fan that walkers stand on. Need not be normalised. Zero

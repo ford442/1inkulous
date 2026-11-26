@@ -159,6 +159,39 @@ int core_terrain_dirty_first(void);
 int core_terrain_dirty_last(void);
 void core_terrain_clear_dirty(void);
 
+// --- worlds ---------------------------------------------------------------
+//
+// A scenario's procedural terrain is generated here, not uploaded: the whole
+// field from a seed and the parameters of inkulous::WorldGenParams (see
+// worldgen.hpp for what each one does), each clamped to its range. Every node
+// is written, under the ceiling, and the whole range marked dirty. Drawn from
+// a generator of its own, so it leaves the match's random state alone.
+// Returns how many nodes are land, or -1 with no grid.
+int core_terrain_generate(int seed,
+                          double land,
+                          int continents,
+                          double continent_size,
+                          double continent_weight,
+                          double frequency,
+                          int octaves,
+                          double persistence,
+                          double lacunarity,
+                          double warp,
+                          double ridges,
+                          double relief,
+                          double peak,
+                          int smoothing);
+
+// Marks every node dirty: after a scenario's own height field (or the
+// editor's) was written into core_nav_heights wholesale.
+void core_terrain_touch_all(void);
+
+// Takes everything off the world but the ground and the clock: every
+// follower, hut, tree, shaman's mana, cast, cooldown and unlock, every
+// tribe's wood, and every AI mind and personality. What the editor rebuilds
+// a world on.
+void core_world_clear(void);
+
 // --- followers ------------------------------------------------------------
 //
 // Ids are dense indices into the instance buffer, so TypeScript can pick a
@@ -318,8 +351,14 @@ int core_tree_order_chop(int id);
 // How far through chopping tree `id` is, 0..1; -1 for a bad id.
 double core_tree_progress(int id);
 // Plants one tree on the walkable node nearest the direction, unless one
-// stands there already. Returns its id, or -1. For tests and scenario setup.
-int core_tree_plant(double x, double y, double z);
+// stands there already: `size` a multiple of the placeholder mesh (0 is 1),
+// `turn` the way it leans, in radians round its node. Returns its id, or -1.
+// For tests, scenarios and the editor.
+int core_tree_plant(double x, double y, double z, double size, double turn);
+// Tree `id`'s size and lean as core_tree_plant takes them, so a scattered
+// forest can be written out and planted back exactly; 0 for a bad id.
+double core_tree_size(int id);
+double core_tree_turn(int id);
 // Wood one tree gives, and the brave-seconds it takes to fell.
 int core_tree_wood(void);
 double core_tree_chop_seconds(void);
@@ -341,8 +380,8 @@ double core_tree_chop_seconds(void);
 // Results, from check and as how a cast ended: 0 ok, 1 no grid, 2 no shaman,
 // 3 out of range, 4 neither end of a bridge near land, 5 the bridge's line is
 // dry already, 6 not enough mana, 7 cooling down, 8 nothing to do, 9 the
-// centre is under water, 10 cancelled, 11 no such spell. Mirrors
-// inkulous::SpellResult.
+// centre is under water, 10 cancelled, 11 no such spell, 12 not unlocked yet.
+// Mirrors inkulous::SpellResult.
 
 // Spawns `tribe`'s shaman on the walkable node nearest the direction. Returns
 // her follower id, or -1 if the tribe already has one or there is no land.
@@ -385,6 +424,16 @@ int core_spell_cast(
     int spell, int tribe, double x, double y, double z, double ox, double oy, double oz);
 // Ends `tribe`'s cast in progress, if any, with nothing spent.
 void core_spell_cancel(int tribe);
+
+// Spell progression. Every spell starts unlocked; `at` 0 unlocks it for the
+// tribe now, -1 locks it for the match, and a positive `at` locks it until
+// the tribe's population first reaches that many. A locked spell is refused
+// with 12, by the player's casts and the AI's alike. Ignores a bad tribe or
+// spell.
+void core_spell_set_unlock(int tribe, int spell, int at);
+// The threshold as it stands: 0 unlocked, -1 never, or the population still
+// to reach. -1 for a bad tribe or spell.
+int core_spell_unlock_at(int tribe, int spell);
 
 // The spell `tribe` is casting now, or -1; how far through it is, 0..1; and
 // where it will land: 4 floats, a unit direction and the disc's angular
@@ -433,13 +482,33 @@ void core_ai_disable(int tribe);
 int core_ai_enabled(int tribe);
 // What the tribe's last think did — 0 waited, 1 cast a spell, 2 sent the
 // shaman to the shore to bridge from, 3 built a hut, 4 flattened a pad, 5
-// sent braves to chop, 6 sent a brave to train, 7 sent warriors to attack
-// (mirrors inkulous::AiAction) — how many thinks did something, and how many
-// there have been.
+// sent braves to chop, 6 sent a brave to train, 7 sent warriors to attack, 8
+// sent braves home to breed (mirrors inkulous::AiAction) — how many thinks
+// did something, and how many there have been.
 int core_ai_last_action(int tribe);
 int core_ai_actions(int tribe);
 int core_ai_thinks(int tribe);
 double core_ai_think_seconds(void);
+
+// The weights `tribe`'s AI plays by (inkulous::AiPersonality): seconds
+// between thinks, the huts it stops at, how far round home it builds and
+// forages in world units, the fewest enemies a Swamp or Blast must catch (0
+// never), idle warriors it gathers at home before marching, braves it keeps
+// housed to breed, and whether it bridges (0 or 1). Each is clamped. Kept
+// across core_ai_enable; core_world_clear puts the defaults back. Returns 1,
+// or 0 for a bad tribe.
+int core_ai_configure(int tribe,
+                      double think_seconds,
+                      int hut_cap,
+                      double build_reach,
+                      double forage_reach,
+                      int patch,
+                      int muster,
+                      int settle,
+                      int bridges);
+// One weight as the AI holds it, in the order core_ai_configure takes them
+// (0 think_seconds .. 7 bridges); 0 for a bad tribe or field.
+double core_ai_personality(int tribe, int field);
 
 #ifdef __cplusplus
 }  // extern "C"

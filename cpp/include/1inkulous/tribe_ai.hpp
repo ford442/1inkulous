@@ -28,9 +28,19 @@
 //   2. the wood allows a hut and the village has fewer than kAiHutCap:
 //      place one on level ground near home, or, with none level, have the
 //      shaman Flatten a pad for it (the hut goes up on a later think)
-//   3. braves are idle and a tree is near: send them to chop
-//   4. a training hut has room and the wood allows: send a brave in
-//   5. warriors are idle: send them at the enemy shaman
+//   3. fewer braves are housed than the tribe means to keep breeding, and
+//      a dwelling has room: send idle braves in (a personality's `settle`)
+//   4. braves are idle and a tree is near: send them to chop
+//   5. a training hut has room and the wood allows: send a brave in
+//   6. warriors are idle: send them at the enemy shaman — those at home
+//      once there are `muster` of them, those already out at once
+//
+// How it weighs all that is a personality (AiPersonality): how often it
+// thinks, how many huts it wants, how far it looks, how big a crowd a spell
+// must catch, how many warriors it gathers before marching, how many braves
+// it keeps at home breeding, and whether it bridges. The defaults are the AI
+// as it always played; a scenario hands each tribe its own, which is how a
+// world sets the difficulty.
 //
 // Every one of those goes through the calls the player's clicks reach —
 // Shamans::cast, HutSet::place and order_enter, TreeSet::order_chop,
@@ -51,6 +61,32 @@ constexpr double kAiForageReach = 0.6;
 // Fewest enemies one Swamp or Blast must catch to be worth the mana.
 constexpr std::int32_t kAiPatch = 3;
 
+// The weights a tribe's AI plays by. Data, not code: a scenario names a
+// personality and TypeScript hands its numbers in through core_ai_configure.
+// Every default is the constant above, so an unconfigured tribe plays as the
+// AI always has.
+struct AiPersonality {
+  // Seconds between thinks: lower is quicker to react, and harder.
+  double think_seconds = kAiThinkSeconds;
+  // Huts of either kind it stops building at.
+  std::int32_t hut_cap = kAiHutCap;
+  // World units round home it builds within, and forages within.
+  double build_reach = kAiBuildReach;
+  double forage_reach = kAiForageReach;
+  // Fewest enemies a Swamp or Blast must catch; 0 never casts either.
+  std::int32_t patch = kAiPatch;
+  // Idle warriors at home it gathers before sending them; those already out
+  // are always sent on. 1 sends each as soon as he is trained.
+  std::int32_t muster = 1;
+  // Braves it keeps inside its dwellings to breed. 0 keeps none.
+  std::int32_t settle = 0;
+  // Whether it raises Land Bridges for its warriors.
+  bool bridges = true;
+};
+
+// The personality as the AI uses it: each field clamped to a sensible range.
+AiPersonality sanitized(const AiPersonality& personality);
+
 // What a think did. Values cross the ABI as ints.
 enum class AiAction : std::int32_t {
   // Nothing applied: she waits.
@@ -69,6 +105,8 @@ enum class AiAction : std::int32_t {
   kTrain = 6,
   // Warriors were sent at the enemy shaman.
   kAttack = 7,
+  // Braves were sent into a dwelling to breed.
+  kSettle = 8,
 };
 
 class TribeAi {
@@ -94,6 +132,11 @@ class TribeAi {
   bool enable(std::int32_t tribe);
   void disable(std::int32_t tribe);
   bool enabled(std::int32_t tribe) const;
+
+  // The weights `tribe` plays by, kept across enable() and disable() and put
+  // back to the defaults by clear(). False for a bad tribe.
+  bool configure(std::int32_t tribe, const AiPersonality& personality);
+  const AiPersonality& personality(std::int32_t tribe) const;
 
   // What the tribe's last think did, and how many thinks have done
   // something. kWait and 0 before the first.
@@ -134,8 +177,13 @@ class TribeAi {
   bool try_patch_spell(std::int32_t tribe);
   AiAction try_build(std::int32_t tribe, Mind& mind);
   bool try_chop(std::int32_t tribe, const Mind& mind);
+  // People of `tribe` inside its dwellings, and the dwelling with the most
+  // room left (-1 if none has any).
+  std::int32_t housed(std::int32_t tribe) const;
+  std::int32_t open_dwelling(std::int32_t tribe) const;
+  bool try_settle(std::int32_t tribe);
   bool try_train(std::int32_t tribe);
-  bool try_attack(std::int32_t tribe);
+  bool try_attack(std::int32_t tribe, const Mind& mind);
 
   // Braves of `tribe` with nothing to do: not walking, not bound for a hut
   // or a tree, not the shaman.
@@ -156,6 +204,7 @@ class TribeAi {
   Shamans* shamans_ = nullptr;
   Stockpile* stores_ = nullptr;
   std::array<Mind, kMaxTribes> minds_{};
+  std::array<AiPersonality, kMaxTribes> personalities_{};
 
   // Scratch kept allocated between thinks.
   std::vector<std::uint32_t> reach_stamp_;

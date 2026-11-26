@@ -31,7 +31,10 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { createGame } from '../src/game/game.ts'
-import { ENEMY_TRIBE } from '../src/game/scenario.ts'
+import { openingWorld } from './worlds.ts'
+
+/** The opening world's rival, played by the core. */
+const ENEMY_TRIBE = 1
 import { PLAYER_TRIBE } from '../src/game/shaman.ts'
 import { createSimulationHandle } from '../src/sim/handle.ts'
 import {
@@ -92,10 +95,10 @@ async function recordMatch(seed: number, nudge = 0): Promise<Recorded> {
   const core = await createSimulation()
   const handle = createSimulationHandle(core)
   const sim = handle.simulation
-  const game = createGame(sim, { seed })
+  const game = createGame(sim, { scenario: openingWorld(), seed })
   sim.enableAi(PLAYER_TRIBE)
   const home = game.match.playerHome ?? [0, 0, 1]
-  const enemyHome = game.match.enemyHome ?? [0, 0, -1]
+  const enemyHome = game.match.tribes.find((tribe) => tribe.tribe === ENEMY_TRIBE)?.home ?? [0, 0, -1]
 
   // Step → what the player does then.
   const plan = new Map<number, () => void>([

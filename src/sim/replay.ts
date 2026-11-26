@@ -1,3 +1,4 @@
+import { fromBase64, toBase64 } from './base64'
 import { applyCommand, type Command, type CommandOp } from './protocol'
 import type { Simulation } from './simulation'
 
@@ -28,7 +29,7 @@ export type Checkpoint = { readonly step: number; readonly hash: number }
 
 export type Replay = {
   readonly format: typeof REPLAY_FORMAT
-  /** The core that recorded it, e.g. "0.11.0". Another core may well disagree. */
+  /** The core that recorded it, e.g. "0.12.0". Another core may well disagree. */
   readonly coreVersion: string
   /** What the match was seeded with; the seeding itself is in `commands`. */
   readonly seed: number
@@ -176,23 +177,4 @@ export function decodeReplay(text: string): Replay {
     }
     return value
   }) as Replay
-}
-
-function toBase64(array: Float32Array | Int32Array): string {
-  const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength)
-  let binary = ''
-  // In chunks: spreading a whole graph into one call overflows the stack.
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  }
-  return btoa(binary)
-}
-
-function fromBase64(text: string): ArrayBuffer {
-  const binary = atob(text)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return bytes.buffer
 }

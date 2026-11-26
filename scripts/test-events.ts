@@ -15,6 +15,7 @@
  * Run: npm run test:events   (after npm run build:wasm)
  */
 import { createGame, type Game } from '../src/game/game.ts'
+import { openingWorld } from './worlds.ts'
 import type { GameEvent } from '../src/game/gameEvents.ts'
 import type { InputSnapshot } from '../src/input/input.ts'
 import { createSimulationHandle } from '../src/sim/handle.ts'
@@ -66,7 +67,7 @@ async function scenarios(onWorker: boolean) {
 
   const core = await createSimulation()
   const handle = createSimulationHandle(core)
-  const game: Game = createGame(handle.simulation, { seed: 1 })
+  const game: Game = createGame(handle.simulation, { scenario: openingWorld(), seed: 1 })
   const channel = new MessageChannel()
   let worker: WorkerSimulation | null = null
   if (onWorker) {
@@ -204,6 +205,9 @@ async function scenarios(onWorker: boolean) {
   // --- a spell ------------------------------------------------------------------------------------------
   {
     await sim.setMana(tribe, sim.manaMax)
+    // The opening world holds Blast back until the tribe has grown; this is
+    // about how a cast sounds, not when it may be cast.
+    await sim.setSpellUnlock(tribe, Spell.blast, 0)
     const shamanId = sim.shamanId(tribe)
     const data = sim.followerInstances()
     const b = shamanId * sim.followerInstanceFloats

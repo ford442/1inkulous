@@ -148,6 +148,23 @@ NodeRange Terrain::flatten_impl(const double centre[3],
   });
 }
 
+std::int32_t Terrain::generate(const WorldGenParams& params) {
+  if (grid_ == nullptr || !grid_->ready()) {
+    return -1;
+  }
+  const std::int32_t land = generate_terrain(*grid_, max_height_, params);
+  touch_all();
+  return land;
+}
+
+void Terrain::touch_all() {
+  if (grid_ == nullptr || grid_->node_count() <= 0) {
+    return;
+  }
+  dirty_.include(0);
+  dirty_.include(grid_->node_count() - 1);
+}
+
 double Terrain::height_at(const double dir[3]) const {
   if (grid_ == nullptr || !grid_->ready()) {
     return 0.0;

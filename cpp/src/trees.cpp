@@ -51,6 +51,19 @@ void rotate_along(const double from[3], const double tangent[3], double angle, d
   normalize3(out);
 }
 
+// The unit lean `turn` radians round the tangent basis at unit `dir`. One
+// rule for a scattered tree and a planted one, so the two agree bit for bit.
+void lean(const double dir[3], double turn, double out[3]) {
+  double e1[3];
+  double e2[3];
+  tangent_basis(dir, e1, e2);
+  const double c = std::cos(turn);
+  const double s = std::sin(turn);
+  for (int k = 0; k < 3; ++k) {
+    out[k] = e1[k] * c + e2[k] * s;
+  }
+}
+
 // Unit tangent at `from` towards `to`; false when they coincide.
 bool tangent_towards(const double from[3], const double to[3], double out[3]) {
   const double along = dot3(to, from);
@@ -114,13 +127,8 @@ std::int32_t TreeSet::spawn(std::int32_t how_many, MatchRandom& random) {
     tree.dir[1] = d[1];
     tree.dir[2] = d[2];
     normalize3(tree.dir);
-    double e1[3];
-    double e2[3];
-    tangent_basis(tree.dir, e1, e2);
-    const double turn = random.unit() * 6.283185307179586;
-    for (int k = 0; k < 3; ++k) {
-      tree.heading[k] = e1[k] * std::cos(turn) + e2[k] * std::sin(turn);
-    }
+    tree.turn = random.unit() * 6.283185307179586;
+    lean(tree.dir, tree.turn, tree.heading);
     tree.size = 0.8 + 0.4 * random.unit();
     trees_.push_back(tree);
   }
@@ -129,7 +137,7 @@ std::int32_t TreeSet::spawn(std::int32_t how_many, MatchRandom& random) {
   return count();
 }
 
-std::int32_t TreeSet::plant(double x, double y, double z) {
+std::int32_t TreeSet::plant(double x, double y, double z, double size, double turn) {
   if (grid_ == nullptr || !grid_->ready() || count() >= kMaxTrees) {
     return -1;
   }
@@ -149,11 +157,20 @@ std::int32_t TreeSet::plant(double x, double y, double z) {
   tree.dir[1] = d[1];
   tree.dir[2] = d[2];
   normalize3(tree.dir);
-  double side[3];
-  tangent_basis(tree.dir, tree.heading, side);
+  tree.size = std::isfinite(size) && size > 0.0 ? size : 1.0;
+  tree.turn = std::isfinite(turn) ? turn : 0.0;
+  lean(tree.dir, tree.turn, tree.heading);
   trees_.push_back(tree);
   refresh_instances();
   return count() - 1;
+}
+
+double TreeSet::size(std::int32_t id) const {
+  return id >= 0 && id < count() ? trees_[static_cast<std::size_t>(id)].size : 0.0;
+}
+
+double TreeSet::turn(std::int32_t id) const {
+  return id >= 0 && id < count() ? trees_[static_cast<std::size_t>(id)].turn : 0.0;
 }
 
 void TreeSet::clear() {

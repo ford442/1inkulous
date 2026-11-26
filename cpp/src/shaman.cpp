@@ -274,6 +274,9 @@ SpellResult Shamans::check(Spell spell, std::int32_t tribe, const SpellTarget& t
   if (shaman < 0) {
     return SpellResult::kNoShaman;
   }
+  if (!unlocked(tribe, spell)) {
+    return SpellResult::kLocked;
+  }
   const double* at = followers_->direction(shaman);
   SpellTarget resolved;
   if (!resolve(spell, at, target, resolved)) {
@@ -453,8 +456,33 @@ void Shamans::count_population() {
   }
 }
 
+void Shamans::set_unlock(std::int32_t tribe, Spell spell, std::int32_t at) {
+  const auto index = static_cast<std::int32_t>(spell);
+  if (!valid_tribe(tribe) || !valid_spell(index)) {
+    return;
+  }
+  unlock_[static_cast<std::size_t>(tribe)][static_cast<std::size_t>(index)] =
+      at < 0 ? kSpellNever : at;
+}
+
+std::int32_t Shamans::unlock_at(std::int32_t tribe, Spell spell) const {
+  const auto index = static_cast<std::int32_t>(spell);
+  if (!valid_tribe(tribe) || !valid_spell(index)) {
+    return kSpellNever;
+  }
+  return unlock_[static_cast<std::size_t>(tribe)][static_cast<std::size_t>(index)];
+}
+
 void Shamans::step(double dt_seconds) {
   count_population();
+  // A tribe that has grown to a spell's threshold has it from now on.
+  for (std::size_t tribe = 0; tribe < unlock_.size(); ++tribe) {
+    for (std::int32_t& at : unlock_[tribe]) {
+      if (at > 0 && population_[tribe] >= at) {
+        at = 0;
+      }
+    }
+  }
   for (std::size_t tribe = 0; tribe < mana_.size(); ++tribe) {
     mana_[tribe] =
         std::min(kMaxMana, mana_[tribe] + population_[tribe] * kManaPerPersonSecond * dt_seconds);
@@ -516,6 +544,9 @@ void Shamans::clear() {
   ends_.fill(CastEnd{});
   for (auto& waits : cooldowns_) {
     waits.fill(0.0);
+  }
+  for (auto& thresholds : unlock_) {
+    thresholds.fill(0);
   }
   stamps_.clear();
 }

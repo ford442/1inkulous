@@ -9,7 +9,8 @@
  * pay and left alone when it cannot. Then Swamp on a crowd of enemies, and
  * not on one with her own people in it. Then the ending: a shaman cut down
  * by a warrior, her people deaf to orders, the AI stopped and the HUD saying
- * who fell. Last, the match the game opens on: two shamans, one planet.
+ * who fell. Last, the world the game opens on (the campaign's first): two
+ * shamans, one planet.
  *
  * Run: npm run test:ai   (after npm run build:wasm)
  */
@@ -17,13 +18,17 @@ import { createPlanetMesh } from '../src/engine/mesh/cubeSphere.ts'
 import type { Vec3 } from '../src/engine/math.ts'
 import { createGame } from '../src/game/game.ts'
 import { buildNavGraph } from '../src/game/navGraph.ts'
-import { ENEMY_TRIBE, matchOutcome } from '../src/game/scenario.ts'
+import { matchOutcome } from '../src/world/match.ts'
+import { openingWorld } from './worlds.ts'
 import { PLAYER_TRIBE } from '../src/game/shaman.ts'
 import { MAX_WALKABLE_SLOPE } from '../src/game/terrain.ts'
 import { AiAction } from '../src/sim/ai.ts'
 import { HutKind, Role, Spell, SpellResult, createSimulation, type Simulation } from '../src/sim/simulation.ts'
 import { roleOfFlags } from '../src/sim/role.ts'
-import { enemyLine, matchBanner } from '../src/ui/hud.ts'
+import { matchBanner, opponentLine, type MatchReadout } from '../src/ui/hud.ts'
+
+/** The tribe the core plays against the player in these checks: red. */
+const ENEMY_TRIBE = 1
 
 const failures: string[] = []
 
@@ -335,17 +340,19 @@ async function islandMatch() {
   seconds(core, 3 * core.aiThinkSeconds)
   check('core: nor does her AI think again', core.aiThinks(ENEMY_TRIBE) === thinks)
 
-  const readout = {
+  const readout: MatchReadout = {
     playerTribe: PLAYER_TRIBE,
     outcome: matchOutcome(core, PLAYER_TRIBE),
-    enemy: {
+    objective: 'Defeat every rival shaman',
+    opponents: [{
       tribe: ENEMY_TRIBE, name: 'Red', shamanStanding: false, population: 3, mana: 10, income: 3, wood: 0,
-      action: core.aiLastAction(ENEMY_TRIBE),
-    },
+      action: core.aiLastAction(ENEMY_TRIBE), personality: 'steady',
+    }],
   }
   check('HUD: says who fell and who won', matchBanner(readout)?.startsWith("Red's shaman has fallen — you win") === true,
     matchBanner(readout) ?? '')
-  check('HUD: and the enemy line says so too', enemyLine(readout).endsWith('shaman fallen'), enemyLine(readout))
+  check('HUD: and the enemy line says so too', opponentLine(readout.opponents[0]!).endsWith('shaman fallen'),
+    opponentLine(readout.opponents[0]!))
   check('HUD: a loss reads as one', matchBanner({ ...readout, outcome: 'lost' })?.startsWith('Your shaman has fallen') === true)
   check('HUD: and nothing shows while the match is on', matchBanner({ ...readout, outcome: 'playing' }) === null)
 }
@@ -354,14 +361,15 @@ async function islandMatch() {
 
 {
   const simulation = await createSimulation()
-  const game = createGame(simulation)
+  const game = createGame(simulation, { scenario: openingWorld() })
   const { match } = game
+  const enemyHome = match.tribes.find((tribe) => tribe.tribe === ENEMY_TRIBE)?.home ?? null
   check('game: two shamans on one planet', simulation.shamanId(PLAYER_TRIBE) >= 0 &&
     simulation.shamanId(ENEMY_TRIBE) >= 0 && simulation.shamanId(2) < 0 && simulation.shamanId(3) < 0)
-  check('game: the enemy has a village, far round the planet', match.enemyHome !== null &&
-    match.playerHome !== null && angle(match.enemyHome, match.playerHome) >= 1.2 &&
+  check('game: the enemy has a village, far round the planet', enemyHome !== null &&
+    match.playerHome !== null && angle(enemyHome, match.playerHome) >= 1.2 &&
     hutsOf(simulation, ENEMY_TRIBE) === 1 && members(simulation, ENEMY_TRIBE).length > 1,
-    match.enemyHome && match.playerHome ? `${angle(match.enemyHome, match.playerHome).toFixed(2)} rad apart` : '')
+    enemyHome && match.playerHome ? `${angle(enemyHome, match.playerHome).toFixed(2)} rad apart` : '')
   check('game: tribes 2 and 3 are not on it', members(simulation, 2).length === 0 && members(simulation, 3).length === 0)
   check('game: the player opens looking at their own village',
     match.playerHome !== null && angle(game.camera.eye as Vec3, match.playerHome) < 0.05)
@@ -369,8 +377,8 @@ async function islandMatch() {
   const manaBefore = simulation.mana(ENEMY_TRIBE)
   seconds(simulation, 4)
   check('game: whose mana rises with its population', simulation.mana(ENEMY_TRIBE) > manaBefore &&
-    simulation.manaIncome(ENEMY_TRIBE) === simulation.population(ENEMY_TRIBE) && match.enemy.population > 1,
-    enemyLine({ playerTribe: PLAYER_TRIBE, outcome: match.outcome, enemy: match.enemy }))
+    simulation.manaIncome(ENEMY_TRIBE) === simulation.population(ENEMY_TRIBE) && match.opponents[0]!.population > 1,
+    opponentLine(match.opponents[0]!))
   check('game: the HUD counts the player\'s followers, not the enemy\'s',
     game.followers.count === members(simulation, PLAYER_TRIBE).length)
 }

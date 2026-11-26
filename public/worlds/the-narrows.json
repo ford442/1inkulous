@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "id": "the-narrows",
+  "name": "The Narrows",
+  "description": "Across a strait too deep to wade lies the camp of the Cinder Clan. Your shaman can lift the seabed into a road: walk her to the shore and raise a Land Bridge for your warriors to cross. The Clan's shaman knows the same trick, so watch your own beaches.",
+  "author": "1inkulous",
+  "seed": 2,
+  "planet": {
+    "resolution": 24,
+    "terrain": { "kind": "generated", "seed": 16, "land": 0.42, "continents": 2, "continentSize": 0.75, "continentWeight": 0.7 }
+  },
+  "trees": { "scatter": 140, "groves": 4 },
+  "tribes": [
+    { "tribe": 0, "name": "Kindred", "control": "player", "braves": 18 },
+    {
+      "tribe": 1,
+      "name": "Cinder Clan",
+      "control": "ai",
+      "ai": "steady",
+      "braves": 10,
+      "huts": [{ "kind": "dwelling" }, { "kind": "training" }],
+      "wood": 5
+    }
+  ],
+  "rules": {
+    "victory": [{ "kind": "conquest" }],
+    "spells": { "swamp": "never" },
+    "placement": { "separate": true, "apart": 0.5 }
+  }
+}

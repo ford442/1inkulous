@@ -10,6 +10,7 @@
  */
 import type { Vec3 } from '../src/engine/math.ts'
 import { createGame } from '../src/game/game.ts'
+import { openingWorld } from './worlds.ts'
 import type { InputSnapshot, PointerSnapshot } from '../src/input/input.ts'
 import { createSimulationHandle } from '../src/sim/handle.ts'
 import { serveCore, type HostPort } from '../src/sim/host.ts'
@@ -53,7 +54,7 @@ async function run(shared: boolean) {
 
   const core = await createSimulation()
   const handle = createSimulationHandle(core)
-  const game = createGame(handle.simulation)
+  const game = createGame(handle.simulation, { scenario: openingWorld() })
   check(`${label}: setup was recorded`, handle.log.some((c) => c.op === 'uploadNavGraph') &&
     handle.log.some((c) => c.op === 'spawnShaman'), `${handle.log.length} commands`)
 
@@ -226,7 +227,7 @@ async function rejectsAMismatch() {
   console.log('\n--- a replay that does not match')
   const core = await createSimulation()
   const handle = createSimulationHandle(core)
-  createGame(handle.simulation)
+  createGame(handle.simulation, { scenario: openingWorld() })
   const channel = new MessageChannel()
   serveCore(channel.port2 as unknown as HostPort)
   // Drop the last command: the worker builds a different world.

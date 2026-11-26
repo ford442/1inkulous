@@ -314,6 +314,11 @@ export function createInput(canvas: HTMLCanvasElement): Input {
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
+    // Typing into a form (the editor's panel, a world's name) is not playing.
+    const target = event.target as { tagName?: string; isContentEditable?: boolean } | null
+    if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName ?? ''))) {
+      return
+    }
     keys.add(event.code)
     pressed.add(event.code)
     // Remember it for the open drag even if the key is up again before release.

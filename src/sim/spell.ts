@@ -33,5 +33,10 @@ export const SpellResult = {
   /** Only as how a cast ended: another order or another cast cut it short. */
   cancelled: 10,
   unknownSpell: 11,
+  /** The tribe has not unlocked it yet (see `setSpellUnlock`). */
+  locked: 12,
 } as const
+
+/** An unlock threshold for a spell a tribe never gets this match. */
+export const SPELL_NEVER = -1
 export type SpellResult = (typeof SpellResult)[keyof typeof SpellResult]

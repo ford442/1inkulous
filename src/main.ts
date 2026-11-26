@@ -9,15 +9,83 @@ import { listenerPoseFromView } from './audio/spatial'
 import { createRenderer } from './engine/renderer'
 import { deviceLossMessage, WebGpuUnavailableError, withheldFeatures } from './engine/webgpu'
 import { FOLLOWER_HEIGHT_FRACTION, FOLLOWER_RADIUS_FRACTION } from './game/followers'
-import { createGame, DEFAULT_MATCH_SEED } from './game/game'
-import { createHud, showFatal } from './ui/hud'
+import { createGame, type Game } from './game/game'
+import { createHud, matchBanner, showFatal, type Hud } from './ui/hud'
 import { createStartupProgress } from './ui/loading'
+import { createMenu, type Menu } from './ui/menu'
 import { createInput } from './input/input'
 import { createSimulationHandle, type SimulationHandle } from './sim/handle'
 import { encodeReplay } from './sim/replay'
 import { createSimulation, type SimulationClient } from './sim/simulation'
 import type { WorkerSimulation } from './sim/workerClient'
+import {
+  fetchCatalog,
+  fetchWorld,
+  loadDraft,
+  loadProgress,
+  nextWorld,
+  recordWin,
+  saveDraft,
+  standings,
+  worldAfter,
+  type Catalog,
+  type Progress,
+} from './world/campaign'
+import { stringifyScenario } from './world/format'
+import { readScenario, type Scenario } from './world/schema'
+import { skirmishWorld } from './world/skirmish'
 import { CANVAS_ASPECT } from './viewport'
+
+/** How long a world's briefing stays under its title once the match is on. */
+const BRIEFING_MS = 30_000
+
+/** Where a world came from, which decides what the end of its match offers. */
+type WorldChoice = {
+  readonly scenario: Scenario
+  /** Its campaign id when it is one of the campaign's worlds. */
+  readonly campaignId: string | null
+  /** The editor's play-test: the end of the match offers the way back. */
+  readonly fromEditor: boolean
+}
+
+/**
+ * The world this page plays: `?draft` the editor's play-test, `?random=<seed>`
+ * a world drawn from a seed, `?world=<id>` a shipped world, and with none of
+ * them the campaign's next world.
+ */
+async function chooseWorld(params: URLSearchParams, catalog: Catalog | null, progress: Progress): Promise<WorldChoice> {
+  if (params.has('draft')) {
+    const draft = loadDraft()
+    if (draft) {
+      return { scenario: draft, campaignId: null, fromEditor: true }
+    }
+    console.warn('[world] no draft from the editor in this tab; playing the campaign instead')
+  }
+  const random = params.get('random')
+  if (random !== null) {
+    const seed = Number(random)
+    return { scenario: skirmishWorld(Number.isInteger(seed) ? seed : 1), campaignId: null, fromEditor: false }
+  }
+  const id = params.get('world') ?? (catalog ? nextWorld(catalog, progress) : null)
+  if (id === null) {
+    throw new Error('There is no world to play: worlds/index.json could not be read.')
+  }
+  const inCampaign = catalog?.campaign.worlds.some((world) => world.id === id) ?? false
+  return { scenario: await fetchWorld(id), campaignId: inCampaign ? id : null, fromEditor: false }
+}
+
+/** Goes to another world: a navigation, because a page builds one world. */
+function goTo(query: Record<string, string>) {
+  const params = new URLSearchParams(query)
+  // Kept across worlds: how the page is being run, not what it plays.
+  for (const keep of ['core', 'features', 'normals']) {
+    const value = new URLSearchParams(location.search).get(keep)
+    if (value !== null) {
+      params.set(keep, value)
+    }
+  }
+  location.search = params.toString()
+}
 
 async function main() {
   const found = document.querySelector<HTMLCanvasElement>('#game-canvas')
@@ -55,21 +123,31 @@ async function main() {
   hud.setStatus(`core ${simulation.version} loaded — building the world…`)
   startup.stage(1, 'Building the world')
 
+  // The world: a scenario file, from the campaign, the URL or the editor.
+  const params = new URLSearchParams(location.search)
+  const catalog = await fetchCatalog().catch((error: unknown) => {
+    console.warn('[world] the world catalogue would not load', error)
+    return null
+  })
+  let progress: Progress = catalog ? loadProgress(catalog) : { won: [] }
+  const choice = await chooseWorld(params, catalog, progress)
+  const editing = params.has('editor')
   // `?seed=` replays a match's start; with its replay, the whole of it.
   const seed = matchSeedFromUrl()
-  console.info(`[core] match seed ${seed}`)
-  const game = createGame(simulation, { seed })
+  const scenario = seed === null ? choice.scenario : { ...choice.scenario, seed }
+  console.info(`[world] ${scenario.name} (${scenario.id}), match seed ${scenario.seed}`)
+  const game = createGame(simulation, { scenario, mode: editing ? 'edit' : 'play' })
   exposeReplay(handle)
-  const worker = await moveCoreToWorker(handle)
+  // The editor keeps the core here: it reads the world back synchronously,
+  // and nothing runs on the clock while a world is being made.
+  const worker = editing ? null : await moveCoreToWorker(handle)
   const live: SimulationClient = handle.current
   hud.setStatus(
     worker
       ? `core ${simulation.version} on a worker (${worker.transport} snapshots)`
       : `core ${simulation.version} on the main thread`,
   )
-  hud.setStatus(
-    `core ${simulation.version} · ${game.followers.count} followers against ${game.match.enemy.name} — starting renderer…`,
-  )
+  hud.setStatus(`core ${simulation.version} · ${scenario.name} — starting renderer…`)
 
   startup.stage(2, 'Loading assets', assets.progress.fraction)
   const stopWatching = assets.onProgress((progress) =>
@@ -90,13 +168,40 @@ async function main() {
   // `?features=none` (or `-timestamp-query,-shader-f16`) runs the paths an
   // adapter without them would take; `?normals=cpu` keeps sculpted normals on
   // the CPU, for comparing the two.
-  const params = new URLSearchParams(location.search)
   const renderer = await createRenderer(canvas, game, {
     withholdFeatures: withheldFeatures(params.get('features')),
     gpuNormals: params.get('normals') !== 'cpu',
     ...(followerMesh ? { followerMesh } : {}),
   })
   startup.finish()
+
+  // The editor, loaded only when it is asked for: a play-through never
+  // downloads it.
+  const editor = editing
+    ? (await import('./editor/editor')).createEditor({ game, simulation: handle.simulation, hud, goTo })
+    : null
+  const menu = createMenu()
+  let paused = false
+  const setPaused = (next: boolean) => {
+    if (next !== paused) {
+      paused = next
+      if (worker) {
+        if (paused) worker.pause()
+        else worker.resume()
+      }
+    }
+  }
+  const openMenu = () => {
+    setPaused(true)
+    showWorldMenu(menu, catalog, progress, scenario, {
+      close: () => {
+        menu.hide()
+        setPaused(false)
+      },
+    })
+  }
+  hud.bindMenu(openMenu)
+  let ended = false
 
   // Sound. It stays locked until the first click or key (browsers insist), and
   // plays synthesised voices unless a recorded sample is present and decoded.
@@ -159,13 +264,28 @@ async function main() {
       // Simulation first. In-process, the C++ core consumes whole fixed steps
       // here; on a worker it keeps its own clock, and this only swaps in the
       // latest step it finished. Rendering then draws whatever that left behind.
+      // A world in the editor, or behind the menu, stands still.
       let mark = performance.now()
-      live.tick(deltaMs)
+      if (!editor && !paused) {
+        live.tick(deltaMs)
+      }
       const tickMs = performance.now() - mark
 
       mark = performance.now()
       const snapshot = input.snapshot()
-      game.update(deltaMs, snapshot, CANVAS_ASPECT)
+      if (snapshot.pressed.has('KeyP') && !editor) {
+        if (menu.open) {
+          menu.hide()
+          setPaused(false)
+        } else {
+          openMenu()
+        }
+      }
+      if (editor) {
+        editor.update(deltaMs, snapshot, CANVAS_ASPECT)
+      } else if (!paused) {
+        game.update(deltaMs, snapshot, CANVAS_ASPECT)
+      }
       const gameMs = performance.now() - mark
 
       // Sound follows the camera and what the world just did.
@@ -221,6 +341,18 @@ async function main() {
       hud.setTrees(game.trees)
       hud.setSelectionBand(game.followers.selectionBand)
       hud.setMatch(game.match)
+      hud.setWorld({
+        name: scenario.name,
+        objective: editor ? 'editing' : game.match.objective,
+        chapter: choice.campaignId && catalog ? chapterOf(catalog, choice.campaignId) : null,
+        elapsedSeconds: live.elapsedMs / 1000,
+        // For the first half minute, and while the world is being made.
+        briefing: editor || live.elapsedMs < BRIEFING_MS ? (scenario.description ?? null) : null,
+      })
+      if (!editor && !ended && game.match.outcome !== 'playing') {
+        ended = true
+        progress = endMatch(menu, game, hud, { catalog, progress, choice, scenario })
+      }
 
       input.endFrame()
     } catch (error) {
@@ -234,10 +366,98 @@ async function main() {
   frameHandle = requestAnimationFrame(frame)
 }
 
-function matchSeedFromUrl(): number {
+/** `?seed=`, overriding the world's own match seed; null when not given. */
+function matchSeedFromUrl(): number | null {
   const param = new URLSearchParams(location.search).get('seed')
   const seed = param === null ? NaN : Number(param)
-  return Number.isInteger(seed) ? seed >>> 0 : DEFAULT_MATCH_SEED
+  return Number.isInteger(seed) ? seed >>> 0 : null
+}
+
+function chapterOf(catalog: Catalog, id: string): string | null {
+  const at = catalog.campaign.worlds.findIndex((world) => world.id === id)
+  return at < 0 ? null : `${catalog.campaign.name} ${at + 1}/${catalog.campaign.worlds.length}`
+}
+
+/** The world menu: the campaign as far as it is open, a random world, a file, the editor. */
+function showWorldMenu(
+  menu: Menu,
+  catalog: Catalog | null,
+  progress: Progress,
+  current: Scenario,
+  actions: { close: () => void },
+) {
+  menu.showWorlds(
+    {
+      campaign: catalog?.campaign.name ?? 'Worlds',
+      worlds: catalog
+        ? standings(catalog, progress).map((world) => ({ ...world, name: worldName(world.id) }))
+        : [],
+      current: current.id,
+    },
+    {
+      play: (id) => goTo({ world: id }),
+      // A seed from the clock is fine here: it only picks which world to
+      // build, and the world it names is then the same everywhere.
+      random: () => goTo({ random: String(Date.now() % 1_000_000) }),
+      editor: () => {
+        saveDraft(stringifyScenario(current))
+        goTo({ editor: '', draft: '' })
+      },
+      open: (file) => {
+        void file.text().then((text) => {
+          try {
+            saveDraft(stringifyScenario(readScenario(text, file.name)))
+            goTo({ draft: '' })
+          } catch (error) {
+            alert(String(error instanceof Error ? error.message : error))
+          }
+        })
+      },
+      close: actions.close,
+    },
+  )
+}
+
+/** A campaign id as a title until its file is read: "the-narrows" is "The Narrows". */
+function worldName(id: string): string {
+  return id.split('-').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+}
+
+/** The match has ended: keep a campaign win and offer what comes next. */
+function endMatch(
+  menu: Menu,
+  game: Game,
+  hud: Hud,
+  context: { catalog: Catalog | null; progress: Progress; choice: WorldChoice; scenario: Scenario },
+): Progress {
+  const { catalog, choice, scenario } = context
+  const outcome = game.match.outcome
+  if (outcome === 'playing') {
+    return context.progress
+  }
+  let progress = context.progress
+  const won = outcome === 'won'
+  if (won && catalog && choice.campaignId) {
+    progress = recordWin(catalog, progress, choice.campaignId)
+  }
+  const nextId = won && catalog && choice.campaignId ? worldAfter(catalog, choice.campaignId) : null
+  hud.setStatus(`${scenario.name}: ${outcome}`)
+  menu.showEnd(
+    {
+      outcome,
+      world: scenario.name,
+      banner: matchBanner(game.match) ?? '',
+      next: nextId ? { id: nextId, name: worldName(nextId) } : null,
+      fromEditor: choice.fromEditor,
+    },
+    {
+      next: (id) => goTo({ world: id }),
+      again: () => location.reload(),
+      menu: () => showWorldMenu(menu, catalog, progress, scenario, { close: () => menu.hide() }),
+      editor: () => goTo({ editor: '', draft: '' }),
+    },
+  )
+  return progress
 }
 
 /**

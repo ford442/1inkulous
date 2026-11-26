@@ -34,21 +34,46 @@ void node_dir(const NavGrid& grid, std::int32_t node, double out[3]) {
   normalize3(out);
 }
 
-// The point `distance` radians from unit `from` along the great circle
-// towards `toward`. False if the two are the same point or antipodes.
-bool step_towards(const double from[3], const double toward[3], double distance, double out[3]) {
-  const double d = dot3(from, toward);
-  double t[3] = {toward[0] - from[0] * d, toward[1] - from[1] * d, toward[2] - from[2] * d};
-  if (!normalize3(t)) {
-    return false;
+double clamp(double value, double low, double high, double fallback) {
+  if (!std::isfinite(value)) {
+    return fallback;
   }
-  for (int k = 0; k < 3; ++k) {
-    out[k] = from[k] * std::cos(distance) + t[k] * std::sin(distance);
-  }
-  return normalize3(out);
+  return value < low ? low : value > high ? high : value;
+}
+
+std::int32_t clamp_int(std::int32_t value, std::int32_t low, std::int32_t high) {
+  return value < low ? low : value > high ? high : value;
 }
 
 }  // namespace
+
+AiPersonality sanitized(const AiPersonality& in) {
+  const AiPersonality defaults;
+  AiPersonality out = in;
+  // A tenth of a second is two steps: quicker than that is not thinking, it
+  // is twitching.
+  out.think_seconds = clamp(in.think_seconds, 0.1, 30.0, defaults.think_seconds);
+  out.hut_cap = clamp_int(in.hut_cap, 0, kMaxHuts);
+  out.build_reach = clamp(in.build_reach, 0.05, 2.0, defaults.build_reach);
+  out.forage_reach = clamp(in.forage_reach, 0.05, 3.0, defaults.forage_reach);
+  out.patch = clamp_int(in.patch, 0, kMaxFollowers);
+  out.muster = clamp_int(in.muster, 1, kMaxFollowers);
+  out.settle = clamp_int(in.settle, 0, kMaxFollowers);
+  return out;
+}
+
+bool TribeAi::configure(std::int32_t tribe, const AiPersonality& personality) {
+  if (!valid_tribe(tribe)) {
+    return false;
+  }
+  personalities_[static_cast<std::size_t>(tribe)] = sanitized(personality);
+  return true;
+}
+
+const AiPersonality& TribeAi::personality(std::int32_t tribe) const {
+  static const AiPersonality kDefault;
+  return valid_tribe(tribe) ? personalities_[static_cast<std::size_t>(tribe)] : kDefault;
+}
 
 bool TribeAi::enable(std::int32_t tribe) {
   if (!valid_tribe(tribe) || followers_ == nullptr || huts_ == nullptr) {
@@ -70,6 +95,7 @@ bool TribeAi::enable(std::int32_t tribe) {
   }
   mind = Mind{};
   mind.on = true;
+  mind.wait = personality(tribe).think_seconds;
   mind.home[0] = home[0];
   mind.home[1] = home[1];
   mind.home[2] = home[2];
@@ -99,7 +125,10 @@ std::int32_t TribeAi::thinks(std::int32_t tribe) const {
   return valid_tribe(tribe) ? minds_[static_cast<std::size_t>(tribe)].thinks : 0;
 }
 
-void TribeAi::clear() { minds_.fill(Mind{}); }
+void TribeAi::clear() {
+  minds_.fill(Mind{});
+  personalities_.fill(AiPersonality{});
+}
 
 void TribeAi::step(double dt_seconds) {
   if (grid_ == nullptr || !grid_->ready() || shamans_ == nullptr || shamans_->match_over()) {
@@ -114,7 +143,7 @@ void TribeAi::step(double dt_seconds) {
     if (mind.wait > 1e-9) {
       continue;
     }
-    mind.wait += kAiThinkSeconds;
+    mind.wait += personality(tribe).think_seconds;
     mind.thinks += 1;
     mind.last = think(tribe, mind);
     if (mind.last != AiAction::kWait) {
@@ -137,13 +166,16 @@ AiAction TribeAi::think(std::int32_t tribe, Mind& mind) {
   if (built != AiAction::kWait) {
     return built;
   }
+  if (try_settle(tribe)) {
+    return AiAction::kSettle;
+  }
   if (try_chop(tribe, mind)) {
     return AiAction::kChop;
   }
   if (try_train(tribe)) {
     return AiAction::kTrain;
   }
-  if (try_attack(tribe)) {
+  if (try_attack(tribe, mind)) {
     return AiAction::kAttack;
   }
   return AiAction::kWait;
@@ -196,7 +228,9 @@ void TribeAi::flood(std::int32_t start) {
     const std::int32_t node = queue_[head];
     for (std::int32_t link = offsets[node]; link < offsets[node + 1]; ++link) {
       const std::int32_t next = neighbors[link];
-      if (reached(next) || !grid_->passable_link(node, link)) {
+      // The step routes take, diagonals and all: a pinched coast a diagonal
+      // could slip across but no walker can is not a way through.
+      if (reached(next) || !grid_->steppable(node, link)) {
         continue;
       }
       reach_stamp_[static_cast<std::size_t>(next)] = reach_generation_;
@@ -206,6 +240,9 @@ void TribeAi::flood(std::int32_t start) {
 }
 
 bool TribeAi::try_bridge(std::int32_t tribe) {
+  if (!personality(tribe).bridges || !shamans_->unlocked(tribe, Spell::kLandBridge)) {
+    return false;
+  }
   // Only for warriors that cannot get there: the first one stands for the
   // group, since they are sent together.
   std::int32_t warrior = -1;
@@ -231,62 +268,55 @@ bool TribeAi::try_bridge(std::int32_t tribe) {
   const double* w = warrior_at;
   flood(grid_->nearest_walkable_node(w[0], w[1], w[2]));
   const double* e = followers_->direction(enemy);
-  if (reached(grid_->nearest_walkable_node(e[0], e[1], e[2]))) {
+  const std::int32_t enemy_node = grid_->nearest_walkable_node(e[0], e[1], e[2]);
+  if (reached(enemy_node)) {
     return false;  // A way round on foot: no gap to bridge.
   }
 
-  // The warriors' shore nearest the enemy is the near end.
-  std::int32_t near = -1;
-  double nearest = 0.0;
+  // The warriors' shore: their landmass's nodes with water next door.
+  const std::int32_t* offsets = grid_->neighbor_offsets();
+  const std::int32_t* neighbors = grid_->neighbors();
+  std::vector<std::int32_t>& shore = ids_;
+  shore.clear();
   for (const std::int32_t node : queue_) {
-    double at[3];
-    node_dir(*grid_, node, at);
-    const double angle = angle_between(at, e);
-    if (near < 0 || angle < nearest) {
-      near = node;
-      nearest = angle;
+    for (std::int32_t link = offsets[node]; link < offsets[node + 1]; ++link) {
+      if (!grid_->dry(neighbors[link])) {
+        shore.push_back(node);
+        break;
+      }
+    }
+  }
+  std::sort(shore.begin(), shore.end());
+
+  // The narrowest crossing from that shore onto the enemy shaman's landmass,
+  // within the spell's reach: the strait, wherever it is, not just the line
+  // straight at her.
+  flood(enemy_node);
+  const double reach = rules.range / grid_->planet_radius();
+  const double cos_reach = std::cos(reach);
+  std::int32_t near = -1;
+  std::int32_t far = -1;
+  double narrowest = -2.0;  // the best crossing's cosine: higher is narrower
+  for (const std::int32_t from_node : shore) {
+    const float* a = grid_->direction(from_node);
+    for (const std::int32_t to_node : queue_) {
+      const float* b = grid_->direction(to_node);
+      const double cosine = (static_cast<double>(a[0]) * b[0] + static_cast<double>(a[1]) * b[1] +
+                             static_cast<double>(a[2]) * b[2]);
+      if (cosine >= cos_reach && cosine > narrowest) {
+        narrowest = cosine;
+        near = from_node;
+        far = to_node;
+      }
     }
   }
   if (near < 0) {
-    return false;
+    return false;  // An ocean, not a strait.
   }
   double from[3];
   node_dir(*grid_, near, from);
-  double toward[3] = {e[0], e[1], e[2]};
-  normalize3(toward);
-
-  // The far end: the first land on the way over that is not the warriors'
-  // own, a couple of samples inland so the end is ashore, and no further
-  // than the spell reaches.
-  const double reach = rules.range / grid_->planet_radius();
-  const double sample = std::max(grid_->min_link_angle() * 0.5, 1e-4);
   double at[3];
-  bool found = false;
-  std::int32_t inland = 0;
-  for (double distance = sample; distance <= reach; distance += sample) {
-    double p[3];
-    if (!step_towards(from, toward, distance, p)) {
-      break;
-    }
-    const std::int32_t node = grid_->nearest_node(p[0], p[1], p[2]);
-    const bool far_land = node >= 0 && grid_->walkable(node) && !reached(node);
-    if (!far_land) {
-      if (found) {
-        break;
-      }
-      continue;
-    }
-    at[0] = p[0];
-    at[1] = p[1];
-    at[2] = p[2];
-    found = true;
-    if (++inland >= 3) {
-      break;
-    }
-  }
-  if (!found) {
-    return false;  // An ocean, not a strait.
-  }
+  node_dir(*grid_, far, at);
 
   SpellTarget target;
   for (int k = 0; k < 3; ++k) {
@@ -312,9 +342,14 @@ bool TribeAi::try_patch_spell(std::int32_t tribe) {
   const double* at = followers_->direction(shaman);
   const double radius = grid_->planet_radius();
 
+  const std::int32_t patch = personality(tribe).patch;
+  if (patch <= 0) {
+    return false;
+  }
   for (const Spell spell : {Spell::kSwamp, Spell::kBlast}) {
     const SpellRules& rules = spell_rules(spell);
-    if (shamans_->mana(tribe) < rules.cost || shamans_->cooldown(tribe, spell) > 0.0) {
+    if (!shamans_->unlocked(tribe, spell) || shamans_->mana(tribe) < rules.cost ||
+        shamans_->cooldown(tribe, spell) > 0.0) {
       continue;
     }
     const double reach = rules.range / radius;
@@ -355,7 +390,7 @@ bool TribeAi::try_patch_spell(std::int32_t tribe) {
         best_count = caught;
       }
     }
-    if (best < 0 || best_count < kAiPatch) {
+    if (best < 0 || best_count < patch) {
       continue;
     }
     SpellTarget target;
@@ -383,7 +418,7 @@ std::int32_t TribeAi::huts_of(std::int32_t tribe, HutKind kind) const {
 AiAction TribeAi::try_build(std::int32_t tribe, Mind& mind) {
   const std::int32_t dwellings = huts_of(tribe, HutKind::kDwelling);
   const std::int32_t training = huts_of(tribe, HutKind::kTraining);
-  if (dwellings + training >= kAiHutCap) {
+  if (dwellings + training >= personality(tribe).hut_cap) {
     mind.pad = -1;
     return AiAction::kWait;
   }
@@ -425,7 +460,7 @@ AiAction TribeAi::try_build(std::int32_t tribe, Mind& mind) {
   }
 
   // Nodes near home, nearest first.
-  const double reach = kAiBuildReach / radius;
+  const double reach = personality(tribe).build_reach / radius;
   ranked_.clear();
   for (std::int32_t node = 0; node < grid_->node_count(); ++node) {
     if (!grid_->walkable(node)) {
@@ -521,7 +556,7 @@ bool TribeAi::try_chop(std::int32_t tribe, const Mind& mind) {
     return false;
   }
 
-  const double reach = kAiForageReach / grid_->planet_radius();
+  const double reach = personality(tribe).forage_reach / grid_->planet_radius();
   ranked_.clear();
   for (std::int32_t t = 0; t < trees_->count(); ++t) {
     const double angle = angle_between(trees_->direction(t), mind.home);
@@ -554,6 +589,57 @@ bool TribeAi::try_chop(std::int32_t tribe, const Mind& mind) {
   return sent > 0;
 }
 
+std::int32_t TribeAi::housed(std::int32_t tribe) const {
+  std::int32_t total = 0;
+  for (std::int32_t h = 0; h < huts_->count(); ++h) {
+    if (huts_->tribe(h) == tribe &&
+        huts_->kind(h) == static_cast<std::int32_t>(HutKind::kDwelling)) {
+      total += huts_->occupants(h) + huts_->incoming(h);
+    }
+  }
+  return total;
+}
+
+std::int32_t TribeAi::open_dwelling(std::int32_t tribe) const {
+  std::int32_t best = -1;
+  std::int32_t room = 0;
+  for (std::int32_t h = 0; h < huts_->count(); ++h) {
+    if (huts_->tribe(h) != tribe ||
+        huts_->kind(h) != static_cast<std::int32_t>(HutKind::kDwelling)) {
+      continue;
+    }
+    const std::int32_t left =
+        HutSet::capacity(HutKind::kDwelling) - huts_->occupants(h) - huts_->incoming(h);
+    if (left > room) {
+      best = h;
+      room = left;
+    }
+  }
+  return best;
+}
+
+bool TribeAi::try_settle(std::int32_t tribe) {
+  const std::int32_t wanted = personality(tribe).settle - housed(tribe);
+  if (wanted <= 0) {
+    return false;
+  }
+  const std::int32_t hut = open_dwelling(tribe);
+  if (hut < 0) {
+    return false;
+  }
+  idle_braves(tribe, ids_);
+  // At least one stays out to chop, or the village would house its last
+  // pair of hands and never build again.
+  if (ids_.size() <= 1) {
+    return false;
+  }
+  ids_.pop_back();
+  if (static_cast<std::int32_t>(ids_.size()) > wanted) {
+    ids_.resize(static_cast<std::size_t>(wanted));
+  }
+  return huts_->order_enter(ids_, hut) > 0;
+}
+
 bool TribeAi::try_train(std::int32_t tribe) {
   const std::int32_t hut = open_training_hut(tribe);
   if (hut < 0 || stores_->wood(tribe) < kWarriorWoodCost) {
@@ -567,13 +653,25 @@ bool TribeAi::try_train(std::int32_t tribe) {
   return huts_->order_enter(ids_, hut) > 0;
 }
 
-bool TribeAi::try_attack(std::int32_t tribe) {
+bool TribeAi::try_attack(std::int32_t tribe, const Mind& mind) {
+  // Idle warriors out in the field are sent on at once; those still at home
+  // wait until there are enough of them to march together.
+  const double home_ground = personality(tribe).forage_reach / grid_->planet_radius();
   ids_.clear();
+  std::vector<std::int32_t>& at_home = queue_;
+  at_home.clear();
   for (std::int32_t f = 0; f < followers_->count(); ++f) {
     if (followers_->tribe(f) == tribe && followers_->role(f) == Role::kWarrior &&
         !followers_->is_walking(f) && followers_->takes_orders(f)) {
-      ids_.push_back(f);
+      if (angle_between(followers_->direction(f), mind.home) <= home_ground) {
+        at_home.push_back(f);
+      } else {
+        ids_.push_back(f);
+      }
     }
+  }
+  if (static_cast<std::int32_t>(at_home.size()) >= personality(tribe).muster) {
+    ids_.insert(ids_.end(), at_home.begin(), at_home.end());
   }
   if (ids_.empty()) {
     return false;

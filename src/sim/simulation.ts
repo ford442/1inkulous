@@ -3,7 +3,7 @@ import createCoreModule, { type CoreModule } from '../wasm/core.js'
 import { HutKind, type HutSite } from './hutSite'
 import type { Spell, SpellResult } from './spell'
 import type { Role } from './role'
-import type { AiAction } from './ai'
+import type { AiAction, AiWeights } from './ai'
 
 /**
  * The JS side of the WASM boundary.
@@ -34,9 +34,48 @@ export type NavCommitOptions = {
 export type NodeRange = { readonly first: number; readonly last: number }
 
 export { HutKind, HutSite } from './hutSite'
-export { Spell, SpellResult, SPELLS } from './spell'
+export { Spell, SpellResult, SPELLS, SPELL_NEVER } from './spell'
 export { Role } from './role'
 export { AiAction } from './ai'
+
+/**
+ * What the core's world generator takes (inkulous::WorldGenParams in
+ * cpp/include/1inkulous/worldgen.hpp, which says what each one does). Every
+ * field but the seed may be left out for the core's default.
+ */
+export type WorldGenParams = {
+  readonly seed: number
+  readonly land?: number
+  readonly continents?: number
+  readonly continentSize?: number
+  readonly continentWeight?: number
+  readonly frequency?: number
+  readonly octaves?: number
+  readonly persistence?: number
+  readonly lacunarity?: number
+  readonly warp?: number
+  readonly ridges?: number
+  readonly relief?: number
+  readonly peak?: number
+  readonly smoothing?: number
+}
+
+/** The core's defaults, field for field. */
+export const DEFAULT_WORLDGEN: Required<Omit<WorldGenParams, 'seed'>> = {
+  land: 0.4,
+  continents: 3,
+  continentSize: 0.8,
+  continentWeight: 0.55,
+  frequency: 1.8,
+  octaves: 5,
+  persistence: 0.5,
+  lacunarity: 2,
+  warp: 0.25,
+  ridges: 0.3,
+  relief: 1.5,
+  peak: 0.9,
+  smoothing: 1,
+}
 
 /** A hut site as the core judged it. */
 export type HutSiteReport = {
@@ -175,6 +214,28 @@ export type Simulation = {
    * when nothing has. What the mesh has to copy back.
    */
   takeTerrainDirty: () => NodeRange | null
+  /**
+   * Replaces the whole ground with a generated world: a seed and parameters,
+   * run in the core. Marks every node dirty. Returns how many nodes are land.
+   */
+  generateTerrain: (params: WorldGenParams) => number
+  /**
+   * Replaces the whole ground with these heights, one per node: a scenario's
+   * own height field, or the editor putting its ground back. Marks every node
+   * dirty.
+   */
+  setTerrainHeights: (heights: Float32Array) => void
+  /**
+   * The walkable node nearest a direction, or -1. What a placement snaps to:
+   * every follower and tree stands on one.
+   */
+  nearestWalkableNode: (direction: Vec3) => number
+  /**
+   * Takes everything off the world but the ground and the clock: followers,
+   * huts, trees, mana, casts, unlocks, wood and the AI. The editor rebuilds a
+   * world on this.
+   */
+  clearWorld: () => void
 
   spawnFollower: (direction: Vec3, tribe: number) => number
   readonly followerCount: number
@@ -258,8 +319,15 @@ export type Simulation = {
   orderChop: (id: number) => number
   /** 0..1 through chopping; -1 for a bad id. */
   treeProgress: (id: number) => number
-  /** Plants one tree on the walkable node nearest a direction. Its id, or -1. For tests and scenarios. */
-  plantTree: (direction: Vec3) => number
+  /**
+   * Plants one tree on the walkable node nearest a direction: `size` a
+   * multiple of the placeholder (default 1), `turn` its lean in radians round
+   * the node (default 0). Its id, or -1. For tests, scenarios and the editor.
+   */
+  plantTree: (direction: Vec3, size?: number, turn?: number) => number
+  /** A tree's size and lean, as `plantTree` takes them; 0 for a bad id. */
+  treeSize: (id: number) => number
+  treeTurn: (id: number) => number
   /** Wood a felled tree gives, and the brave-seconds it takes. */
   readonly woodPerTree: number
   readonly chopSeconds: number
@@ -299,6 +367,15 @@ export type Simulation = {
   lastSpellEnd: (tribe: number) => SpellEnd
   /** The stamps of the last Land Bridge to land, or null if none has. */
   landBridgePlan: () => LandBridgePlan | null
+  /**
+   * Holds a spell back from a tribe: `at` 0 unlocks it now, SPELL_NEVER (-1)
+   * locks it for the match, a positive number locks it until the tribe's
+   * population first reaches that. A locked spell is refused as
+   * `SpellResult.locked`, for the AI as for the player.
+   */
+  setSpellUnlock: (tribe: number, spell: Spell, at: number) => void
+  /** 0 unlocked, SPELL_NEVER, or the population still to reach. */
+  spellUnlockAt: (tribe: number, spell: Spell) => number
 
   /** True once the tribe's shaman has been killed: its people take no more orders. */
   shamanFallen: (tribe: number) => boolean
@@ -321,6 +398,13 @@ export type Simulation = {
   aiActions: (tribe: number) => number
   aiThinks: (tribe: number) => number
   readonly aiThinkSeconds: number
+  /**
+   * The weights a tribe's AI plays by (see src/world/personalities.ts). Kept
+   * across enableAi; clearWorld puts the defaults back. False for a bad tribe.
+   */
+  configureAi: (tribe: number, weights: AiWeights) => boolean
+  /** The weights as the core holds them, clamped. */
+  aiWeights: (tribe: number) => AiWeights
 
   /** Escape hatch for future bulk reads straight out of linear memory. */
   readonly module: CoreModule
@@ -354,6 +438,8 @@ type DeferredOp =
   | 'spawnShaman'
   | 'castSpell'
   | 'enableAi'
+  | 'generateTerrain'
+  | 'configureAi'
 
 /**
  * What frame-time game code sees: the same simulation, wherever it runs. Reads
@@ -545,6 +631,44 @@ export async function createSimulation(
       return { first, last }
     },
 
+    generateTerrain(params: WorldGenParams) {
+      const p = { ...DEFAULT_WORLDGEN, ...params }
+      return module._core_terrain_generate(
+        p.seed | 0,
+        p.land,
+        p.continents,
+        p.continentSize,
+        p.continentWeight,
+        p.frequency,
+        p.octaves,
+        p.persistence,
+        p.lacunarity,
+        p.warp,
+        p.ridges,
+        p.relief,
+        p.peak,
+        p.smoothing,
+      )
+    },
+
+    setTerrainHeights(heights: Float32Array) {
+      // The same bounds check as the upload: a long array would write past
+      // the core's heights into whatever lies after them.
+      if (heights.length !== navNodeCount || navNodeCount === 0) {
+        throw new Error(`${heights.length} heights for a ground of ${navNodeCount} nodes.`)
+      }
+      module.HEAPF32.set(heights, module._core_nav_heights() >> 2)
+      module._core_terrain_touch_all()
+    },
+
+    nearestWalkableNode(direction: Vec3) {
+      return module._core_nav_nearest_walkable(direction[0], direction[1], direction[2])
+    },
+
+    clearWorld() {
+      module._core_world_clear()
+    },
+
     spawnFollower(direction: Vec3, tribe: number) {
       return module._core_follower_spawn(direction[0], direction[1], direction[2], tribe)
     },
@@ -715,8 +839,16 @@ export async function createSimulation(
       return module._core_tree_progress(id)
     },
 
-    plantTree(direction: Vec3) {
-      return module._core_tree_plant(direction[0], direction[1], direction[2])
+    plantTree(direction: Vec3, size = 1, turn = 0) {
+      return module._core_tree_plant(direction[0], direction[1], direction[2], size, turn)
+    },
+
+    treeSize(id: number) {
+      return module._core_tree_size(id)
+    },
+
+    treeTurn(id: number) {
+      return module._core_tree_turn(id)
     },
 
     woodPerTree: module._core_tree_wood(),
@@ -819,6 +951,14 @@ export async function createSimulation(
         height: module._core_land_bridge_height(),
       }
     },
+    setSpellUnlock(tribe: number, spell: Spell, at: number) {
+      module._core_spell_set_unlock(tribe, spell, at)
+    },
+
+    spellUnlockAt(tribe: number, spell: Spell) {
+      return module._core_spell_unlock_at(tribe, spell)
+    },
+
     shamanFallen(tribe: number) {
       return module._core_shaman_fallen(tribe) !== 0
     },
@@ -856,5 +996,35 @@ export async function createSimulation(
     },
 
     aiThinkSeconds: module._core_ai_think_seconds(),
+
+    configureAi(tribe: number, weights: AiWeights) {
+      return (
+        module._core_ai_configure(
+          tribe,
+          weights.thinkSeconds,
+          weights.hutCap,
+          weights.buildReach,
+          weights.forageReach,
+          weights.patch,
+          weights.muster,
+          weights.settle,
+          weights.bridges ? 1 : 0,
+        ) === 1
+      )
+    },
+
+    aiWeights(tribe: number) {
+      const field = (index: number) => module._core_ai_personality(tribe, index)
+      return {
+        thinkSeconds: field(0),
+        hutCap: field(1),
+        buildReach: field(2),
+        forageReach: field(3),
+        patch: field(4),
+        muster: field(5),
+        settle: field(6),
+        bridges: field(7) !== 0,
+      }
+    },
   }
 }

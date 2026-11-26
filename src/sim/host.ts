@@ -121,6 +121,7 @@ export function serveCore(port: HostPort): void {
       header[at + T.endResult] = ended.result
       for (let spell = 0; spell < SPELL_COUNT; spell += 1) {
         header[at + T.cooldowns + spell] = sim.spellCooldown(tribe, spell as Spell)
+        header[at + T.unlocks + spell] = sim.spellUnlockAt(tribe, spell as Spell)
       }
       for (let kind = 0; kind < HUT_KIND_COUNT; kind += 1) {
         header[at + T.hutCosts + kind] = sim.hutCost(kind as HutKind, tribe)

@@ -49,7 +49,8 @@ TEST_CASE("wood is a number per tribe, clamped at zero") {
 
 TEST_CASE("a forest is scattered from a seed, on dry land only") {
   World world(12, [](const Vec3& d) { return d[1] >= 0.0 ? static_cast<double>(kLand) : 0.0; });
-  const std::int32_t planted = world.sim.trees().spawn(40, 7);
+  world.sim.seed_match(7);
+  const std::int32_t planted = world.sim.trees().spawn(40, world.sim.random());
   REQUIRE(planted > 0);
   CHECK(planted <= 40);
   CHECK(world.sim.trees().count() == planted);
@@ -58,9 +59,11 @@ TEST_CASE("a forest is scattered from a seed, on dry land only") {
   }
 
   const auto first = forest(world);
-  world.sim.trees().spawn(40, 7);
+  world.sim.seed_match(7);
+  world.sim.trees().spawn(40, world.sim.random());
   CHECK(forest(world) == first);
-  world.sim.trees().spawn(40, 8);
+  world.sim.seed_match(8);
+  world.sim.trees().spawn(40, world.sim.random());
   CHECK(forest(world) != first);
 
   world.sim.trees().clear();

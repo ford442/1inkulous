@@ -50,6 +50,7 @@ set(CORE_SOURCES
   src/terrain.cpp
   src/trees.cpp
   src/tribe_ai.cpp
+  src/worldgen.cpp
 )
 
 # Nothing in cpp/ uses RTTI or exceptions, so say so: a stray `dynamic_cast` or

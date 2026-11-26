@@ -13,6 +13,7 @@
 #include "1inkulous/trees.hpp"
 #include "1inkulous/tribe_ai.hpp"
 #include "1inkulous/tribes.hpp"
+#include "1inkulous/worldgen.hpp"
 
 // Simulation core. Compiled to WebAssembly and driven from TypeScript through
 // the flat C ABI in `core_abi.hpp` — pathfinding, AI and sphere maths will grow
@@ -21,7 +22,7 @@ namespace inkulous {
 
 // Semantic version of the core, so the loader can report what it got.
 constexpr int kVersionMajor = 0;
-constexpr int kVersionMinor = 11;
+constexpr int kVersionMinor = 12;
 constexpr int kVersionPatch = 0;
 
 // Encoded as MAJOR * 10000 + MINOR * 100 + PATCH: cheap to pass across the
@@ -117,6 +118,11 @@ class Simulation {
 
   // Clears the clock and the checkpoints taken against it.
   void reset();
+
+  // Takes everything off the world but the ground and the clock: followers,
+  // huts, trees, the shamans' mana, casts, cooldowns and unlocks, the
+  // stores, and the AI. The editor rebuilds a world on this.
+  void clear_world();
 
  private:
   // One fixed step of every system, in order, then a checkpoint if one is due.

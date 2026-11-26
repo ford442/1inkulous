@@ -83,9 +83,16 @@ class TreeSet {
   std::int32_t order_chop(const std::vector<std::int32_t>& ids, std::int32_t id);
 
   // Plants one tree on the walkable node nearest the direction, unless a
-  // tree already stands on that node. For tests and scenario setup; a match
-  // starts from spawn(). Returns its id, or -1.
-  std::int32_t plant(double x, double y, double z);
+  // tree already stands on that node. `size` is its size as a multiple of the
+  // placeholder mesh (<= 0 or non-finite is 1); `turn` is the way it leans, in
+  // radians round its own node — the same two numbers spawn() draws, so a
+  // scattered forest written out as a list plants back bit for bit. For
+  // tests, scenarios and the editor. Returns its id, or -1.
+  std::int32_t plant(double x, double y, double z, double size = 1.0, double turn = 0.0);
+
+  // Tree `id`'s size and lean, as plant() takes them; 0 for a bad id.
+  double size(std::int32_t id) const;
+  double turn(std::int32_t id) const;
 
   // One fixed step: drops trees the ground has drowned or a hut has covered,
   // lets everyone in reach of the tree they were sent to chop at it, fells
@@ -103,6 +110,8 @@ class TreeSet {
     double dir[3] = {0.0, 1.0, 0.0};
     double heading[3] = {1.0, 0.0, 0.0};
     double size = 1.0;
+    // The lean as drawn, in radians round the node's tangent basis.
+    double turn = 0.0;
     std::int32_t node = -1;
     // Chopped so far, in trees: felled at 1.
     double progress = 0.0;

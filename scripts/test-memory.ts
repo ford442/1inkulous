@@ -17,6 +17,7 @@
  */
 import type { Vec3 } from '../src/engine/math.ts'
 import { createGame } from '../src/game/game.ts'
+import { openingWorld } from './worlds.ts'
 import { createPlanet } from '../src/game/planet.ts'
 import { createTerrain } from '../src/game/terrain.ts'
 import { createSimulation, type Simulation } from '../src/sim/simulation.ts'
@@ -86,16 +87,18 @@ function selectAll(simulation: Simulation): void {
 {
   const simulation = await createSimulation()
   const heap = watchHeap(simulation)
-  const game = createGame(simulation)
+  const game = createGame(simulation, { scenario: openingWorld() })
 
   check('the opening village is on the planet',
     game.followers.count > 0 && simulation.navReady,
     `${game.followers.count} followers, ${game.huts.count} huts`)
 
-  // Send everyone to the far side, sculpt under them, and let it play out.
+  // Send everyone across the island to the rival village, sculpt under
+  // them, and let it play out.
   selectAll(simulation)
   const home = game.match.playerHome ?? ([0, 0, 1] as Vec3)
-  const away = normalize([-home[0], -home[1], -home[2]])
+  const away = game.match.tribes.find((tribe) => tribe.tribe !== game.match.playerTribe)?.home ??
+    normalize([-home[0], -home[1], -home[2]])
   const routed = simulation.orderFollowerMove(away)
   game.terrain.sculpt(home, 0.12, 0.01)
   game.terrain.flatten(away, 0.1, 0.01, 0.01)

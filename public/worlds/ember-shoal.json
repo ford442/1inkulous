@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "id": "ember-shoal",
+  "name": "Ember Shoal",
+  "description": "The Kindred have come ashore on a warm, low island where an old fire still smoulders in the hills. Fell trees for wood, raise a hut, and train warriors before the Reedfolk over the ridge decide the island is theirs. Hold out until the tide turns, or end the quarrel for good.",
+  "author": "1inkulous",
+  "seed": 1,
+  "planet": {
+    "resolution": 24,
+    "terrain": { "kind": "generated", "seed": 4, "land": 0.4, "continents": 1, "continentSize": 1.3, "continentWeight": 0.7, "relief": 1.75 }
+  },
+  "trees": { "scatter": 140, "groves": 4 },
+  "tribes": [
+    { "tribe": 0, "name": "Kindred", "control": "player", "braves": 16 },
+    { "tribe": 1, "name": "Reedfolk", "control": "ai", "ai": "gentle", "braves": 8, "huts": [{ "kind": "dwelling" }] }
+  ],
+  "rules": {
+    "victory": [{ "kind": "conquest" }, { "kind": "survive", "seconds": 600 }],
+    "spells": { "landBridge": "never", "swamp": "never", "blast": 22 },
+    "placement": { "apart": 1.2 }
+  }
+}

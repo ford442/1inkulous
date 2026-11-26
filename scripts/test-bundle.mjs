@@ -47,7 +47,8 @@ check('files are sorted into what the player waits for',
   categorize('index.html', entries) === 'entry' && categorize('assets/index-AAAA.js', entries) === 'entry' &&
   categorize('assets/worker-xyz.js', entries) === 'worker' && categorize('assets/core-1.wasm', entries) === 'wasm' &&
   categorize('assets/meshopt_decoder-1.js', entries) === 'lazy' && categorize('models/follower.glb', entries) === 'media' &&
-  categorize('audio/chop.ogg', entries) === 'media' && categorize('favicon.svg', entries) === 'other')
+  categorize('audio/chop.ogg', entries) === 'media' && categorize('worlds/the-narrows.json', entries) === 'media' &&
+  categorize('favicon.svg', entries) === 'other')
 
 {
   const text = Buffer.from('const answer = 42\n'.repeat(500))

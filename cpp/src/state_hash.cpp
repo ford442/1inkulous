@@ -129,6 +129,9 @@ void Shamans::hash(StateHash& out) const {
     for (const double cooldown : cooldowns_[tribe]) {
       out.add(cooldown);
     }
+    for (const std::int32_t at : unlock_[tribe]) {
+      out.add(at);
+    }
   }
   // The last bridge's stamps: what landBridgePlan reports.
   out.add_all(stamps_);
@@ -144,6 +147,16 @@ void TribeAi::hash(StateHash& out) const {
     out.add(mind.thinks);
     out.add(mind.pad);
     out.add_all(mind.spoiled);
+  }
+  for (const AiPersonality& p : personalities_) {
+    out.add(p.think_seconds);
+    out.add(p.hut_cap);
+    out.add(p.build_reach);
+    out.add(p.forage_reach);
+    out.add(p.patch);
+    out.add(p.muster);
+    out.add(p.settle);
+    out.add(p.bridges);
   }
 }
 

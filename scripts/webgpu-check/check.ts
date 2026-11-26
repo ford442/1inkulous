@@ -32,6 +32,7 @@ import { withheldFeatures } from '../../src/engine/webgpu'
 import { refreshGeometry, VERTEX_FLOATS } from '../../src/engine/mesh/cubeSphere'
 import { FOLLOWER_HEIGHT_FRACTION, FOLLOWER_RADIUS_FRACTION } from '../../src/game/followers'
 import { createGame } from '../../src/game/game'
+import { fetchWorld } from '../../src/world/campaign'
 import type { InputSnapshot } from '../../src/input/input'
 import { createSimulation } from '../../src/sim/simulation'
 import { Spell } from '../../src/sim/spell'
@@ -207,7 +208,8 @@ async function run(): Promise<Result> {
   const params = new URLSearchParams(location.search)
   const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas')!
   const core = await createSimulation()
-  const game = createGame(core, { seed: 1 })
+  // From the dev server's root, where public/worlds is served, not this page's directory.
+  const game = createGame(core, { scenario: await fetchWorld('ember-shoal', fetch, `${location.origin}/`), seed: 1 })
 
   // A loaded follower, if the variant asks for one: through the game's own
   // manifest, manager and glue, as main.ts does it.

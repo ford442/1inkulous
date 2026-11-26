@@ -82,6 +82,8 @@ export type SpellSlot = {
   readonly cost: number
   /** Seconds before it can be cast again; 0 when it can. */
   readonly cooldown: number
+  /** 0 unlocked, -1 not this match, or the population that unlocks it. */
+  readonly unlockAt: number
 }
 
 export type ShamanUpdate = {
@@ -184,6 +186,9 @@ export function createShaman(planet: Planet, simulation: SimulationClient): Sham
     cost: simulation.spellRules[spell]!.cost,
     get cooldown() {
       return simulation.spellCooldown(tribe, spell)
+    },
+    get unlockAt() {
+      return simulation.spellUnlockAt(tribe, spell)
     },
   }))
 
@@ -352,6 +357,8 @@ export function spellProblem(spell: Spell, result: SpellResult, cost: number): s
       return 'that is under water'
     case SpellResult.cancelled:
       return 'cancelled'
+    case SpellResult.locked:
+      return 'not unlocked yet — grow the tribe'
     default:
       return 'the world is not ready'
   }

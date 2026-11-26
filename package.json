@@ -38,6 +38,7 @@
     "test:assets": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-assets.ts",
     "test:audio": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-audio.ts",
     "test:events": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-events.ts",
+    "test:scenarios": "node --experimental-strip-types --import ./scripts/register-ts.mjs scripts/test-scenarios.ts",
     "test:bundle": "node scripts/test-bundle.mjs"
   },
   "devDependencies": {
@@ -50,6 +51,7 @@
     "vite": "^8.1.1"
   },
   "dependencies": {
-    "meshoptimizer": "^1.3.0"
+    "meshoptimizer": "^1.3.0",
+    "valibot": "^1.5.0"
   }
 }

@@ -21,10 +21,13 @@ src/engine/shaders/   the WGSL; shaders/lib/ holds what they #include
 src/assets/   the manifest, the asset manager, the glTF reader, and a loaded model made into a follower
 src/audio/    the Web Audio engine, its mixer and settings, the synthesised sounds, listener geometry
 src/game/     planet mesh view, terrain hand-off, orbit camera, brush, followers, huts, trees, game events
+src/world/    worlds as data: the scenario schema, the builder, match rules, AI personalities, the campaign
+src/editor/   the in-browser world editor (loaded only with ?editor)
 src/input/    keyboard and pointer capture
 src/sim/      typed bridge across the WebAssembly boundary
 src/wasm/     build output (generated) + the typings: core.d.ts, and core-abi.d.ts generated from core_abi.h
-cpp/          simulation core: fixed-step clock, terrain, navigation graph, followers, huts, trees, wood, tribe AI
+public/worlds/  the shipped worlds, one scenario file each, and index.json, the campaign
+cpp/          simulation core: fixed-step clock, terrain and world generation, navigation graph, followers, huts, trees, wood, tribe AI
 ```
 
 ## Prerequisites
@@ -74,10 +77,11 @@ emcc -v   # confirm
 | `npm run test:shaman` | Shaman, mana and the four spells — cast, cancelled, short of mana, cooling down, and one enemy shaman — first on the core alone (no planet module), then aimed and cast through the game module |
 | `npm run test:terrain` | The core owns the ground: the brush moves core, graph, feet and mesh together, and a pick agrees with a path |
 | `npm run test:economy` | Chopping, what huts cost, eject, training a warrior and a kill: on the core alone, then through the game modules |
-| `npm run test:ai` | The enemy tribe on its own: on a flat core with a few planted trees it chops, builds, trains a warrior and sends him at the player's shaman; bridges a strait only when it can pay; swamps a crowd but not its own people; then a shaman killed by a warrior ending the match, her people deaf to orders and the AI stopped; and the match the game opens on |
-| `npm run test:memory` | The core's heap holds the opening village and a full tribe without growing, and the module declares a ceiling |
+| `npm run test:ai` | The enemy tribe on its own: on a flat core with a few planted trees it chops, builds, trains a warrior and sends him at the player's shaman; bridges a strait only when it can pay; swamps a crowd but not its own people; then a shaman killed by a warrior ending the match, her people deaf to orders and the AI stopped; and the world the game opens on |
+| `npm run test:memory` | The core's heap holds the opening world and a full tribe without growing, and the module declares a ceiling |
 | `npm run test:worker` | The core moved to a worker over a MessageChannel, both transports: the log replays to the same world and state hash, commands and queries answer, and the host's replay plays back to the same hash |
-| `npm run test:replay` | Determinism: the opening match, both tribes on the AI, 10,000 steps on ragged frame times, replayed twice to the same state hash and every checkpoint; another seed, a nudged order and a late one are each caught; the checked-in recording still plays to its hash; no `Math.random` in `src/sim` or `src/game`. `-- file.replay.json` plays a saved replay instead; `-- --record` re-records the checked-in one |
+| `npm run test:scenarios` | Worlds as data: every shipped world and the catalogue parse; a broken world is refused saying where (a typo, two shamans, a height field the wrong length, …); canonical text reads back as itself; a seed and parameters generate the same ground to the bit, with the land asked for; every shipped world builds as its file says, and its baked copy is the same world to the state hash; the editor's edits survive export → import → export byte for byte and build the world it showed; every shipped world, all tribes on the AI, finishes; the campaign remembers wins, whatever storage does |
+| `npm run test:replay` | Determinism: the opening world, both tribes on the AI, 10,000 steps on ragged frame times, replayed twice to the same state hash and every checkpoint; another seed, a nudged order and a late one are each caught; the checked-in recording still plays to its hash; no `Math.random` in `src/sim` or `src/game`. `-- file.replay.json` plays a saved replay instead; `-- --record` re-records the checked-in one |
 | `npm run test:interpolation` | Followers drawn between steps: at 144 Hz on a 30 Hz core a walker moves the same distance every frame (and would stutter without it), the previous pose is the one the step began from, someone set down is not slid, and the shader and renderer source say the same |
 | `npm run test:gpu` | Drawing-buffer sizing, limit and feature planning, GPU error reporting and loss messages, GPU timings, WGSL `#include`/`#ifdef`, the frame and particle layouts shader and CPU share, the particle ring, reversed Z, the shadow box, the sun, spell landings, and what the renderer's source must keep true |
 | `npm run test:assets` | The asset path with no browser: the glTF reader on plain, quantised and meshopt-compressed files (one of them the real optimiser's output), node transforms, every refusal; a model made into a follower, and the procedural pawn written out and read back as itself; the manager's progress, caching, optional versus required, cancelling and index; the loading bar's numbers |
@@ -148,8 +152,9 @@ but not enforced.
 ### Native tests and tooling
 
 The core also builds as a plain static library, with a doctest suite in
-`cpp/tests/` that drives it directly — the clock, the nav graph, terrain,
-followers, huts, trees and wood, combat, shamans and spells, the AI, the C ABI,
+`cpp/tests/` that drives it directly — the clock, the nav graph, terrain and
+generated worlds, followers, huts, trees and wood, combat, shamans and spells
+and their unlocks, the AI and its personalities, the C ABI,
 and that a run is deterministic (what the worker's replay relies on). No
 Emscripten is needed. Every way of building `cpp/` is a preset in
 `cpp/CMakePresets.json`, and `scripts/build-wasm.sh` and CI use those names:
@@ -469,16 +474,19 @@ per-sound cooldown and voice caps exist for.
 `npm run report:bundle` (after `npm run build`) measures every file in
 `dist/` raw, gzipped and brotlied, sorts them into what the player pays for —
 `entry` (the page, its script and style), `worker`, `wasm`, `lazy` (the meshopt
-decoder), `media` (`public/models` and `public/audio`), `other` — and checks
+decoder and the world editor), `media` (`public/models`, `public/audio` and
+`public/worlds`), `other` — and checks
 each category's *transfer* size (gzip for what compresses, raw for models and
 audio, which are already coded) against `bundle-budget.json`. Over a budget it
 exits 1. CI runs it after the production build, puts the table in the job
 summary, and keeps the JSON as an artifact even when the budget fails. Budgets
-sit 16–28% over what each code category weighs today, with 2 MB for art and
-sound together; raising one is a deliberate edit in the pull request that
-needs it.
-At the time of writing: entry 60.1 kB, worker 7.8 kB, wasm 55.8 kB, lazy
-7.0 kB, all gzipped.
+sit 10–30% over what each code category weighs today, with 2 MB for art,
+sound and worlds together; raising one is a deliberate edit in the pull
+request that needs it — worlds as data (the scenario schema and its validator,
+the builder, the campaign and menu) raised `entry`, the world generator
+`wasm`, and the editor `lazy`.
+At the time of writing: entry 72.1 kB, worker 8.4 kB, wasm 62.3 kB, lazy
+10.8 kB, all gzipped.
 
 ### Licences
 
@@ -563,8 +571,10 @@ on. What keeps it true:
 
 - **One source of chance.** `MatchRandom` (`cpp/include/1inkulous/random.hpp`,
   xorshift32) is owned by the simulation and seeded once as the match starts
-  (`seedMatch`, the first thing `createGame` does). The forest is drawn from
-  it; anything else in the core that wants a random choice draws from it too.
+  (`seedMatch`, the first thing building a world does, and the last: see
+  [Worlds](#worlds)). The forest is drawn from it; anything else in the core
+  that wants a random choice draws from it too. A generated world's ground
+  comes from a generator of its own, seeded by the terrain's seed.
   Nothing on the TypeScript side of the simulation may call `Math.random`, and
   `test:replay` fails if `src/sim` or `src/game` does.
 - **Commands land between steps.** Every change to the core is a command
@@ -596,14 +606,14 @@ agree, and if not, the first checkpoint that did not. Its text form is JSON,
 with the graph upload's typed arrays in base64; the opening match's is about
 280 KB.
 
-- `?seed=1234` starts a match from that seed; the console logs the seed of
-  every match.
+- `?seed=1234` starts the world with that match seed instead of its own;
+  the console logs the world and seed of every match.
 - `__1inkulous.saveReplay()` in the browser console downloads the match so far,
   wherever the core is running. That file is the bug report.
 - `npm run test:replay -- that.replay.json` plays one back and says whether it
   still holds.
 - `scripts/replays/opening.replay.json.gz` is a 10,000-step recording of the
-  opening match with both tribes on the AI. `test:replay` holds the core to its
+  opening world (the campaign's first) with both tribes on the AI. `test:replay` holds the core to its
   hash, so **any change to what the simulation does fails it**. When the change
   is meant, re-record with `npm run test:replay -- --record` and commit the new
   file with the change that moved it. Run `CORE_WASM_DIR=cpp/build-wasm-debug/out
@@ -645,6 +655,7 @@ host until the clock reaches it), and a peer to compare checkpoints with.
 | Order the shaman, while she casts | Cancels the cast; so does casting another spell |
 | `N` | Turn the day: the sun stops following the camera and the planet turns under it (`N` again brings it back) |
 | `K` | Mute / unmute sound (the HUD's button does the same, and its slider sets the volume) |
+| `P` | The world menu (the HUD's `worlds` button does the same): the campaign, a random world, a world file, the editor. The world stands still while it is open |
 
 Shift-click toggles one follower; Shift-drag adds everyone in the box. A plain
 drag replaces the selection, and a click that does not move stays a single
@@ -886,8 +897,8 @@ core; TypeScript turns clicks into orders and draws the buffers.
 (`cpp/include/1inkulous/tribes.hpp`), shown on the HUD beside mana. It
 starts at nothing. Only buildings spend it.
 
-**Trees.** At match start the core scatters 140 trees over dry land above
-the shore — walkable nodes with no water next door — from the heights it
+**Trees.** At match start the core scatters as many trees as the world asks
+(`trees.scatter`; see [Worlds](#worlds)) over dry land above the shore — walkable nodes with no water next door — from the heights it
 already owns (`TreeSet::spawn`, `cpp/src/trees.cpp`), keeping a node clear
 round each, drawn from the match's generator so the same seed starts a match
 the same way twice (see [Determinism and replays](#determinism-and-replays)). A tree is a point, not an obstacle, with a packed instance buffer of
@@ -943,9 +954,8 @@ and then the same orders through the game modules with synthetic clicks.
 One special unit and four spells, and the spells only work because the world
 already has live heights and a walkable graph.
 
-**The shaman is a follower with a flag.** She spawns at the heart of the
-opening village, on top of its 24 braves, as the player's (blue) tribe's
-shaman: `kFlagShaman` in the instance buffer, drawn taller and in a pale robe
+**The shaman is a follower with a flag.** She spawns at the heart of her
+tribe's village, before its braves, as that tribe's shaman: `kFlagShaman` in the instance buffer, drawn taller and in a pale robe
 over her tribe colour. Everything else — selecting, box selection, move
 orders, avoidance — is the follower code, unchanged. She never goes into a
 hut. Ids shift as followers go inside, so the core looks her up by tribe
@@ -1038,68 +1048,220 @@ the HUD row, a cancel, and the mesh matching the core after each cast.
 
 ## The match
 
-Two shamans on one planet. `createMatch` in `src/game/scenario.ts` is the one
-place a match is laid out, on the placeholder noise planet:
-
-- **Blue, the player**: the shaman and 24 braves on the flattest land. The
-  camera opens on them, and only blue can be clicked or boxed into the
-  selection.
-- **Red, tribe 1**: a shaman and 10 braves round a dwelling on the flattest
-  land at least 1.2 rad round the planet, preferring a site the player could
-  walk to. The scenario levels the pad itself (no mana) and plants a few trees
-  round each village if the forest left one short. Red's mana rises with its
-  population like blue's; the HUD's red line shows its people, mana, wood and
-  what its AI did last.
-- Yellow and green are unused.
+A world is played as a match: one tribe is the player's (tribe 0, blue), the
+rest are the core's, up to four in all. Only the player's people can be
+clicked or boxed into the selection; the HUD has a line for every rival — its
+people, mana, wood, the AI's personality and what it did last. Where every
+village stands and what it starts with is the world's business: see
+[Worlds](#worlds).
 
 **The AI is in the core** (`TribeAi`, `cpp/include/1inkulous/tribe_ai.hpp`),
-and it does not run every 50 ms step: every 2 s, for each tribe handed to it
-(`core_ai_enable`), it does at most one thing, the first of:
+and it does not run every 50 ms step: every couple of seconds (a
+personality's `thinkSeconds`), for each tribe handed to it (`core_ai_enable`),
+it does at most one thing, the first of:
 
 1. If the shaman is idle and a spell is legal and useful, cast it. **Land
-   Bridge** only when water cuts the tribe's warriors off from the enemy
-   shaman: a flood fill from a warrior finds his landmass, the shore nearest
-   the enemy is the near end, and the first foreign land along the line, within
-   the spell's range, is the far end. If she is out of range she first walks to
-   that shore. If the tribe cannot pay, she does neither. **Swamp**, else
+   Bridge** only when water cuts the tribe's warriors off from the nearest
+   enemy shaman: a flood fill from a warrior finds his landmass and one from
+   her finds hers — both taking only the steps a route would — and the
+   narrowest crossing between the two within the spell's range is the bridge.
+   If she is out of range she first walks to its near end. If the tribe cannot
+   pay, or has not unlocked the spell, she does neither. **Swamp**, else
    **Blast**, centred on the enemy with the most other enemies round them
-   (three or more) in her range, never with one of her own people or her huts
-   in the disc.
-2. If the wood allows and there are fewer than four huts, build: a training hut
-   first if there is none (the free first dwelling excepted), otherwise a
-   dwelling, on the nearest level site within 0.35 of home. With none level,
-   she **Flattens** the nearest uneven site she can reach, clear of every hut,
-   and the hut goes up on a later think. That is the only time she flattens.
-3. If braves are idle and trees stand within 0.6 of home, send them to chop.
-   One is kept back when a training hut could take him, or chopping would keep
-   every hand busy.
-4. If a training hut has room and the wood allows, send a brave in.
-5. If warriors are idle, send them at the nearest enemy shaman. The ordinary
-   group order is the attack move: they strike whoever they pass, and every
-   think resends the idle ones to where she is now.
+   (the personality's `patch`, three by default) in her range, never with one
+   of her own people or her huts in the disc.
+2. If the wood allows and there are fewer huts than `hutCap`, build: a
+   training hut first if there is none (the free first dwelling excepted),
+   otherwise a dwelling, on the nearest level site within `buildReach` of
+   home. With none level, she **Flattens** the nearest uneven site she can
+   reach, clear of every hut, and the hut goes up on a later think.
+3. If fewer braves are housed than the tribe keeps breeding (`settle`), send
+   idle braves into a dwelling with room — one always stays out.
+4. If braves are idle and trees stand within `forageReach` of home, send them
+   to chop. One is kept back when a training hut could take him.
+5. If a training hut has room and the wood allows, send a brave in.
+6. If warriors are idle, send them at the nearest enemy shaman: those already
+   out in the field at once, those at home once there are `muster` of them.
+   The ordinary group order is the attack move: they strike whoever they
+   pass, and every think resends the idle ones to where she is now.
 
 Every one of these is the call the player's input reaches: `Shamans::cast`,
 `HutSet::place`, `HutSet::order_enter`, `TreeSet::order_chop` and
-`FollowerSet::order_move`. The enter and chop orders take an id list, and the
-player's selection versions now build that list and call them.
+`FollowerSet::order_move`.
 
 **A shaman can die** from warrior damage like anyone else. When she does, her
 tribe has fallen (`core_shaman_fallen`): its people stop and drop out of the
-selection, and no order call (move, enter, chop, eject) moves them again. The
-match is over once a shaman has fallen and at most one still stands
-(`core_match_over`, `core_match_winner`). The HUD shows who fell and whether
-that is a win or a loss, and the AI stops thinking.
+selection, and no order call moves them again. The core's match is over once
+a shaman has fallen and at most one still stands (`core_match_over`,
+`core_match_winner`). For the player (`matchOutcome`, `src/world/match.ts`)
+losing is always their own shaman falling, even with two rivals still
+fighting; winning is any of the world's `rules.victory` — conquest (the core's
+own ending), holding out for a time, or growing to a headcount. Then the
+rivals' AI stops, and a panel offers the next campaign world, the same one
+again, or the menu.
 
 ### Not done yet
 
-- Reincarnation, the stone head and a timer to bring her back. Death is final.
-- Personalities, difficulty, more than one enemy, and the rest of the solar
-  system.
-- Boats and balloons. Land Bridge is the only crossing, so a red village across
+- Reincarnation and a timer to bring her back. Death is final.
+- Boats and balloons. Land Bridge is the only crossing, so a village across
   an ocean too wide to bridge never reaches the player.
-- Red's dwellings are never filled, so red does not grow: braves become
+- A dwelling is only filled by a personality that `settle`s; the others do
+  not grow: braves become
   warriors until it runs out of braves or wood.
 - Pathfinding for armies. Warriors walk as one ordinary group order.
+
+## Worlds
+
+The game boots from a **scenario file**: a whole world as JSON — the planet
+and its ground, the forest, up to four tribes with where they start and what
+they start with, and the rules of the match. The shipped ones are in
+`public/worlds/`, one file each, with `index.json` naming the campaign. Nothing
+in `src/game` lays a match out any more; `src/world/build.ts` builds whatever
+the file says.
+
+```
+?                     the campaign's next world (the first, on a first visit)
+?world=the-narrows    a shipped world by id
+?random=1234          a world drawn from a seed: terrain, rivals and all
+?editor               the world editor, on the world it would otherwise play
+?draft                the editor's draft, played (its Play-test button)
+?seed=7               any of the above with another match seed
+```
+
+### The format
+
+Checked with a [valibot](https://valibot.dev) schema (`src/world/schema.ts`)
+when a world loads, and by `npm run test:scenarios` for every shipped one. A
+world that is wrong is refused with every problem and where it is
+(`tribes[1].ai: ai must be one of steady, gentle, …`), including what no
+schema can say: one shaman a tribe, the player as tribe 0, a height field the
+length of its planet. Optional fields stay out of the parsed document — the
+defaults live in the builder — so a file written back says no more than it
+did.
+
+| Field | What it is |
+| --- | --- |
+| `format`, `id`, `name`, `description`, `author` | `1`; a lower-case id (the file's name); what the menu and HUD show; the briefing |
+| `seed` | The match seed: the scattered forest and every random choice the core makes |
+| `planet.resolution`, `radius`, `maxHeight` | Quads a cube face edge (24 is about 3,500 nodes); defaults 1 and 0.06 |
+| `planet.terrain` | `{ "kind": "generated", "seed", …parameters }`, `{ "kind": "heights", "encoding": "f32-base64", "data" }` (every node's height, exactly), or `{ "kind": "flat", "height" }` |
+| `trees` | `scatter` (how many, drawn from the seed), `groves` (trees each village is sure of nearby), `at` (each as `[x, y, z]` or `[x, y, z, size, turn]`) |
+| `tribes[]` | `tribe` (colour slot 0–3), `name`, `control` (`player`, `ai`, `none`), `ai` (a personality, or one with weights changed), `home` (a direction or `"auto"`), `shaman`, `braves`, `warriors`, `units[]` (`{ role, at }`), `huts[]` (`{ kind, at?, door? }`), `wood`, `mana`, `spells` |
+| `rules.victory` | Any of `{ "kind": "conquest" }`, `{ "kind": "survive", "seconds" }`, `{ "kind": "population", "count" }`; conquest always wins |
+| `rules.spells` | Per spell (`landBridge`, `blast`, `flatten`, `swamp`): `"now"`, `"never"`, or the population that unlocks it. A tribe's own `spells` override it |
+| `rules.placement` | For `"auto"` homes: `apart` (fewest radians between villages), `walkable` (all on the first village's landmass, the default) or `separate` (each on a landmass of its own) |
+
+Directions are from the planet's centre and need not be unit length. The
+canonical text (`stringifyScenario`, `src/world/format.ts`) puts keys in the
+schema's order and anything short on one line, so files diff cleanly.
+
+### Building a world
+
+`buildWorld` lays a scenario onto a fresh core in one fixed order, which is
+part of what a world is: the match seed; the planet and its ground; every
+tribe's home (given, or for `"auto"` the flattest inland ground far enough
+from the others, judged before anything is levelled); the huts, each on a pad
+levelled for it unless the ground is given exactly (a site is judged before it
+is levelled, so one passed over leaves the ground alone); the forest; the
+people, the shaman first and the rest spread over walkable ground round home;
+each tribe's wood, mana, unlocks and AI weights; **the match seed again**, so
+the match starts from the same random state however the world was built; and
+in play, the AI switched on.
+
+Every direction the builder works out is rounded to six places before the
+core sees it, and every one it was given is passed as given. So `baked` — the
+scenario again with every home, hut, person and tree written in where it
+ended up, nothing left to `"auto"` or chance, scattered trees with the size and
+lean the core drew (`core_tree_size`, `core_tree_turn`, planted back by
+`core_tree_plant`) — builds the *same* world, to the state hash. That is what
+the editor works on.
+
+### Procedural ground
+
+A generated world's ground is made in the core (`cpp/src/worldgen.cpp`,
+`core_terrain_generate`), not uploaded: a seed and a few numbers in, one
+height per node out, from a generator of its own so the match's random state
+is untouched. Layered 3D simplex noise on the sphere (no seams, no poles),
+domain-warped, over `continents` seeded plateaus of `continentSize` radians;
+the sea is put wherever it leaves exactly `land` of the nodes dry. A second
+field of the same octaves — part ridged noise (`ridges`) — says how high the
+land stands, rising from a walkable shore above the drawn sea; `relief` (in
+quarter steps) shapes it and `peak` caps it, and `smoothing` takes the
+one-node islands out of the coast and the steps out of the hills. A replay of
+a generated world carries the parameters, not the heights.
+
+### The campaign
+
+`index.json` lists the campaign — *The Long Tide* — and what each world
+teaches:
+
+| World | Teaches | Against |
+| --- | --- | --- |
+| Ember Shoal | Wood, huts and warriors. Blast unlocks at 22 people; win by conquest or by holding out ten minutes | the Reedfolk (gentle) |
+| The Narrows | Land Bridge: two continents across a strait, each village on its own | the Cinder Clan (steady) |
+| Saltmarsh | Spells that unlock as you grow: Swamp at 24 people, for both sides; or win by growing to 50 | the Mirewalkers (raider) |
+| Three Fires | Three tribes and every spell | the Stonebinders (builder) and the Ashen Host (warlord) |
+
+The names, places and story are this game's own. Progress — the worlds won —
+is kept in `localStorage` (`1inkulous.campaign.v1`), guarded like the sound
+settings: storage that throws or holds nonsense starts the campaign afresh
+rather than failing. A world opens once the one before it is won; the menu
+(`P`) lists them, with a random world, a world file and the editor beside.
+Every shipped world is played to the end with the core on every side by
+`npm run test:scenarios`, so a change that leaves one unfinishable fails CI.
+
+### AI personalities
+
+A personality is the eight weights of `inkulous::AiPersonality`, handed in by
+`core_ai_configure` (`src/world/personalities.ts`); the core decides nothing
+by name, and an unconfigured tribe plays as the AI always did.
+
+| Personality | Thinks every | Huts | Casts at | Musters | Breeds | Bridges |
+| --- | --- | --- | --- | --- | --- | --- |
+| `gentle` | 4 s | 3 | never | 4 | 0 | no |
+| `steady` | 2 s | 4 | 3 | 1 | 0 | yes |
+| `builder` | 2 s | 6 | 4 | 5 | 3 | yes |
+| `raider` | 1.5 s | 3 | 2 | 2 | 2 | yes |
+| `warlord` | 1 s | 6 | 2 | 4 | 3 | yes |
+
+A world can name one (`"ai": "raider"`) or change some weights
+(`"ai": { "personality": "builder", "muster": 3 }`).
+
+### Spell progression
+
+`core_spell_set_unlock(tribe, spell, at)`: every spell starts unlocked; `0`
+unlocks one now, `-1` locks it for the match, and a positive number locks it
+until the tribe's population first reaches that many (counted each step, as
+mana is), after which it stays. A locked spell is refused with result 12
+(`SpellResult.locked`), for the AI exactly as for the player; the HUD's spell
+row shows the lock and the population it opens at.
+
+### The world editor
+
+`?editor` opens the world as its baked document; every change is a new
+document built again on the same planet by the same builder, so what it shows
+is what the file will load as. Hold `C` to sculpt as in play (the ground is
+saved as an exact height field when the stroke ends); click to place the
+chosen tool for the chosen tribe — brave, warrior, shaman (a second moves the
+first), dwelling, training hut, tree — or to erase whatever stands nearest.
+The panel holds the world's name, id, seed and briefing; the generator's
+parameters (Generate replaces sculpted ground); every tribe — who plays it,
+its personality, wood and mana — and adding or removing one; the ways to win
+and every spell's unlock; and Export (downloads `<id>.json`), Import and
+Play-test (plays the draft in this tab; the end of the match offers the way
+back). The document operations are plain functions (`src/editor/document.ts`);
+`test:scenarios` puts a world through every one of them, then export → import
+→ export, and checks the text is the same to the byte and builds the world
+the editor showed to the state hash.
+
+### Not done yet
+
+- New unit roles (preachers, scouts, …): a role is still brave or warrior.
+- Lockstep multiplayer: the determinism is there, and a world is now a file
+  both peers can hold; the transport and command scheduling are not.
+- Resizing a planet in the editor: a world of another resolution is a new
+  page (Import does that for you).
+- The editor has no undo; Export often.
 
 ## Design notes
 

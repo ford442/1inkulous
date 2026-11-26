@@ -38,6 +38,7 @@ export type TreesOptions = {
   /**
    * How many to plant at match start. Where they stand is drawn from the
    * match's generator, so the match seed (`createGame`) decides the forest.
+   * 0 plants none: a world's builder (src/world/build.ts) plants its own.
    */
   count?: number
 }
@@ -68,7 +69,10 @@ export type Trees = {
 }
 
 export function createTrees(planet: Planet, simulation: SimulationClient, options: TreesOptions = {}): Trees {
-  simulation.spawnTrees(Math.min(options.count ?? DEFAULT_TREE_COUNT, MAX_TREES))
+  const count = Math.min(options.count ?? DEFAULT_TREE_COUNT, MAX_TREES)
+  if (count > 0) {
+    simulation.spawnTrees(count)
+  }
 
   const height = planet.radius * TREE_HEIGHT_FRACTION
   const radius = planet.radius * TREE_RADIUS_FRACTION

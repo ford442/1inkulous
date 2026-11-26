@@ -1,0 +1,33 @@
+{
+  "format": 1,
+  "id": "three-fires",
+  "name": "Three Fires",
+  "description": "Three tribes, three fires, one small world. The Stonebinders build patiently behind their walls; the Ashen Host knows only how to march. Let them wear each other down, or strike first: the last shaman standing keeps the world.",
+  "author": "1inkulous",
+  "seed": 4,
+  "planet": {
+    "resolution": 24,
+    "terrain": { "kind": "generated", "seed": 7, "land": 0.5, "continents": 3, "continentSize": 0.85, "continentWeight": 0.6, "ridges": 0.45 }
+  },
+  "trees": { "scatter": 180, "groves": 4 },
+  "tribes": [
+    { "tribe": 0, "name": "Kindred", "control": "player", "braves": 20 },
+    {
+      "tribe": 1,
+      "name": "Stonebinders",
+      "control": "ai",
+      "ai": "builder",
+      "braves": 12,
+      "huts": [{ "kind": "dwelling" }]
+    },
+    {
+      "tribe": 2,
+      "name": "Ashen Host",
+      "control": "ai",
+      "ai": "warlord",
+      "braves": 10,
+      "huts": [{ "kind": "dwelling" }]
+    }
+  ],
+  "rules": { "victory": [{ "kind": "conquest" }], "placement": { "apart": 1.4 } }
+}

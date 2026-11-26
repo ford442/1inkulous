@@ -69,7 +69,11 @@ const SHADOW_SIZE = 2048
 const SHADOW_STRENGTH = 0.85
 /** The air's outer edge, in planet radii. */
 const AIR_RADIUS = 1.12
-/** The sea's surface above the sea bed, in max land heights. */
+/**
+ * The sea's surface above the sea bed, in max land heights. Generated land
+ * starts above it (kShore in cpp/src/worldgen.cpp), so dry ground is never
+ * drawn under water.
+ */
 const WATER_LIFT = 0.04
 /** Noon sunlight. The same warm white the shaders used before the sun moved. */
 const SUN_COLOR: Vec3 = [1.0, 0.97, 0.9]

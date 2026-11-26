@@ -15,8 +15,10 @@
 //   entry   index.html and what it loads: the app's script and stylesheet
 //   worker  the simulation worker's script
 //   wasm    the simulation core
-//   lazy    other scripts, fetched when first needed (the meshopt decoder)
-//   media   public/models and public/audio: the art and sound
+//   lazy    other scripts, fetched when first needed (the meshopt decoder,
+//           the world editor)
+//   media   public/models, public/audio and public/worlds: the art, the
+//           sound and the world files, fetched as a visit needs them
 //   other   icons and the rest
 //
 // The budget for a category is on its *transfer* size: gzip for what compresses
@@ -91,7 +93,7 @@ export function categorize(path, entries) {
     // anyone waits on, but it is a file: count it with what loads at once.
     return /^assets\/__vite-browser-external/.test(path) ? 'entry' : 'lazy'
   }
-  if (/^(models|audio)\//.test(path)) {
+  if (/^(models|audio|worlds)\//.test(path)) {
     return 'media'
   }
   return 'other'

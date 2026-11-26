@@ -1,6 +1,6 @@
 import { refreshGeometry, refreshVertices } from '../engine/mesh/cubeSphere'
 import type { Vec3 } from '../engine/math'
-import type { Deferred, SimulationClient } from '../sim/simulation'
+import type { Deferred, SimulationClient, WorldGenParams } from '../sim/simulation'
 import { buildNavGraph, type NavGraph } from './navGraph'
 import type { Planet } from './planet'
 
@@ -57,6 +57,16 @@ export type Terrain = {
 export type TerrainOptions = {
   /** Steepest walkable ground as height over run. */
   maxSlope?: number
+  /**
+   * The ground as a scenario gives it, one height per node, instead of the
+   * field the planet mesh was generated with.
+   */
+  heights?: Float32Array
+  /**
+   * Or a world for the core to generate: a seed and parameters, run once
+   * after the graph is up. Takes precedence over `heights`.
+   */
+  generate?: WorldGenParams
 }
 
 export function createTerrain(
@@ -69,15 +79,31 @@ export function createTerrain(
 
   // The seed: one height per node out of the generated field. Any of a weld's
   // duplicates will do, and after the write-back below they all agree anyway.
-  const seed = new Float32Array(graph.nodeCount)
-  for (let node = 0; node < graph.nodeCount; node += 1) {
-    seed[node] = mesh.heights[graph.nodeVertex[node]!]!
+  // A generated world starts from sea level and is raised by the core.
+  let seed: Float32Array
+  if (options.generate) {
+    seed = new Float32Array(graph.nodeCount)
+  } else if (options.heights) {
+    if (options.heights.length !== graph.nodeCount) {
+      throw new Error(`${options.heights.length} heights for a planet of ${graph.nodeCount} nodes.`)
+    }
+    seed = new Float32Array(options.heights)
+  } else {
+    seed = new Float32Array(graph.nodeCount)
+    for (let node = 0; node < graph.nodeCount; node += 1) {
+      seed[node] = mesh.heights[graph.nodeVertex[node]!]!
+    }
   }
   simulation.uploadNavGraph(graph, seed, {
     planetRadius: planet.radius,
     maxSlope: options.maxSlope ?? MAX_WALKABLE_SLOPE,
     maxHeight: planet.maxHeight,
   })
+  if (options.generate) {
+    simulation.generateTerrain(options.generate)
+    // The mesh is written from the core's heights just below.
+    simulation.takeTerrainDirty()
+  }
 
   // From here on the mesh is a view of the core. Duplicates along the face
   // seams were generated separately and can differ in the last bit; make them

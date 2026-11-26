@@ -385,6 +385,10 @@ export function connectWorkerSimulation(
         dirty = null
         return taken
       },
+      generateTerrain: (...args) => command('generateTerrain', args, true) as Promise<number>,
+      setTerrainHeights: (...args) => command('setTerrainHeights', args, false),
+      nearestWalkableNode: offThread('nearestWalkableNode') as (direction: Vec3) => number,
+      clearWorld: () => command('clearWorld', [], false),
 
       spawnFollower: (...args) => command('spawnFollower', args, true) as Promise<number>,
       get followerCount() {
@@ -440,6 +444,8 @@ export function connectWorkerSimulation(
       orderChop: (...args) => command('orderChop', args, true) as Promise<number>,
       treeProgress: offThread('treeProgress') as (id: number) => number,
       plantTree: (...args) => command('plantTree', args, true) as Promise<number>,
+      treeSize: offThread('treeSize') as (id: number) => number,
+      treeTurn: offThread('treeTurn') as (id: number) => number,
       woodPerTree: shadow.woodPerTree,
       chopSeconds: shadow.chopSeconds,
 
@@ -475,6 +481,9 @@ export function connectWorkerSimulation(
         result: tribeField(tribe, T.endResult) as SpellResult,
       }),
       landBridgePlan: offThread('landBridgePlan') as () => null,
+      setSpellUnlock: (...args) => command('setSpellUnlock', args, false),
+      spellUnlockAt: (tribe: number, spell: Spell) =>
+        tribe >= 0 && tribe < MAX_TRIBES ? tribeField(tribe, T.unlocks + spell) : -1,
 
       shamanFallen: (tribe: number) => tribeField(tribe, T.fallen) !== 0,
       get matchOver() {
@@ -491,6 +500,8 @@ export function connectWorkerSimulation(
       aiActions: (tribe: number) => tribeField(tribe, T.aiActions),
       aiThinks: (tribe: number) => tribeField(tribe, T.aiThinks),
       aiThinkSeconds: shadow.aiThinkSeconds,
+      configureAi: (...args) => command('configureAi', args, true) as Promise<boolean>,
+      aiWeights: offThread('aiWeights') as SimulationClient['aiWeights'],
 
       get module(): never {
         throw new Error('The core module lives on the worker; there is no main-thread module to reach.')

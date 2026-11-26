@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "id": "saltmarsh",
+  "name": "Saltmarsh",
+  "description": "Low country, all creeks and reed beds, and the Mirewalkers raid early and often. Grow your village and the marsh will answer your shaman: once the Kindred are twenty-four strong she learns Swamp, and can sink the ground under an attack. So can theirs, once they are.",
+  "author": "1inkulous",
+  "seed": 3,
+  "planet": {
+    "resolution": 24,
+    "terrain": { "kind": "generated", "seed": 33, "land": 0.48, "continents": 3, "continentSize": 0.7, "continentWeight": 0.45, "warp": 0.5, "relief": 2.5, "peak": 0.7 }
+  },
+  "trees": { "scatter": 160, "groves": 5 },
+  "tribes": [
+    { "tribe": 0, "name": "Kindred", "control": "player", "braves": 18, "spells": { "swamp": 24 } },
+    {
+      "tribe": 1,
+      "name": "Mirewalkers",
+      "control": "ai",
+      "ai": "raider",
+      "braves": 12,
+      "huts": [{ "kind": "dwelling" }, { "kind": "dwelling" }],
+      "spells": { "swamp": 24 }
+    }
+  ],
+  "rules": {
+    "victory": [{ "kind": "conquest" }, { "kind": "population", "count": 50 }],
+    "placement": { "apart": 1.2 }
+  }
+}

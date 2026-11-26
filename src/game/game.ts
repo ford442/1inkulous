@@ -4,13 +4,15 @@ import { createCamera, type Camera } from './camera'
 import { createFollowers, type Followers } from './followers'
 import { createGameEvents, type GameEvent } from './gameEvents'
 import { createHuts, type Huts } from './huts'
-import { createPlanet, type Planet } from './planet'
-import { createMatch, type Match } from './scenario'
+import type { Planet } from './planet'
+import { buildWorld, rebuildWorld, type BuildMode, type World } from '../world/build'
+import { createMatch, type Match } from '../world/match'
+import type { Scenario } from '../world/schema'
 import { createSculptor, isSculptModifierHeld, type Sculptor } from './sculpt'
 import { createShaman, type Shaman } from './shaman'
 import { createSpellEvents, type SpellLanding } from './spellEffects'
 import { createSun, type Sun } from './sun'
-import { createTerrain, type Terrain } from './terrain'
+import type { Terrain } from './terrain'
 import { createTrees, type Trees } from './trees'
 
 export type Game = {
@@ -25,7 +27,15 @@ export type Game = {
   shaman: Shaman
   trees: Trees
   /** Who is playing whom, and how it is going. */
-  match: Match
+  readonly match: Match
+  /** The world as built: its scenario, every tribe's home, and the explicit copy the editor works on. */
+  readonly world: World
+  /**
+   * Builds `scenario` again on the same planet, everything but the ground
+   * cleared and laid out afresh: the editor, after every change. The match
+   * and the world above follow it. Throws for a planet of another size.
+   */
+  rebuild: (scenario: Scenario) => void
   /** Where the light comes from: riding with the camera, or a turning day. */
   sun: Sun
   /**
@@ -47,19 +57,20 @@ export type Game = {
   update: (deltaMs: number, input: InputSnapshot, aspect: number) => void
 }
 
-/**
- * The seed a match starts from unless told otherwise: the forest the game has
- * always opened on.
- */
-export const DEFAULT_MATCH_SEED = 1
-
 export type GameOptions = {
+  /** The world to play: see src/world/schema.ts. */
+  scenario: Scenario
   /**
-   * Seeds the core's random generator before anything draws from it. The same
-   * seed and the same commands give the same match, so this, with the command
-   * log, is all a bug report or a replay needs.
+   * Overrides the scenario's match seed: the scattered forest and every
+   * random choice the core makes. The same seed and the same commands give
+   * the same match, so this, with the command log, is all a bug report or a
+   * replay needs.
    */
   seed?: number
+  /** 'play' (default) or 'edit': the editor's world has no AI running. */
+  mode?: BuildMode
+  /** Every tribe on the AI, the player's too: for tests and demos. */
+  allAi?: boolean
 }
 
 /**
@@ -67,12 +78,14 @@ export type GameOptions = {
  * later: the world it owns — the terrain, the navigation graph over it and
  * every follower standing on it — has to exist before the first frame.
  */
-export function createGame(simulation: Simulation, options: GameOptions = {}): Game {
-  // First, so it is the first thing a replay of this match does.
-  simulation.seedMatch(options.seed ?? DEFAULT_MATCH_SEED)
-  const planet = createPlanet()
-  // The planet generated the land; from here on the core owns it.
-  const terrain = createTerrain(planet, simulation)
+export function createGame(simulation: Simulation, options: GameOptions): Game {
+  const scenario =
+    options.seed === undefined ? options.scenario : { ...options.scenario, seed: options.seed >>> 0 }
+  const buildOptions = { mode: options.mode ?? 'play', allAi: options.allAi ?? false } as const
+  // The planet, the ground the core now owns, every tribe and the forest.
+  // Its first command seeds the match, so it is the first thing a replay does.
+  let world = buildWorld(simulation, scenario, buildOptions)
+  const { planet, terrain } = world
 
   const camera = createCamera({
     planetRadius: planet.radius,
@@ -80,12 +93,11 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
   })
 
   const sculptor = createSculptor(terrain)
-  // Once, from the heights the core now owns: the forest the match starts with.
-  // Before the match, so the enemy's pad clears whatever tree it lands on.
-  const trees = createTrees(planet, simulation)
-  // Both villages, the enemy's hut and its AI. The follower module is then
-  // only the glue for clicks: it spawns nobody of its own.
-  const match = createMatch(terrain, simulation)
+  // The world planted its own forest; this module is the glue for chop orders.
+  const trees = createTrees(planet, simulation, { count: 0 })
+  let match = createMatch(world, simulation)
+  // The world spawned every tribe. The follower module is only the glue for
+  // clicks: it spawns nobody of its own.
   const followers = createFollowers(terrain, simulation, {
     spawnCount: 0,
     shamanTribe: null,
@@ -95,19 +107,22 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
   const shaman = createShaman(planet, simulation)
 
   const sun = createSun()
-  const spellEvents = createSpellEvents(simulation, [match.playerTribe, match.enemyTribe])
+  const tribes = world.tribes.map((tribe) => tribe.tribe)
+  const spellEvents = createSpellEvents(simulation, tribes)
   let landings: SpellLanding[] = []
-  const gameEvents = createGameEvents(simulation, {
-    tribes: [match.playerTribe, match.enemyTribe],
-    planetRadius: planet.radius,
-  })
+  const gameEvents = createGameEvents(simulation, { tribes, planetRadius: planet.radius })
   let events: GameEvent[] = []
 
-  // Open on the player's tribe. The starting village is wherever the flattest
-  // land turned out to be, which is as likely to be behind the planet as in front.
-  if (match.playerHome) {
-    camera.focusOn(match.playerHome, true)
+  // Open on the player's tribe, or the first village there is. A home is
+  // wherever the scenario or the flattest land put it, as likely behind the
+  // planet as in front.
+  const opening = match.playerHome ?? world.tribes.find((tribe) => tribe.home)?.home ?? null
+  if (opening) {
+    camera.focusOn(opening, true)
   }
+  // An outcome decided by the clock or a headcount rather than a fallen
+  // shaman: the world stops playing at the moment it was won.
+  let decided = false
 
   const state = {
     clearColor: [0.04, 0.05, 0.09] as [number, number, number],
@@ -122,7 +137,23 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
     huts,
     shaman,
     trees,
-    match,
+    get match() {
+      return match
+    },
+    get world() {
+      return world
+    },
+    rebuild(next: Scenario) {
+      const populated = rebuildWorld(simulation, terrain, next, buildOptions)
+      world = { ...world, ...populated, scenario: next }
+      match = createMatch(world, simulation)
+      decided = false
+      // Whatever the old world landed or said is not this one's.
+      spellEvents.poll()
+      gameEvents.poll()
+      landings = []
+      events = []
+    },
     sun,
     takeSpellLandings() {
       const taken = landings
@@ -205,6 +236,15 @@ export function createGame(simulation: Simulation, options: GameOptions = {}): G
       // The same, for sound: capped so a long-backgrounded tab does not replay
       // a crowd's worth of chopping when it returns.
       events = [...events, ...gameEvents.poll()].slice(-64)
+
+      if (!decided && match.outcome !== 'playing') {
+        decided = true
+        for (const tribe of world.tribes) {
+          if (simulation.aiEnabled(tribe.tribe)) {
+            simulation.disableAi(tribe.tribe)
+          }
+        }
+      }
 
       // Last: whatever moved the ground this frame — the brush, a spell, the
       // core's own steps before this update — reaches the mesh before drawing.

@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "campaign": {
+    "name": "The Long Tide",
+    "worlds": [
+      { "id": "ember-shoal", "teaches": "Wood, huts and warriors" },
+      { "id": "the-narrows", "teaches": "Land Bridge: carry the fight over water" },
+      { "id": "saltmarsh", "teaches": "Spells that unlock as your tribe grows" },
+      { "id": "three-fires", "teaches": "Three tribes, every spell" }
+    ]
+  }
+}

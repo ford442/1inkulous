@@ -23,6 +23,9 @@ export const COMMAND_OPS = [
   'sculptTerrain',
   'flattenTerrain',
   'takeTerrainDirty',
+  'generateTerrain',
+  'setTerrainHeights',
+  'clearWorld',
   'spawnFollower',
   'setFollowerSelected',
   'clearFollowerSelection',
@@ -40,8 +43,10 @@ export const COMMAND_OPS = [
   'setMana',
   'castSpell',
   'cancelSpell',
+  'setSpellUnlock',
   'enableAi',
   'disableAi',
+  'configureAi',
 ] as const satisfies readonly (keyof Simulation)[]
 
 export type CommandOp = (typeof COMMAND_OPS)[number]
@@ -185,7 +190,9 @@ export const T = {
   endResult: 18,
   cooldowns: 19,
   hutCosts: 19 + SPELL_COUNT,
-  size: 19 + SPELL_COUNT + HUT_KIND_COUNT,
+  /** Each spell's unlock threshold: 0 unlocked, -1 never, or a population to reach. */
+  unlocks: 19 + SPELL_COUNT + HUT_KIND_COUNT,
+  size: 19 + 2 * SPELL_COUNT + HUT_KIND_COUNT,
 } as const
 
 /** Per-hut fields in the hut table. */

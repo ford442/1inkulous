@@ -5,7 +5,7 @@ import type { SpellCast } from '../sim/simulation'
 import { SpellResult, type Spell } from '../sim/spell'
 import { HutKind, HutSite } from '../sim/hutSite'
 import { AI_ACTION_TEXT } from '../sim/ai'
-import { TRIBE_NAMES, type MatchOutcome, type TribeReadout } from '../game/scenario'
+import { clock, type MatchOutcome, type TribeReadout } from '../world/match'
 import type { AudioState } from '../audio/engine'
 import { clampFraction, loadingPercent, loadingText, type LoadingReadout } from './loading'
 
@@ -70,7 +70,20 @@ export type TreeReadout = {
 export type MatchReadout = {
   readonly playerTribe: number
   readonly outcome: MatchOutcome
-  readonly enemy: TribeReadout
+  readonly opponents: readonly TribeReadout[]
+  /** What winning takes, in a sentence. */
+  readonly objective: string
+}
+
+/** The world being played, for the title line. */
+export type WorldReadout = {
+  readonly name: string
+  readonly objective: string
+  /** "World 2 of 4", or null outside the campaign. */
+  readonly chapter: string | null
+  readonly elapsedSeconds: number
+  /** The world's briefing, shown under its title; null for none. */
+  readonly briefing: string | null
 }
 
 /** The slice of the audio engine the HUD shows. */
@@ -154,6 +167,8 @@ export type Hud = {
   setPerf: (perf: FramePerf) => void
   /** Connects the sound controls; until then they do nothing. */
   bindAudio: (controls: AudioControls) => void
+  /** What the Worlds button does. */
+  bindMenu: (open: () => void) => void
   setAudio: (audio: AudioReadout) => void
   setBrush: (brush: BrushReadout) => void
   setSimulation: (simulation: SimulationReadout) => void
@@ -162,6 +177,7 @@ export type Hud = {
   setShaman: (shaman: ShamanReadout) => void
   setTrees: (trees: TreeReadout) => void
   setMatch: (match: MatchReadout) => void
+  setWorld: (world: WorldReadout) => void
   /** Screen-space selection box, or null when there isn't one. */
   setSelectionBand: (band: DragRect | null) => void
 }
@@ -221,13 +237,20 @@ export function shamanLine(shaman: ShamanReadout): string {
   return `${head} · F finds her`
 }
 
-/** The enemy tribe's line: how big it is, what it holds and what it is up to. Pure. */
-export function enemyLine(match: MatchReadout): string {
-  const enemy = match.enemy
+/** An opponent's line: how big it is, what it holds and what it is up to. Pure. */
+export function opponentLine(tribe: TribeReadout): string {
   const head =
-    `${enemy.name}: ${enemy.population} people · mana ${Math.floor(enemy.mana)} ` +
-    `(+${enemy.income.toFixed(0)}/s) · wood ${enemy.wood}`
-  return enemy.shamanStanding ? `${head} · ${AI_ACTION_TEXT[enemy.action]}` : `${head} · shaman fallen`
+    `${tribe.name}${tribe.personality ? ` (${tribe.personality})` : ''}: ${tribe.population} people · ` +
+    `mana ${Math.floor(tribe.mana)} (+${tribe.income.toFixed(0)}/s) · wood ${tribe.wood}`
+  if (!tribe.shamanStanding) {
+    return `${head} · shaman fallen`
+  }
+  return tribe.personality ? `${head} · ${AI_ACTION_TEXT[tribe.action] ?? 'thinking'}` : head
+}
+
+/** The title line: the world, what it takes, and the clock. Pure. */
+export function worldLine(world: WorldReadout): string {
+  return `${world.chapter ? `${world.chapter} · ` : ''}${world.name} — ${world.objective} · ${clock(world.elapsedSeconds)}`
 }
 
 /**
@@ -235,15 +258,18 @@ export function enemyLine(match: MatchReadout): string {
  * Pure.
  */
 export function matchBanner(match: MatchReadout): string | null {
-  const enemy = match.enemy.name
-  const player = TRIBE_NAMES[match.playerTribe] ?? 'your tribe'
+  const standing = match.opponents.filter((tribe) => tribe.shamanStanding)
   switch (match.outcome) {
     case 'won':
-      return `${enemy}'s shaman has fallen — you win. ${enemy}'s people take no more orders.`
-    case 'lost':
-      return `Your shaman has fallen — ${enemy} wins. ${player}'s people take no more orders.`
+      return standing.length === 0
+        ? `${match.opponents.length === 1 ? `${match.opponents[0]!.name}'s shaman has` : 'Every rival shaman has'} fallen — you win.`
+        : 'You have done what this world asked — you win.'
+    case 'lost': {
+      const victor = standing.length === 1 ? `${standing[0]!.name} wins` : 'your rivals fight on'
+      return `Your shaman has fallen — ${victor}. Your people take no more orders.`
+    }
     case 'draw':
-      return 'Both shamans have fallen — nobody wins.'
+      return 'The last shamans fell together — nobody wins.'
     default:
       return null
   }
@@ -256,6 +282,12 @@ export function matchBanner(match: MatchReadout): string | null {
  */
 export function spellLine(shaman: ShamanReadout): string {
   const slots = shaman.spells.map((slot) => {
+    if (slot.unlockAt < 0) {
+      return `${slot.key} ${slot.name} —`
+    }
+    if (slot.unlockAt > 0) {
+      return `${slot.key} ${slot.name} 🔒 at ${slot.unlockAt} people`
+    }
     const label = `${slot.key} ${slot.name} ${slot.cost}`
     const resting = slot.cooldown > 0 ? ` (${Math.ceil(slot.cooldown)}s)` : ''
     if (slot.spell !== shaman.aiming) {
@@ -339,12 +371,15 @@ export function createHud(): Hud {
     </div>
     <div>
       <h1 class="title">1inkulous</h1>
+      <p class="world" id="hud-world">—</p>
+      <p class="briefing" id="hud-briefing" hidden></p>
       <p class="status" id="hud-status">Starting…</p>
       <div class="audio">
         <button type="button" class="audio-mute" id="hud-audio-mute" aria-pressed="false"
           title="Mute or unmute sound (K)">sound on</button>
         <input type="range" class="audio-volume" id="hud-audio-volume" min="0" max="100" step="1"
           value="80" aria-label="Master volume" title="Master volume" />
+        <button type="button" class="audio-mute" id="hud-menu" title="The world menu (P)">worlds</button>
       </div>
     </div>
     <div>
@@ -356,7 +391,7 @@ export function createHud(): Hud {
       <p class="hint" id="hud-shaman">—</p>
       <p class="hint" id="hud-spells">—</p>
       <p class="hint" id="hud-trees">—</p>
-      <p class="hint" id="hud-enemy">—</p>
+      <div id="hud-opponents"></div>
       <p class="match-end" id="hud-match" role="status" hidden></p>
       <p class="hint">Right-drag to orbit · scroll to zoom · 1–4 cardinal views · 0 or middle-click resets</p>
       <p class="hint">Drag a box to select · Shift-drag adds · click ground clears · right-click sends them</p>
@@ -365,7 +400,8 @@ export function createHud(): Hud {
       <p class="hint">Right-click a hut to send the selected braves inside, or with nobody selected to empty it · right-click a tree to chop it</p>
       <p class="hint">A brave sent into a training hut, with wood to spare, comes out a warrior · warriors strike enemies next to them</p>
       <p class="hint">F finds the shaman · L aims a Land Bridge: click across water from her, or drag shore to shore</p>
-      <p class="hint">Red plays itself: kill its shaman to win, and keep yours alive · warriors are the way to do it</p>
+      <p class="hint">Rival tribes play themselves: kill their shamans to win, and keep yours alive · warriors are the way to do it</p>
+      <p class="hint">P opens the world menu: the campaign, a random world, a world file, and the editor</p>
       <p class="hint">K mutes sound · the slider sets its volume (remembered between visits)</p>
       <p class="hint">N turns the day: the sun stops following the camera and the night side goes dark · N again brings it back</p>
       <p class="hint">X Blast raises a hill and throws people off it · V Flatten levels a hut pad · M Swamp sinks the ground · a cast takes a moment: move her or cast again to cancel</p>
@@ -387,7 +423,10 @@ export function createHud(): Hud {
   const shamanEl = root.querySelector<HTMLParagraphElement>('#hud-shaman')
   const spellsEl = root.querySelector<HTMLParagraphElement>('#hud-spells')
   const treesEl = root.querySelector<HTMLParagraphElement>('#hud-trees')
-  const enemyEl = root.querySelector<HTMLParagraphElement>('#hud-enemy')
+  const opponentsEl = root.querySelector<HTMLDivElement>('#hud-opponents')
+  const worldEl = root.querySelector<HTMLParagraphElement>('#hud-world')
+  const briefingEl = root.querySelector<HTMLParagraphElement>('#hud-briefing')
+  const opponentLines: HTMLParagraphElement[] = []
   const matchEl = root.querySelector<HTMLParagraphElement>('#hud-match')
   const bandEl = document.querySelector<HTMLDivElement>('#select-band')
   const canvasEl = document.querySelector<HTMLCanvasElement>('#game-canvas')
@@ -407,9 +446,19 @@ export function createHud(): Hud {
   })
   volumeEl?.addEventListener('change', () => volumeEl.blur())
 
+  const menuEl = root.querySelector<HTMLButtonElement>('#hud-menu')
+  let openMenu: (() => void) | null = null
+  menuEl?.addEventListener('click', () => {
+    menuEl.blur()
+    openMenu?.()
+  })
+
   return {
     bindAudio(controls: AudioControls) {
       audioControls = controls
+    },
+    bindMenu(open: () => void) {
+      openMenu = open
     },
     setAudio(audio: AudioReadout) {
       shownMuted = audio.muted
@@ -510,9 +559,31 @@ export function createHud(): Hud {
         treesEl.textContent = treeLine(trees)
       }
     },
+    setWorld(world: WorldReadout) {
+      if (worldEl) {
+        const text = worldLine(world)
+        if (worldEl.textContent !== text) {
+          worldEl.textContent = text
+        }
+      }
+      if (briefingEl && briefingEl.textContent !== (world.briefing ?? '')) {
+        briefingEl.textContent = world.briefing ?? ''
+        briefingEl.hidden = world.briefing === null
+      }
+    },
     setMatch(match: MatchReadout) {
-      if (enemyEl) {
-        enemyEl.textContent = enemyLine(match)
+      if (opponentsEl) {
+        while (opponentLines.length < match.opponents.length) {
+          const line = document.createElement('p')
+          line.className = 'hint'
+          opponentsEl.append(line)
+          opponentLines.push(line)
+        }
+        opponentLines.forEach((line, i) => {
+          const tribe = match.opponents[i]
+          line.hidden = tribe === undefined
+          line.textContent = tribe ? opponentLine(tribe) : ''
+        })
       }
       if (matchEl) {
         const banner = matchBanner(match)
